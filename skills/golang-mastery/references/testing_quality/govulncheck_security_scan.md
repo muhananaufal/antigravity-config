@@ -1,0 +1,330 @@
+# Security Scanning di Go: govulncheck, gosec & golangci-lint
+
+Keamanan supply chain dan static analysis adalah bagian tak terpisahkan dari pipeline CI Go modern. `govulncheck` melakukan analisis vulnerability level call-graph, bukan sekadar version matching. `gosec` mendeteksi pola kode berbahaya. `golangci-lint` mengintegrasikan keduanya dalam satu pipeline yang efisien.
+
+---
+
+## 1. Arsitektur Scanning Pipeline
+
+```
+Source Code + go.sum
+        │
+        ▼
+┌───────────────────────────────────────────────────────────────┐
+│               Security Scanning Pipeline                       │
+│                                                               │
+│  ┌─────────────────┐    ┌─────────────────┐                 │
+│  │   govulncheck   │    │     gosec        │                 │
+│  │                 │    │                  │                 │
+│  │  1. Build call  │    │  AST traversal   │                 │
+│  │     graph       │    │  → pattern match │                 │
+│  │  2. Match vulns │    │  G101: hardcode  │                 │
+│  │     ke fungsi   │    │  G204: cmd inject│                 │
+│  │     yang        │    │  G401: weak crypto│                │
+│  │     DIPANGGIL   │    │  G501: md5/sha1  │                 │
+│  └────────┬────────┘    └────────┬─────────┘                 │
+│           │                      │                            │
+│           └──────────┬───────────┘                            │
+│                      ▼                                        │
+│              golangci-lint (meta-runner)                      │
+│              ├── govulncheck linter                           │
+│              ├── gosec linter                                 │
+│              ├── errcheck linter                              │
+│              └── staticcheck linter                           │
+└───────────────────────────────────────────────────────────────┘
+        │
+        ▼
+   CI Gate: exit code 1 → block merge
+```
+
+**Keunggulan `govulncheck` vs dependency scanner tradisional:**
+
+| Aspek | Dependabot / nancy | govulncheck |
+|---|---|---|
+| Level analisis | `go.mod` version | Call graph (fungsi yg dipanggil) |
+| False positive | Tinggi (vuln di-import tapi tidak dipanggil) | Sangat rendah |
+| Speed | Cepat | Agak lebih lambat (perlu build) |
+| Akurasi | Medium | Tinggi |
+
+---
+
+## 2. Kode Go Production-Ready
+
+```go
+package testingquality
+
+import (
+	"crypto/md5"  // #nosec G501 — HANYA untuk demonstrasi, JANGAN di production
+	"fmt"
+	"net/http"
+	"os/exec"
+	"strings"
+	"testing"
+)
+
+// SecurityFlaws mendemonstrasi kode yang akan di-flag oleh gosec.
+// PERINGATAN: Ini adalah contoh kode BERBAHAYA — JANGAN gunakan pattern ini di production.
+func SecurityFlaws(userInput string) string {
+	// G101: Hardcoded credentials (password, API key, token)
+	apiKey := "sk-live-hardcoded-secret-abc123" //nolint:gosec // demo only
+	fmt.Printf("key: %s\n", apiKey)
+
+	// G204: Subprocess launched with variable → Command Injection
+	// userInput bisa bernilai: "ls; rm -rf /"
+	cmd := exec.Command("sh", "-c", userInput) //nolint:gosec // demo only
+	out, _ := cmd.Output()
+
+	// G401: Weak cryptographic primitive (MD5)
+	h := md5.New() //nolint:gosec // demo only
+	h.Write([]byte("data"))
+
+	return string(out)
+}
+
+// SafeAlternatives mendemonstrasikan pola aman sebagai pengganti SecurityFlaws.
+func SafeAlternatives(userInput string) (string, error) {
+	// AMAN: Whitelist command args, bukan string shell langsung
+	allowedCommands := map[string]bool{"ls": true, "pwd": true}
+	parts := strings.Fields(userInput)
+	if len(parts) == 0 {
+		return "", fmt.Errorf("empty command")
+	}
+	if !allowedCommands[parts[0]] {
+		return "", fmt.Errorf("command %q not allowed", parts[0])
+	}
+
+	// Gunakan exec.Command dengan args terpisah, BUKAN sh -c
+	cmd := exec.Command(parts[0], parts[1:]...)
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("exec %q: %w", parts[0], err)
+	}
+	return string(out), nil
+}
+
+// SecureHTTPHeaders contoh middleware untuk security headers.
+func SecureHTTPHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Mencegah MIME sniffing
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		// Mencegah clickjacking
+		w.Header().Set("X-Frame-Options", "DENY")
+		// CSP dasar
+		w.Header().Set("Content-Security-Policy", "default-src 'self'")
+		// HSTS (hanya untuk HTTPS)
+		w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+		next.ServeHTTP(w, r)
+	})
+}
+
+// TestSafeAlternatives memverifikasi bahwa fungsi aman bekerja dengan benar
+// dan menolak command yang tidak diizinkan.
+func TestSafeAlternatives(t *testing.T) {
+	t.Run("allowed command pwd", func(t *testing.T) {
+		out, err := SafeAlternatives("pwd")
+		if err != nil {
+			t.Fatalf("SafeAlternatives(pwd) unexpected error: %v", err)
+		}
+		if len(out) == 0 {
+			t.Error("expected non-empty output from pwd")
+		}
+	})
+
+	t.Run("disallowed command rm rejected", func(t *testing.T) {
+		_, err := SafeAlternatives("rm -rf /tmp/test")
+		if err == nil {
+			t.Error("expected error for disallowed command, got nil")
+		}
+		if !strings.Contains(err.Error(), "not allowed") {
+			t.Errorf("expected 'not allowed' in error, got: %v", err)
+		}
+	})
+
+	t.Run("shell injection attempt rejected", func(t *testing.T) {
+		_, err := SafeAlternatives("ls; rm -rf /")
+		if err == nil {
+			t.Error("expected error for injection attempt, got nil")
+		}
+	})
+
+	t.Run("empty input rejected", func(t *testing.T) {
+		_, err := SafeAlternatives("")
+		if err == nil {
+			t.Error("expected error for empty input")
+		}
+	})
+}
+
+// TestSecureHTTPHeaders memverifikasi semua security headers di-set dengan benar.
+func TestSecureHTTPHeaders(t *testing.T) {
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	handler := SecureHTTPHeaders(next)
+
+	req, _ := http.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	headers := map[string]string{
+		"X-Content-Type-Options": "nosniff",
+		"X-Frame-Options":        "DENY",
+		"Content-Security-Policy": "default-src 'self'",
+	}
+	for header, expected := range headers {
+		if got := rec.Header().Get(header); got != expected {
+			t.Errorf("header %q = %q, want %q", header, got, expected)
+		}
+	}
+}
+```
+
+### 2.1. Konfigurasi `.golangci.yml` Production-Ready
+
+```yaml
+# .golangci.yml
+run:
+  timeout: 5m
+  go: "1.23"
+
+linters-settings:
+  gosec:
+    severity: medium
+    confidence: medium
+    includes:
+      - G101 # Hardcoded credentials
+      - G102 # Bind to all interfaces
+      - G201 # SQL query construction via format string
+      - G204 # Subprocess launched with variable
+      - G304 # File path injection
+      - G401 # Use of weak cryptographic primitive
+      - G501 # Import of crypto/md5
+      - G601 # Implicit memory aliasing in for loop (Go <1.22)
+
+  govulncheck:
+    # Hanya laporkan vuln yang fungsinya benar-benar dipanggil (call-graph analysis)
+    # Ini adalah default govulncheck — biarkan default
+
+linters:
+  disable-all: true
+  enable:
+    - govet         # vet checks
+    - errcheck      # unhandled errors
+    - staticcheck   # comprehensive static analysis
+    - gosec         # security
+    - nilerr        # return nil error with non-nil value
+    - godot         # comment formatting
+    - revive        # fast linter (replacement for golint)
+
+issues:
+  exclude-rules:
+    # Izinkan nolint yang spesifik (bukan massal)
+    - linters: [gosec]
+      text: "G104"  # Unhandled errors dalam defer
+```
+
+### 2.2. Integrasi CI (GitHub Actions)
+
+```yaml
+# .github/workflows/security.yml
+name: Security Scan
+on: [push, pull_request]
+
+jobs:
+  govulncheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+      - name: Run govulncheck
+        run: govulncheck ./...
+        # Exit code 1 jika ada vuln yang benar-benar dipanggil → block merge
+
+  golangci-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+          args: --timeout=5m
+```
+
+---
+
+## 3. Anti-Patterns
+
+### ❌ Anti-Pattern 1: Mematikan Linter dengan `//nolint` Massal Tanpa Alasan
+
+```go
+// BAD: mematikan semua linter di seluruh fungsi — menyembunyikan injeksi nyata
+//nolint
+func ProcessUserInput(input string) {
+    cmd := exec.Command("sh", "-c", input) // command injection tersembunyi!
+    cmd.Run()
+}
+
+// GOOD: nolint spesifik per-linter + komentar penjelasan MENGAPA aman
+//nolint:gosec // G204: input sudah divalidasi oleh whitelist di validateCommand()
+func ProcessUserInput(input string) {
+    cmd := exec.Command("sh", "-c", input)
+    cmd.Run()
+}
+```
+
+**Kenapa berbahaya:** `//nolint` massal adalah "bungkam semua alarm kebakaran" di rumah Anda. Ketika vulnerability nyata ditambahkan belakangan, linter tidak akan melaporkannya. Selalu scope `//nolint` ke linter spesifik dan tambahkan alasan.
+
+### ❌ Anti-Pattern 2: Menggunakan Dependabot/nancy Saja (Tanpa govulncheck)
+
+```yaml
+# BAD: hanya cek versi di go.mod — banyak false positive
+# Dependabot melaporkan: "package X menggunakan fungsi Y yang vulnerable"
+# Padahal kode kita tidak pernah memanggil fungsi Y tersebut
+# Hasilnya: ratusan false positive yang melelahkan tim
+
+# GOOD: tambahkan govulncheck sebagai gate utama
+# govulncheck hanya melaporkan jika fungsi vulnerable benar-benar dipanggil
+# dari kode kita → hampir zero false positive
+```
+
+**Kenapa berbahaya:** False positive yang tinggi menyebabkan "alert fatigue" — tim mulai mengabaikan semua vulnerability report termasuk yang nyata. govulncheck eliminates false positives via call graph analysis.
+
+### ❌ Anti-Pattern 3: SQL Query via `fmt.Sprintf` (SQL Injection)
+
+```go
+// BAD: G201 — SQL injection via format string
+func GetUser(db *sql.DB, username string) (*User, error) {
+    query := fmt.Sprintf("SELECT * FROM users WHERE username = '%s'", username)
+    // username = "'; DROP TABLE users; --" → SQL injection!
+    return db.QueryRow(query).Scan(...)
+}
+
+// GOOD: parameterized query — database driver handles escaping
+func GetUser(db *sql.DB, username string) (*User, error) {
+    return db.QueryRow(
+        "SELECT id, username FROM users WHERE username = $1",
+        username, // parameterized — aman dari injection
+    ).Scan(...)
+}
+```
+
+**Kenapa berbahaya:** SQL injection adalah OWASP Top 10 #1. Parameterized query adalah satu-satunya cara yang benar-benar aman — string escaping manual selalu bisa di-bypass oleh encoding tricks.
+
+---
+
+## 4. Edge Cases & Defensive Programming
+
+1. **CGO Vulnerabilities Tidak Ter-scan:** `govulncheck` dan `gosec` tidak bisa menganalisis kode C yang dipanggil via CGO. Jika paket Anda menggunakan `cgo`, integrasikan tool binary-level seperti Snyk atau Grype yang menganalisis ELF/PE binary, bukan source code.
+
+2. **Private Module Authentication:** Saat menjalankan `govulncheck` di CI dengan private Go modules, pastikan `GOPRIVATE` dan `GONOSUMCHECK` dikonfigurasi dengan benar. Tanpa ini, govulncheck gagal fetch module graph untuk private repos.
+
+3. **govulncheck Exit Codes:** `govulncheck` menggunakan exit code `3` untuk "vulnerability ditemukan tapi tidak ada yang benar-benar dipanggil" dan exit code `1` untuk "vulnerability yang dipanggil ditemukan". Pastikan CI hanya block di exit code `1`, bukan `3`.
+
+4. **Vendor Directory:** Jika menggunakan `go mod vendor`, jalankan `govulncheck -C ./vendor ./...` atau pastikan vendor tidak di-exclude dari scan. Beberapa CI setup salah mengkonfigurasi ini dan tidak men-scan vendor directory.
+
+5. **gosec dan Generated Code:** Generated code (dari protobuf, sqlc, mockgen) sering memicu false positive gosec. Gunakan `exclude-dirs` di `.golangci.yml` untuk exclude folder generated: `exclude-dirs: ["mocks", "generated", "pb"]`.

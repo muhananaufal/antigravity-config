@@ -1,0 +1,309 @@
+# Clean Architecture & Hexagonal (Ports and Adapters) di Go
+
+## Konsep Utama dan Internal
+
+Clean Architecture, atau Hexagonal Architecture (Ports and Adapters), dirancang untuk memisahkan logika bisnis inti (Domain) dari detail teknis (Infrastruktur, UI, Framework, Database). Di Go, konsep ini direalisasikan secara elegan menggunakan *Dependency Inversion Principle* (DIP) melalui `interface`. 
+
+Kunci dari arsitektur ini adalah **Aturan Ketergantungan (Dependency Rule)**: *Dependency atau ketergantungan kode sumber (source code dependencies) hanya boleh mengarah ke dalam, menuju lapisan Domain.*
+- Lapisan **Domain** tidak boleh mengimpor package apapun di luar *standard library* Go (dan package domain itu sendiri).
+- Lapisan terluar (**Adapter/Infrastructure**) akan mengimplementasikan *Port* (`interface`) yang didefinisikan oleh lapisan dalam (**Usecase/Service** atau Domain).
+
+Pendekatan ini sangat mempermudah *Unit Testing* karena setiap adapter teknis (seperti database atau HTTP client eksternal) dapat di-mock dengan mudah tanpa menyentuh *logic* utama.
+
+## Diagram Arsitektur dan Aliran Dependency (ASCII)
+
+Diagram berikut menunjukkan bagaimana dependency (panah `--->`) mengalir ke arah dalam (Domain), dan bagaimana interface digunakan sebagai Port untuk membalikkan dependency pada runtime.
+
+```text
++-----------------------------------------------------------------------------------+
+|                                                                                   |
+|  [ INBOUND ADAPTERS ] (Primary)                 [ OUTBOUND ADAPTERS ] (Secondary) |
+|                                                                                   |
+|   +---------------+                              +----------------------+         |
+|   | HTTP Handlers |                              |  PostgreSQL/pgx Repo |         |
+|   +---------------+                              +----------------------+         |
+|           | (Memanggil Usecase)                             | (Mengimplementasikan|
+|           |                                                 |  Port / Interface)  |
+|           v                                                 v                     |
+|  +-----------------------------------------------------------------------------+  |
+|  |                                  APPLICATION LAYER                          |  |
+|  |   +-----------------------+                    +-----------------------+    |  |
+|  |   |    User Usecase       |                    |    User Repository    |    |  |
+|  |   |    (Business Logic)   |----(Bergantung)--->|    (PORT / Interface) |    |  |
+|  |   +-----------------------+                    +-----------------------+    |  |
+|  |           | (Memanggil / Mengelola Entity)                                  |  |
+|  |           v                                                                 |  |
+|  |  +-----------------------------------------------------------------------+  |  |
+|  |  |                                 DOMAIN LAYER                          |  |  |
+|  |  |   +-----------------------+                                           |  |  |
+|  |  |   |      User Entity      | (Hanya Go Standard Library)               |  |  |
+|  |  |   |      (Structs)        |                                           |  |  |
+|  |  |   +-----------------------+                                           |  |  |
+|  |  +-----------------------------------------------------------------------+  |  |
+|  +-----------------------------------------------------------------------------+  |
++-----------------------------------------------------------------------------------+
+```
+*Catatan Penting: Pada level kode, Repository Implementation (PostgreSQL) mengimpor package Domain untuk mengembalikan `Entity`, tetapi Domain tidak pernah mengimpor PostgreSQL.*
+
+## Kode Go Production-Ready
+
+Kode di bawah ini mendemonstrasikan implementasi riil Clean Architecture di Go dengan `context` propagation, *error handling* yang presisi (menggunakan `%w`), dan dependensi yang di-inject.
+
+```go
+package hexagonal
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"testing"
+	"time"
+)
+
+// ==========================================
+// 1. DOMAIN LAYER (Entities & Custom Errors)
+// ==========================================
+// Layer ini SANGAT MURNI. Tidak ada import library eksternal (kecuali stdlib).
+
+var (
+	ErrUserNotFound = errors.New("user not found")
+	ErrInvalidState = errors.New("invalid user state for operation")
+)
+
+// User merepresentasikan entitas bisnis inti (Aggregate Root).
+type User struct {
+	ID        string
+	Email     string
+	IsActive  bool
+	UpdatedAt time.Time
+}
+
+// Deactivate berisi business logic murni dalam entity.
+// Memisahkan logic mutasi state ke entity mencegah Anemic Domain Model.
+func (u *User) Deactivate() error {
+	if !u.IsActive {
+		return fmt.Errorf("%w: user is already inactive", ErrInvalidState)
+	}
+	u.IsActive = false
+	u.UpdatedAt = time.Now().UTC()
+	return nil
+}
+
+// ==========================================
+// 2. APPLICATION LAYER (Ports & Usecases)
+// ==========================================
+
+// UserRepository adalah Port (Interface) Outbound yang harus diimplementasikan oleh Adapter.
+type UserRepository interface {
+	GetByID(ctx context.Context, id string) (*User, error)
+	Save(ctx context.Context, u *User) error
+}
+
+// UserUsecase mengorkestrasi alur aplikasi.
+type UserUsecase struct {
+	repo UserRepository
+}
+
+// NewUserUsecase adalah konstruktor untuk Dependency Injection.
+func NewUserUsecase(repo UserRepository) *UserUsecase {
+	if repo == nil {
+		panic("UserRepository cannot be nil")
+	}
+	return &UserUsecase{repo: repo}
+}
+
+// DeactivateUser mengorkestrasi pengambilan data, mutasi entity, dan persistensi.
+func (uc *UserUsecase) DeactivateUser(ctx context.Context, id string) error {
+	// 1. Ambil state terkini (melalui Port)
+	user, err := uc.repo.GetByID(ctx, id)
+	if err != nil {
+		if errors.Is(err, ErrUserNotFound) {
+			return fmt.Errorf("deactivation failed, user missing: %w", err)
+		}
+		return fmt.Errorf("failed to fetch user for deactivation: %w", err)
+	}
+
+	// 2. Eksekusi Business Logic di Entity
+	if err := user.Deactivate(); err != nil {
+		return fmt.Errorf("cannot deactivate user %s: %w", id, err)
+	}
+
+	// 3. Simpan state (melalui Port)
+	if err := uc.repo.Save(ctx, user); err != nil {
+		return fmt.Errorf("failed to persist deactivated user %s: %w", id, err)
+	}
+
+	return nil
+}
+
+// ==========================================
+// 3. ADAPTER LAYER (Infrastructure)
+// ==========================================
+// Layer ini kotor dan boleh mengimpor library spesifik (misal: pgx, redis).
+
+// InMemoryUserRepository adalah contoh adapter untuk repository.
+// Dalam production nyata, struct ini bernama postgres.UserRepository (menggunakan pgx).
+type InMemoryUserRepository struct {
+	data map[string]*User
+}
+
+func NewInMemoryUserRepository() *InMemoryUserRepository {
+	return &InMemoryUserRepository{
+		data: map[string]*User{
+			"u-123": {ID: "u-123", Email: "john@example.com", IsActive: true, UpdatedAt: time.Now()},
+			"u-456": {ID: "u-456", Email: "jane@example.com", IsActive: false, UpdatedAt: time.Now()},
+		},
+	}
+}
+
+func (r *InMemoryUserRepository) GetByID(ctx context.Context, id string) (*User, error) {
+	// Simulasi pengecekan context timeout/cancellation
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
+	u, exists := r.data[id]
+	if !exists {
+		// Mengembalikan error domain agar Usecase bisa menangani secara semantik
+		return nil, ErrUserNotFound
+	}
+	// Selalu kembalikan deep copy agar pointer tidak termutasi di luar repo tanpa Save()
+	copyOfUser := *u
+	return &copyOfUser, nil
+}
+
+func (r *InMemoryUserRepository) Save(ctx context.Context, u *User) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+	
+	// Deep copy saat menyimpan
+	copyOfUser := *u
+	r.data[u.ID] = &copyOfUser
+	return nil
+}
+
+// ==========================================
+// 4. UNIT TEST
+// ==========================================
+
+func TestUserUsecase_DeactivateUser(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("Success Deactivation", func(t *testing.T) {
+		repo := NewInMemoryUserRepository()
+		uc := NewUserUsecase(repo)
+
+		// Eksekusi
+		err := uc.DeactivateUser(ctx, "u-123")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		// Verifikasi State di Repo
+		u, _ := repo.GetByID(ctx, "u-123")
+		if u.IsActive {
+			t.Errorf("expected user to be inactive")
+		}
+	})
+
+	t.Run("Fails When Already Inactive", func(t *testing.T) {
+		repo := NewInMemoryUserRepository()
+		uc := NewUserUsecase(repo)
+
+		err := uc.DeactivateUser(ctx, "u-456")
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if !errors.Is(err, ErrInvalidState) {
+			t.Errorf("expected ErrInvalidState, got %v", err)
+		}
+	})
+
+	t.Run("Fails When User Not Found", func(t *testing.T) {
+		repo := NewInMemoryUserRepository()
+		uc := NewUserUsecase(repo)
+
+		err := uc.DeactivateUser(ctx, "u-999")
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if !errors.Is(err, ErrUserNotFound) {
+			t.Errorf("expected ErrUserNotFound, got %v", err)
+		}
+	})
+}
+```
+
+## Anti-Patterns
+
+### ❌ Anti-Pattern 1: Mengimpor Database Framework (seperti GORM/SQL) di Usecase atau Domain
+Usecase seharusnya tidak peduli sama sekali tentang *bagaimana* dan *dimana* data disimpan.
+
+```go
+// ❌ BAD: Usecase layer mengimpor gorm dan menggunakan tipe teknis (*gorm.DB)
+package usecase
+
+import (
+	"context"
+	"gorm.io/gorm"
+)
+
+type UserUsecase struct {
+	db *gorm.DB 
+}
+
+func (uc *UserUsecase) Deactivate(ctx context.Context, id string) error {
+    // Logika bisnis bercampur dengan detail database
+	return uc.db.WithContext(ctx).Model(&User{}).Where("id = ?", id).Update("is_active", false).Error
+}
+```
+**Why dangerous:** Ini menghancurkan Dependency Inversion. Jika kita melakukan migrasi dari MySQL (GORM) ke MongoDB, Redis, atau gRPC Microservice lain, **seluruh Usecase layer harus diubah**. Selain itu, *unit test* menjadi sangat sulit karena kita harus melakukan mocking koneksi DB alih-alih cukup me-mock satu interface Go murni.
+
+### ❌ Anti-Pattern 2: Membocorkan Struct HTTP (Transport Layer) ke Usecase Layer
+Seringkali struct yang secara spesifik diturunkan dari JSON payload HTTP (berisi tag `json` atau `validate`) dilempar langsung ke Usecase.
+
+```go
+// ❌ BAD: Usecase layer bergantung pada format HTTP Handler Request
+package usecase
+
+import (
+	"context"
+	"myapp/delivery/http/handler"
+)
+
+func (uc *UserUsecase) CreateUser(ctx context.Context, req handler.CreateUserRequest) error {
+	// ... logic
+	return nil
+}
+```
+**Why dangerous:** Jika suatu saat kita ingin memanggil fungsi `CreateUser` dari background job worker (misal Kafka consumer atau CLI task), kita harus merangkai (construct) struct HTTP Request tiruan, yang secara semantik tidak masuk akal. Lapisan transport (HTTP/gRPC/CLI) harusnya mem-parsing input, lalu memetakannya ke struct internal murni di Usecase.
+
+```go
+// ✅ GOOD: Transport layer mapping ke DTO milik Usecase.
+package usecase
+
+type CreateUserInput struct {
+    Email    string
+    Password string
+}
+// func (uc *UserUsecase) CreateUser(ctx context.Context, input CreateUserInput) error { ... }
+```
+
+## Edge Cases & Defensive Programming Konkrit
+
+1. **Context Timeout vs Driver Connection Pool Exhaustion:** 
+   Saat menggunakan PostgreSQL via `pgx`, ketika *connection pool* habis dan *request* mengantri, `context.Context` dari HTTP (misal timeout 5 detik) dapat kedaluwarsa sebelum mendapat koneksi. Dalam Adapter layer, `pgx` akan mengembalikan error context canceled, tapi Usecase bisa saja mengira error ini adalah "Entity Not Found" jika adapter hanya me-return error generik.
+   *Defensive:* Adapter PostgreSQL harus mengecek `errors.Is(err, pgx.ErrNoRows)` secara eksplisit dan me-mappingnya ke `domain.ErrUserNotFound`. Jika `err` adalah `context.DeadlineExceeded` atau `context.Canceled`, biarkan *bubble up* apa adanya sehingga HTTP layer bisa merespons `504 Gateway Timeout` atau `499 Client Closed Request` alih-alih `500 Internal Error`.
+
+2. **Pointer Mutation (Aliasing Bug) Lintas Layer:**
+   Jika `UserRepository.GetByID` mengembalikan pointer (`*User`) ke objek internal di dalam memori (seperti di *in-memory cache* atau objek reference GORM yang di-cache), dan Usecase mengubah `user.IsActive = false`, maka *state* tersebut berubah di seluruh aplikasi *sebelum* `Save()` dipanggil, atau parahnya tetap termutasi jika transaksi di-rollback.
+   *Defensive:* Adapter **wajib** melakukan *deep copy* (membuat struct baru) sebelum mengembalikan pointer Entity, atau layer Domain mendefinisikan Entity sebagai *immutable struct* (di-*passing by value*) apabila ukurannya cukup ringan (beberapa field saja).
+
+3. **Transaction / Unit of Work Across Multiple Repositories:**
+   Dalam Clean Architecture, Usecase tidak boleh mengimpor objek database (seperti `sql.Tx` atau `pgx.Tx`). Bagaimana jika `OrderUsecase.Checkout()` harus memanggil `OrderRepo.Save()`, `InventoryRepo.Deduct()`, dan `WalletRepo.Charge()` dalam satu transaksi ACID? Mengoper `*sql.Tx` ke dalam argumen method Usecase adalah pelanggaran berat terhadap isolasi layer.
+   *Defensive:* Terapkan pattern *Unit of Work (UoW)* dengan menyisipkan transaction via `context.Context` atau *closure*. Buat interface `TransactionManager` di Usecase layer yang memiliki signature: `RunInTransaction(ctx context.Context, fn func(ctx context.Context) error) error`. Infrastruktur mengimplementasikannya dengan membungkus `sql.Tx` ke dalam `context.WithValue`. Tiap Repository Adapter kemudian akan mencoba mengekstrak `sql.Tx` dari context, dan jika ada, menggunakannya, jika tidak, kembali menggunakan koneksi standar. Ini membiarkan Usecase tetap 100% agnostik terhadap transaksi SQL.

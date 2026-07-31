@@ -1,0 +1,301 @@
+# CQRS & Event Sourcing Implementation di Go
+
+## Konsep Utama dan Internal
+
+CQRS (Command Query Responsibility Segregation) adalah pola arsitektur yang memisahkan operasi pembacaan data (*Queries*) dari operasi penulisan atau mutasi state (*Commands*). Pemisahan ini memungkinkan kita untuk mengoptimalkan, menskalakan, dan memodelkan database baca (Read DB) secara independen dari database tulis (Write DB). 
+
+CQRS paling kuat ketika digabungkan dengan **Event Sourcing (ES)**. Dalam sistem tradisional (CRUD), state aplikasi disimpan sebagai satu baris *current state* dalam tabel database, menimpa (overwrite) data lama. Dalam Event Sourcing, state *tidak pernah ditimpa*. Sebaliknya, setiap perubahan state disimpan sebagai aliran kejadian (stream of *Events*) yang bersifat *append-only* (hanya tambah). 
+State terkini (*Snapshot/Current State*) direkonstruksi (rehydrate) di memori dengan memutar ulang (*replay*) seluruh event historis tersebut secara berurutan. Setiap kali event baru sukses disimpan, event tersebut di-publish ke message broker agar *Projection Worker* dapat memperbarui struktur tabel yang terdenormalisasi di *Read-Model* (untuk query super cepat).
+
+Kelebihan:
+- **Auditability absolut**: Tidak ada history data yang hilang. Sistem memiliki mesin waktu.
+- **Asymmetric Scaling**: Jika rasio Query vs Command adalah 1000:1, kita bisa memperbanyak replica Read DB tanpa membebani Write DB.
+
+## Diagram Arsitektur dan Aliran Dependency (ASCII)
+
+Diagram berikut menjelaskan siklus hidup sebuah perintah mulai dari klien hingga data terproyeksi ke sisi baca (Read Model) melalui proses eventual consistency.
+
+```text
+       [ UI / API Client ]
+                | (1. HTTP POST: "DepositMoney")
+                v
+       +-------------------+
+       |  Command Handler  | ----> (2. Validasi Bisnis Logic, Cek Invarian)
+       +-------------------+
+                | (3. Menghasilkan dan Menyimpan Event: "MoneyDeposited")
+                v
++-----------------------------------+
+|      Event Store (Write DB)       | (Append-Only Table: AggregateID, Version, EventData)
++-----------------------------------+
+                |
+                | (4. Publish Event secara Asinkron)
+                v
++-----------------------------------+
+| Message Broker (Kafka/RabbitMQ)   |
++-----------------------------------+
+                |
+                | (5. Consume Event)
+                v
+       +-------------------+
+       | Projection Worker | ----> (6. Translate & Flatten event menjadi tabel relasional)
+       +-------------------+
+                |
+                v
++-----------------------------------+
+|       Read DB (Query DB)          | (Dioptimalkan untuk Query, misal: ElasticSearch/Postgres View)
++-----------------------------------+
+                ^
+                | (7. HTTP GET: "GetBalance" / Read Model)
+       [ UI / API Client ]
+```
+
+## Kode Go Production-Ready
+
+Implementasi riil CQRS/ES melibatkan Aggregate yang mampu me-rehydrate statenya sendiri (melalui metode `Apply`), Command Handler, serta abstraksi EventStore.
+
+```go
+package cqrses
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"testing"
+	"time"
+)
+
+// ==========================================
+// 1. EVENT DEFINITIONS (Domain Events)
+// ==========================================
+// Semua event bersifat Immutable (hanya mencatat masa lalu).
+
+type Event interface {
+	EventType() string
+}
+
+type MoneyDeposited struct {
+	Amount    float64
+	Timestamp time.Time
+}
+func (e MoneyDeposited) EventType() string { return "MoneyDeposited" }
+
+type MoneyWithdrawn struct {
+	Amount    float64
+	Timestamp time.Time
+}
+func (e MoneyWithdrawn) EventType() string { return "MoneyWithdrawn" }
+
+// ==========================================
+// 2. AGGREGATE ROOT (Write Model)
+// ==========================================
+
+var ErrInsufficientFunds = errors.New("insufficient funds")
+var ErrInvalidAmount = errors.New("amount must be greater than zero")
+
+type BankAccount struct {
+	ID      string
+	Balance float64
+	Version int // Digunakan untuk Optimistic Concurrency Control
+}
+
+// NewBankAccount menginisialisasi agregat kosong (sebelum direhydrate).
+func NewBankAccount(id string) *BankAccount {
+	return &BankAccount{ID: id, Balance: 0, Version: 0}
+}
+
+// Apply adalah satu-satunya tempat di mana state agregat dimutasi.
+// Metode ini memutar ulang logika masa lalu, sehingga TIDAK BOLEH MENGANDUNG ERROR/VALIDASI.
+func (a *BankAccount) Apply(event Event) {
+	switch e := event.(type) {
+	case MoneyDeposited:
+		a.Balance += e.Amount
+	case MoneyWithdrawn:
+		a.Balance -= e.Amount
+	}
+	a.Version++
+}
+
+// Rehydrate memuat keseluruhan histori event untuk membangun state terkini.
+func (a *BankAccount) Rehydrate(events []Event) {
+	for _, evt := range events {
+		a.Apply(evt)
+	}
+}
+
+// Withdraw mewakili COMMAND (Business Logic).
+// Memvalidasi request menggunakan state terkini (yang telah direhydrate),
+// lalu menghasilkan Event, TANPA MENGUBAH STATE SECARA LANGSUNG.
+func (a *BankAccount) Withdraw(amount float64) ([]Event, error) {
+	if amount <= 0 {
+		return nil, ErrInvalidAmount
+	}
+	if a.Balance < amount {
+		return nil, ErrInsufficientFunds
+	}
+	
+	event := MoneyWithdrawn{
+		Amount:    amount,
+		Timestamp: time.Now().UTC(),
+	}
+	return []Event{event}, nil
+}
+
+// ==========================================
+// 3. EVENT STORE (Write Infrastructure)
+// ==========================================
+
+// EventStore mendefinisikan kontrak persistensi append-only.
+type EventStore interface {
+	SaveEvents(ctx context.Context, aggregateID string, events []Event, expectedVersion int) error
+	GetEvents(ctx context.Context, aggregateID string) ([]Event, error)
+}
+
+// InMemoryEventStore mensimulasikan database event (production = Postgres/EventStoreDB).
+type InMemoryEventStore struct {
+	// Peta dari AggregateID ke daftar Events
+	events map[string][]Event
+}
+
+func NewInMemoryEventStore() *InMemoryEventStore {
+	return &InMemoryEventStore{
+		events: make(map[string][]Event),
+	}
+}
+
+func (s *InMemoryEventStore) SaveEvents(ctx context.Context, aggregateID string, events []Event, expectedVersion int) error {
+	currentVersion := len(s.events[aggregateID])
+	if expectedVersion != currentVersion {
+		// Proteksi Optimistic Concurrency Control yang Murni
+		return fmt.Errorf("concurrency exception: expected version %d, but db is at %d", expectedVersion, currentVersion)
+	}
+	s.events[aggregateID] = append(s.events[aggregateID], events...)
+	// Dalam sistem nyata, setelah save, trigger Transactional Outbox untuk mengirim event ke Message Broker.
+	return nil
+}
+
+func (s *InMemoryEventStore) GetEvents(ctx context.Context, aggregateID string) ([]Event, error) {
+	return s.events[aggregateID], nil
+}
+
+// ==========================================
+// 4. UNIT TEST (Siklus Penuh)
+// ==========================================
+
+func TestBankAccount_CQRS(t *testing.T) {
+	ctx := context.Background()
+	store := NewInMemoryEventStore()
+	accountID := "acc-123"
+
+	// --- 1. SETUP INITIAL STATE (Simulasi kejadian masa lalu) ---
+	// Akun dibuat dan didepositkan 100 secara paralel tanpa logic command
+	initialEvents := []Event{
+		MoneyDeposited{Amount: 100, Timestamp: time.Now()},
+	}
+	if err := store.SaveEvents(ctx, accountID, initialEvents, 0); err != nil {
+		t.Fatalf("failed to setup initial state: %v", err)
+	}
+
+	// --- 2. COMMAND HANDLING CYCLE ---
+	
+	// A. Muat event history dari EventStore
+	history, err := store.GetEvents(ctx, accountID)
+	if err != nil {
+		t.Fatalf("failed to fetch history: %v", err)
+	}
+
+	// B. Rehydrate state aggregate (Rebuild current state)
+	account := NewBankAccount(accountID)
+	account.Rehydrate(history)
+	
+	// Validasi state setelah replay (Versi harus 1, Saldo harus 100)
+	if account.Version != 1 {
+		t.Errorf("Expected version 1, got %d", account.Version)
+	}
+	if account.Balance != 100 {
+		t.Errorf("Expected balance 100, got %.2f", account.Balance)
+	}
+
+	// C. Eksekusi Business Logic Command (Penarikan uang 40)
+	newEvents, err := account.Withdraw(40)
+	if err != nil {
+		t.Fatalf("Unexpected withdraw error: %v", err)
+	}
+
+	// D. Simpan Event Baru dengan verifikasi Concurrency (Expected Version: 1)
+	err = store.SaveEvents(ctx, accountID, newEvents, account.Version)
+	if err != nil {
+		t.Fatalf("Failed to save new events: %v", err)
+	}
+
+	// --- 3. TEST INVARIANT PROTECTION ---
+	
+	// Coba withdraw melebihi saldo baru (60)
+	account.Rehydrate(newEvents) // Terapkan state terbaru sementara
+	_, err = account.Withdraw(999)
+	if !errors.Is(err, ErrInsufficientFunds) {
+		t.Errorf("Expected ErrInsufficientFunds, got: %v", err)
+	}
+}
+```
+
+## Anti-Patterns
+
+### ❌ Anti-Pattern 1: Memutasi State Langsung di Dalam Fungsi Command
+Ini adalah kesalahan paling fatal di Event Sourcing yang merusak determinisme.
+
+```go
+// ❌ BAD: Memutasi properties aggregate sebelum event benar-benar tersimpan.
+func (a *BankAccount) Withdraw(amount float64) ([]Event, error) {
+    if a.Balance < amount { return nil, errors.New("insufficient") }
+    
+    // FATAL MISTAKE: Mutasi state langsung di dalam method Command
+    a.Balance -= amount 
+    
+    event := MoneyWithdrawn{Amount: amount}
+    return []Event{event}, nil
+}
+```
+**Why dangerous:** Fungsi command (`Withdraw`) mungkin gagal saat diproses di *layer persistence* (misal timeout koneksi). Jika Anda sudah terlanjur merubah `a.Balance -= amount` di memori, state agregat yang ter-*cache* menjadi *out-of-sync* (cacat) dengan state sebenarnya di database. State aplikasi HANYA boleh berubah melalui mutasi replikatif di dalam metode `Apply(Event)`.
+
+### ❌ Anti-Pattern 2: Menaruh Eksekusi Eksternal (Side-Effects) di Dalam Fungsi `Apply`
+Pemula sering meletakkan pemanggilan API ke sistem eksternal di dalam siklus *replay/apply*.
+
+```go
+// ❌ BAD: Menambahkan efek samping (HTTP/RPC call) ke dalam fungsi Apply event.
+func (a *BankAccount) Apply(event Event) {
+    switch e := event.(type) {
+    case MoneyDeposited:
+        a.Balance += e.Amount
+        // FATAL: Mengirim email selamat setiap kali event di-replay!
+        sendEmailService.NotifyUser(a.ID, "Deposit Success!") 
+    }
+}
+```
+**Why dangerous:** Saat agregat dimuat ulang (rehydrate) dari database, ribuan *event* historis akan diputar ulang secara bertahap. Jika Anda menaruh *side effect* (mengirim email, memanggil *payment gateway*) di dalam `Apply`, sistem Anda akan membombardir pihak ketiga (spamming) miliaran kali di runtime. `Apply` harus merupakan **Pure Function** tanpa I/O. Efek samping harus ditangani oleh *Event Handlers / Projections* yang terpisah.
+
+### ❌ Anti-Pattern 3: Mengubah Skema/Struktur Field Event (Broken Poison Pill)
+Event Store adalah *single source of truth*. Struktur event JSON di dalam database bersifat permanen.
+
+```go
+// ❌ BAD: Mengubah tipe data atau menghapus field di versi Go terbaru.
+// Versi Lama: type UserCreated struct { Address string }
+// Versi Baru (merusak format):
+type UserCreated struct { 
+    Address struct { City, Zip string } // Tipe data berubah drastis!
+}
+```
+**Why dangerous:** Ketika sistem mencoba *unmarshal* event `UserCreated` dari database (yang disimpan tahun 2021) menggunakan struktur struct versi 2026 yang dirombak, proses *json.Unmarshal* akan `panic` atau gagal (menjadi *poison pill*). Akibatnya, Agregat tidak akan pernah bisa di-*rehydrate* lagi dan mati total. **Solusi (Benar):** Lakukan *Event Versioning* (buat struct `UserCreatedV2`) atau implementasikan custom upcaster JSON unmarshal yang mengkonversi event v1 menjadi struktur v2 secara *on-the-fly* pada saat memuat (read) dari DB.
+
+## Edge Cases & Defensive Programming Konkrit
+
+1. **Optimistic Concurrency Control Lintas Transaksi (Lost Update):**
+   Dua *HTTP requests* masuk paralel untuk satu rekening, keduanya me-rehydrate pada Versi ke-5. Request pertama berhasil melakukan withdraw, sehingga Versi DB menjadi 6. Request kedua yang tidak sadar state telah berubah, juga mencoba menyimpan kalkulasinya menggunakan Versi 5.
+   *Defensive:* Terapkan Optimistic Locking dengan parameter `ExpectedVersion` secara mutlak pada kueri basis data. Jika database menolak dengan constraint (`WHERE aggregate_id=? AND version=5`), kembalikan error `ConcurrencyException`, batalkan transaksi, lalu ulangi siklus Command dari awal (rehydrate ulang) di layer HTTP.
+
+2. **Performa Replay Event Mencekik CPU dan RAM (Snapshotting):**
+   Agregat berumur 5 tahun seperti "Keranjang Belanja Instansi" mungkin memiliki 50,000 *events*. Memuat dan me-replay 50 ribu struct hanya untuk mengeksekusi 1 command akan menghancurkan latensi aplikasi (bisa memakan >500ms dan I/O tinggi).
+   *Defensive:* Implementasikan pola *Snapshotting*. Setelah setiap $N$ events (misalnya kelipatan 100), asinkron job menyimpan status penuh (serialize state) agregat tersebut ke dalam koleksi khusus Snapshot dengan stempel nomor versi. Saat memuat data, sistem mengambil snapshot teratas (misal versi 49,900) untuk memulai (baseline), lalu HANYA me-replay sisa *events* (versi 49,901 s/d 50,000).
+
+3. **Eventual Consistency Projection Lag pada UI/UX:**
+   Klien mengklik "Checkout/Withdraw", lalu di-redirect kembali ke halaman Beranda ("GetBalance"), namun uang yang tampil belum berkurang (karena delay asinkron 50ms di Kafka/Read Projection). Pengguna mengira gagal, lalu mengklik "Checkout" lagi dua kali.
+   *Defensive:* Dalam DDD CQRS, atasi ini via optimisasi *Optimistic UI Update* di frontend (simulasikan mutasi UI sebelum API merespons), atau, biarkan API `Withdraw` mengembalikan Token/Versi mutasi (misal `CommandID: 123`). UI kemudian melakukan *short-polling* ke sisi Read-DB untuk mengecek apakah `LastProcessedCommandID == 123`. Selama Read-DB belum *up-to-date*, tampilkan indikator "Sedang Memproses" (Loading State).

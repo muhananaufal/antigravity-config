@@ -1,0 +1,6 @@
+/projects
+/sidecars
+/plugins
+.migrated
+config.json
+mcp_config.json
