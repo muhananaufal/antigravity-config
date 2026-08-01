@@ -7,13 +7,32 @@ description: Gunakan skill ini ketika merancang arsitektur, konkurensi, DB/SQLC,
 
 SSOT arsitektur & rekayasa sistem Golang enterprise & high-throughput.
 
-## 🔁 Protocol
+## 🔁 Greenfield Protocol (Init Proyek dari Nol — Swarm Research)
 
-1. **WAJIB `view_file`** SELURUH file di `references/<domain>/` yang relevan — DILARANG mengarang dari hafalan LLM.
-2. **WAJIB baca semua Core References** untuk setiap project/fitur baru.
-3. **WAJIB scan task secara proaktif** → identifikasi Context References yang relevan → baca TANPA menunggu user menyebut keyword. Jangan asumsikan user tahu harus prompt apa.
-4. **WAJIB rekomendasikan** domain Context tambahan yang relevan di awal respons jika terdeteksi — user tidak boleh kelewatan referensi penting hanya karena tidak tahu harus minta.
-5. **WAJIB sajikan ≥2 opsi netral + trade-off** saat desain arsitektur — DILARANG langsung rekomendasikan 1 opsi.
+LLM secara alami akan mengambil jalan pintas (laziness) jika disuruh membaca puluhan file. Untuk menjamin standar Top 1% diterapkan 100% tanpa halusinasi, **WAJIB gunakan protokol Swarm Subagent** saat inisialisasi **project baru dari nol (empty folder / new repository)**:
+
+1. **Fase Inisialisasi (DILARANG MENEBAK):** Saat user meminta inisiasi project baru, Agen Utama DILARANG membuat `implementation_plan.md` langsung.
+2. **Spawn 4 Subagent `pro` Paralel:** Agen Utama WAJIB memanggil `invoke_subagent` untuk men-spawn 4 subagent sekaligus dengan pembagian tugas:
+   - **Subagent 1 (Infra & Data):** Wajib `view_file` ke semua file di `arch_patterns/`, `db_sqlc/`, dan `devops_control_planes/`. Lapor rangkuman standar arsitektur.
+   - **Subagent 2 (API & Code):** Wajib `view_file` ke semua file di `microservices_grpc/`, `testing_quality/`, dan `concurrency/`. Lapor standar API.
+   - **Subagent 3 (Security & Scale):** Wajib `view_file` ke semua file di `security_owasp/`, `observability_resilience/`, `distributed_patterns_resilience/`, dan `caching_strategy/`. Lapor standar ketahanan.
+   - **Subagent 4 (Context/Niche):** Agen utama wajib mendeteksi domain dari tabel **Auto-Detect** di bawah, lalu menugaskan Subagent 4 untuk membaca domain *niche* tersebut (misal `fintech_reliability/`, `background_jobs_worker/`, dll).
+3. **Wait & Compile:** Agen Utama menunggu semua subagent melapor, merangkumnya, lalu membuat `implementation_plan.md` dengan opsi *Zero-Steering Grilling*.
+4. **Fase Implementasi (Coding):** Agen mematuhi standar yang sudah diekstrak subagent dan menggunakan `view_file` ke referensi spesifik HANYA jika butuh kode spesifik (seperti detail sintaks).
+
+## 🏛️ Brownfield Protocol (Legacy / Refactoring / Tambah Fitur di Repo Eksisting)
+
+Saat user meminta **penambahan fitur baru, modifikasi, optimasi, atau audit** pada **codebase yang sudah ada (Legacy/Existing Project)**, DILARANG memaksakan *Big Bang Rewrite* atau menciptakan "Frankenstein Codebase". Gunakan protokol **Hybrid Swarm**:
+
+1. **Fase Audit & Discovery (Spawn 3 Subagent `pro` Paralel):**
+   - **Subagent 1 (Codebase & Architecture Auditor):** Gunakan `grep_search`, `list_dir`, dan `view_file` pada direktori project lokal user untuk memetakan struktur arsitektur, ORM/driver, pola koneksi DB, dan routing yang saat ini berjalan.
+   - **Subagent 2 (Vulnerability & Anti-Pattern Hunter):** Scan codebase lokal untuk mencari penyakit fatal yang bisa memperburuk fitur baru: N+1 queries, panggilan DB/HTTP tanpa `context.WithTimeout`, penggunaan `float32/float64` untuk moneter/uang, *goroutine leak*, SQL Injection, atau hardcode credentials.
+   - **Subagent 3 (Mastery Standard Matcher):** Meninjau temuan dari Subagent 1 & 2 serta spesifikasi fitur baru, lalu membaca file di direktori `references/` kita yang **relevan saja** untuk mengawal penambahan fitur / optimasi tersebut (terutama `zero_downtime_migrations.md` jika butuh ubah skema DB, `query_optimization_n_plus_one.md`, atau referensi niche terkait).
+2. **Zero-Steering Grilling (Opsi Evolusi / Penambahan Fitur):**
+   Agen Utama merangkum laporan audit dan menyajikan ≥3 opsi netral beserta trade-off untuk user (Gasskan):
+   - **Opsi 1: Native Consistent Extension (KISS):** Tanam fitur baru dengan mematuhi pola asli/ekspresi arsitektur repo tersebut (agar tim developer lama tidak bingung), NAMUN disuntikkan perlindungan standar Top 1% (wajib timeout, parameterized queries, RED metrics, dan index DB). Cepat dan konsisten.
+   - **Opsi 2: Strangler Fig Pattern (Modular Isolation):** Fitur/modul baru didirikan secara independen menggunakan arsitektur modern kita (`internal/` Modular Monolith/Clean/SQLC) tanpa merusak kode lama. Terhubung ke legacy hanya melalui interface facade/proxy.
+   - **Opsi 3: Surgical Rewrite & Expansion:** Jika modul lama terkait sudah terlalu cacat (misal fitur baru bergantung pada modul pembayaran jadul yang fatal/rentan race condition), ajukan operasi bedah modul lama sekaligus merancang fitur barunya berpadu berstandar Top 1%.
 
 ### 🔍 Auto-Detect Context Domain (Scan dari Task)
 

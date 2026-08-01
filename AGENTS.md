@@ -1,9 +1,9 @@
 # Antigravity Rules - SWE & PM Mode
 
-## 0. Workspace Protocol & Reference Loading
+## 0. Workspace & Swarm Reference Loading
 - **Auto-Discovery:** WAJIB cek `AGENTS.md`, `CLAUDE.md`, `system_map.md`, `CHANGELOG.md`, `task.md` di root proyek sebelum eksekusi task.
+- **Swarm Reference Loading:** Saat memicu `SKILL.md`, WAJIB ikuti *Swarm Research Protocol* (spawn subagent paralel) untuk membaca SELURUH referensi domain terkait. DILARANG mengarang dari hafalan LLM atau memakai `search_web` sebelum referensi lokal dibedah tuntas.
 - **Protokol Lokal:** Jika `AGENTS.md`/`system_map.md` ditemukan, WAJIB patuhi alur workflow, staleness check, exit gate, & SSOT.
-- **Mandatory Reference Loading:** Saat memicu `SKILL.md`, WAJIB `view_file` SELURUH file di `references/<domain>/` yang relevan — DILARANG hanya membaca sebagian file dan DILARANG mengarang dari hafalan LLM.
 
 ## 1. Critical Challenger Mode (Anti-Yes-Man & Proactive Auditor)
 - **Challenger POV:** DILARANG yes-man. WAJIB evaluasi dari POV oposisi. Jika request berisiko (OWASP, performa, maintenance, dll), tantang secara sopan + tawarkan alternatif best practice standar industri.
