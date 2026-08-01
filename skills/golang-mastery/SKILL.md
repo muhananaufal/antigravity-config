@@ -7,29 +7,33 @@ description: Gunakan skill ini ketika merancang arsitektur, konkurensi, DB/SQLC,
 
 SSOT arsitektur & rekayasa sistem Golang enterprise & high-throughput.
 
-## 🔁 Greenfield Protocol (Init Proyek dari Nol — Swarm Research)
+## 🔁 Greenfield Protocol (Init Proyek dari Nol — Dynamic Swarm Scaling)
 
-LLM secara alami akan mengambil jalan pintas (laziness) jika disuruh membaca puluhan file. Untuk menjamin standar Top 1% diterapkan 100% tanpa halusinasi, **WAJIB gunakan protokol Swarm Subagent** saat inisialisasi **project baru dari nol (empty folder / new repository)**:
+LLM secara alami akan mengambil jalan pintas (laziness) jika disuruh membaca puluhan file. Untuk menjamin standar Top 1% diterapkan 100% tanpa halusinasi, **WAJIB gunakan protokol Dynamic Swarm Subagent (Elastis)** saat inisialisasi **project baru dari nol (empty folder / new repository)**:
 
 1. **Fase Inisialisasi (DILARANG MENEBAK):** Saat user meminta inisiasi project baru, Agen Utama DILARANG membuat `implementation_plan.md` langsung.
-2. **Spawn 4 Subagent `pro` Paralel:** Agen Utama WAJIB memanggil `invoke_subagent` untuk men-spawn 4 subagent sekaligus dengan pembagian tugas:
-   - **Subagent 1 (Infra & Data):** Wajib `view_file` ke semua file di `arch_patterns/`, `db_sqlc/`, dan `devops_control_planes/`. Lapor rangkuman standar arsitektur.
-   - **Subagent 2 (API & Code):** Wajib `view_file` ke semua file di `microservices_grpc/`, `testing_quality/`, dan `concurrency/`. Lapor standar API.
-   - **Subagent 3 (Security & Scale):** Wajib `view_file` ke semua file di `security_owasp/`, `observability_resilience/`, `distributed_patterns_resilience/`, dan `caching_strategy/`. Lapor standar ketahanan.
-   - **Subagent 4 (Context/Niche):** Agen utama wajib mendeteksi domain dari tabel **Auto-Detect** di bawah, lalu menugaskan Subagent 4 untuk membaca domain *niche* tersebut (misal `fintech_reliability/`, `background_jobs_worker/`, dll).
+2. **Dynamic Swarm Summon (`pro` tier):** Agen Utama WAJIB memanggil `invoke_subagent` untuk men-spawn minimal 4 hingga >8 subagent secara paralel sesuai kompleksitas proyek (Dynamic Scaling):
+   - **3 Subagent Core Tetap (Mandatory Core Coverage):**
+     - **Subagent 1 (Infra & Data Core):** Wajib `view_file` ke SEMUA file di `arch_patterns/`, `db_sqlc/`, dan `devops_control_planes/`.
+     - **Subagent 2 (API & Logic Core):** Wajib `view_file` ke SEMUA file di `microservices_grpc/`, `testing_quality/`, dan `concurrency/`.
+     - **Subagent 3 (Security & Resilience Core):** Wajib `view_file` ke SEMUA file di `security_owasp/`, `observability_resilience/`, `distributed_patterns_resilience/`, dan `caching_strategy/`.
+   - **Subagent Niche DINAMIS (1 Subagent per Domain Terdeteksi):** 
+     - Agen utama mengecek tabel **Auto-Detect** di bawah. Untuk **SETIAP 1 domain niche** yang cocok dengan proyek (misal: `fintech_reliability/`, `hft_zero_alloc/`, `realtime_networking/`), Wajib spawn **1 Subagent Dedikatif terpisah**. (Jika terdeteksi 4 domain niche, maka summon 3 Core + 4 Niche = **7 Subagents paralel**!).
 3. **Wait & Compile:** Agen Utama menunggu semua subagent melapor, merangkumnya, lalu membuat `implementation_plan.md` dengan opsi *Zero-Steering Grilling*.
 4. **Fase Implementasi (Coding):** Agen mematuhi standar yang sudah diekstrak subagent dan menggunakan `view_file` ke referensi spesifik HANYA jika butuh kode spesifik (seperti detail sintaks).
 
 ## 🏛️ Brownfield Protocol (Legacy / Refactoring / Tambah Fitur di Repo Eksisting)
 
-Saat user meminta **penambahan fitur baru, modifikasi, optimasi, atau audit** pada **codebase yang sudah ada (Legacy/Existing Project)**, DILARANG memaksakan *Big Bang Rewrite* atau menciptakan "Frankenstein Codebase". Gunakan protokol **Hybrid Swarm**:
+Saat user meminta **penambahan fitur baru, modifikasi, optimasi, atau audit** pada **codebase yang sudah ada (Legacy/Existing Project)**, DILARANG memaksakan *Big Bang Rewrite*, penciptaan "Frankenstein Codebase", atau pemakaian daftar subagent statis yang tidak relevan. Gunakan protokol **Dynamic Reconnaissance & Partitioning**:
 
-1. **Fase Audit & Discovery (Spawn 3 Subagent `pro` Paralel):**
-   - **Subagent 1 (Codebase & Architecture Auditor):** Gunakan `grep_search`, `list_dir`, dan `view_file` pada direktori project lokal user untuk memetakan struktur arsitektur, ORM/driver, pola koneksi DB, dan routing yang saat ini berjalan.
-   - **Subagent 2 (Vulnerability & Anti-Pattern Hunter):** Scan codebase lokal untuk mencari penyakit fatal yang bisa memperburuk fitur baru: N+1 queries, panggilan DB/HTTP tanpa `context.WithTimeout`, penggunaan `float32/float64` untuk moneter/uang, *goroutine leak*, SQL Injection, atau hardcode credentials.
-   - **Subagent 3 (Mastery Standard Matcher):** Meninjau temuan dari Subagent 1 & 2 serta spesifikasi fitur baru, lalu membaca file di direktori `references/` kita yang **relevan saja** untuk mengawal penambahan fitur / optimasi tersebut (terutama `zero_downtime_migrations.md` jika butuh ubah skema DB, `query_optimization_n_plus_one.md`, atau referensi niche terkait).
+1. **Intai & Pembelahan Subagent secara 100% Dinamis (Dynamic Hybrid Swarm):**
+   Agen Utama DILARANG mematok nama atau jumlah peran subagent secara kaku. Pertama, lirik struktur direktori root dan dependency (`go.mod`/config) dari repository user. Setelah itu, spawn tim Subagent ber-model `pro` (dari 3 hingga >10 secara elastis) dengan strategi pembagian yang benar-benar selaras dengan kenyataan repo asli:
+   - **Pembagian Berbasis Modul / Folder:** Jika project user dibagi menjadi beberapa modul/domain (misal: `/order`, `/user`, `/catalog`, `/payment`), spawn **1 Subagent Auditor terpisah untuk membedah masing-masing folder/modul**.
+   - **Pembagian Berbasis Tech Stack di `go.mod`:** Jika mendeteksi library tertentu di `go.mod` (misal `gorm.io/gorm`, `kafka-go`, atau `graphql`), spawn subagent auditor dengan misi spesifik memburu kerentanan library tersebut (misal N+1 GORM Hunter, atau Kafka DLQ Auditor). Jika TIDAK ADA fitur finansial/uang, DILARANG memanggil spesialis fintech/moneter!
+   - **Pembagian Berbasis Volume File:** Jika satu folder/package sangat padat (>30 file), pecah audit atas folder tersebut ke beberapa subagent berdasarkan sub-package atau fungsi eksekusi (misal: Subagent A fokus layer Handler/API, Subagent B fokus layer Query/Repository).
+   - **Mastery Standard Matcher (Subagent Dedikatif):** Tugas subagent ini murni mengkonsolidasi seluruh laporan kecacatan dari para auditor di atas, lalu menarik dan membaca HANYA file di direktori `references/` kita yang **spesifik bisa menjadi obat pencerah untuk menyembuhkan temuan tersebut** (wajib membedah `zero_downtime_migrations.md` jika audit menemukan skema DB lama yang harus diubah).
 2. **Zero-Steering Grilling (Opsi Evolusi / Penambahan Fitur):**
-   Agen Utama merangkum laporan audit dan menyajikan ≥3 opsi netral beserta trade-off untuk user (Gasskan):
+   Agen Utama merangkum laporan dari seluruh tim spesialis dan menyajikan ≥3 opsi netral beserta trade-off untuk user (Gasskan):
    - **Opsi 1: Native Consistent Extension (KISS):** Tanam fitur baru dengan mematuhi pola asli/ekspresi arsitektur repo tersebut (agar tim developer lama tidak bingung), NAMUN disuntikkan perlindungan standar Top 1% (wajib timeout, parameterized queries, RED metrics, dan index DB). Cepat dan konsisten.
    - **Opsi 2: Strangler Fig Pattern (Modular Isolation):** Fitur/modul baru didirikan secara independen menggunakan arsitektur modern kita (`internal/` Modular Monolith/Clean/SQLC) tanpa merusak kode lama. Terhubung ke legacy hanya melalui interface facade/proxy.
    - **Opsi 3: Surgical Rewrite & Expansion:** Jika modul lama terkait sudah terlalu cacat (misal fitur baru bergantung pada modul pembayaran jadul yang fatal/rentan race condition), ajukan operasi bedah modul lama sekaligus merancang fitur barunya berpadu berstandar Top 1%.
