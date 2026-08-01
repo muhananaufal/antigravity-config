@@ -280,4 +280,12 @@ func TestMigrateUsers_Success(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+## Edge Case Ekstra: pgx Named Prepared Statements vs pgBouncer
+Jika Anda menjalankan `pgxpool` di balik **pgBouncer** yang berjalan di mode `transaction` (Transaction Pooling), prepared statements bawaan `pgx` (yang mengandalkan statement parsing di sisi server DB) akan **RUSAK**. Pesan error seperti `prepared statement "lrupsc_..." does not exist` akan bermunculan.
+*Solusi*: Anda harus mendisable prepared statement caching di `pgxpool` config:
+```go
+config.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeExec // atau QueryExecModeSimpleProtocol
+```
+Ini sedikit mengorbankan CPU parsing tapi mencegah outage koneksi di multi-tenant cloud setup.
 ```

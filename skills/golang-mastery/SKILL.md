@@ -7,64 +7,119 @@ description: Gunakan skill ini ketika merancang arsitektur, konkurensi, DB/SQLC,
 
 SSOT arsitektur & rekayasa sistem Golang enterprise & high-throughput.
 
-## 🔁 Protocol & Routing Table
+## 🔁 Protocol
 
-**Core Protocol:**
-1. WAJIB `view_file` SELURUH file referensi di `references/<domain>/` yang relevan — DILARANG mengarang dari hafalan LLM.
-2. WAJIB sajikan minimal 2-3 opsi netral + trade-off saat Grilling — DILARANG langsung rekomendasikan 1 opsi.
+1. **WAJIB `view_file`** SELURUH file di `references/<domain>/` yang relevan — DILARANG mengarang dari hafalan LLM.
+2. **WAJIB baca semua Core References** untuk setiap project/fitur baru.
+3. **WAJIB scan task secara proaktif** → identifikasi Context References yang relevan → baca TANPA menunggu user menyebut keyword. Jangan asumsikan user tahu harus prompt apa.
+4. **WAJIB rekomendasikan** domain Context tambahan yang relevan di awal respons jika terdeteksi — user tidak boleh kelewatan referensi penting hanya karena tidak tahu harus minta.
+5. **WAJIB sajikan ≥2 opsi netral + trade-off** saat desain arsitektur — DILARANG langsung rekomendasikan 1 opsi.
 
-**Go-Specific Quality Gate:**
-3. WAJIB `go test -race ./...` — buktikan bebas data race sebelum lapor selesai.
-4. WAJIB `golangci-lint run` — zero lint error sebelum merge.
-5. WAJIB unit test `_test.go` pada modul bisnis utama (Auth, Payment, Order State Machine).
-6. WAJIB Clean Architecture: **DTO → Handler → Service → Repository**. DILARANG logika bisnis di Handler.
-7. WAJIB Strongly-Typed Error: `errors.As` / Sentinel Errors. DILARANG return `nil` tanpa konteks error.
-8. WAJIB Graceful Shutdown: `os.Signal` + `context.WithCancel` + drain DB/Redis sebelum exit.
-9. WAJIB validasi & sanitasi payload masuk sebelum menyentuh layer Service/DB (`go-playground/validator`).
-10. WAJIB `context.WithTimeout` pada SEMUA panggilan DB, Redis, gRPC, HTTP Client — DILARANG `context.Background()` di execution path.
-11. WAJIB `defer recover()` pada setiap goroutine baru yang di-spawn — DILARANG unhandled panic.
-12. WAJIB `SetMaxOpenConns` / `SetMaxIdleConns` / `SetConnMaxLifetime` — DILARANG default pool tanpa batas.
-13. WAJIB `sync.Pool` reset buffer (`b.Reset()` + cap check ≤ 64KB) sebelum dikembalikan ke pool.
+### 🔍 Auto-Detect Context Domain (Scan dari Task)
 
-**API & System Design:**
-14. WAJIB prefix versi API (`/api/v1/`) + Pagination (cursor/offset) pada semua list endpoint.
-15. WAJIB Idempotency Key (Redis/DB) pada POST yang mutate state — cegah double-processing.
-16. WAJIB OpenAPI spec (`swaggo`/`ogen`) sejak awal, bukan afterthought.
-17. WAJIB Correlation ID (`X-Request-ID`) propagasi ke semua downstream + log entries.
-18. WAJIB Health Check (`/health`) + Readiness Probe (`/ready`) pada setiap service.
-19. WAJIB Backward Compatibility — breaking change harus versi baru (`v2`), bukan patch di versi yang sama.
-20. WAJIB Zero-Downtime Migration — kolom baru `nullable`, DILARANG rename/drop langsung.
+Agent wajib mencocokkan nature of task ke domain berikut **secara proaktif**:
+
+| Jika task melibatkan... | Otomatis baca |
+| :--- | :--- |
+| Payment, transaksi, ledger, refund, wallet, checkout | `fintech_reliability/` |
+| Job async, queue, email/notif worker, scheduled task, cron | `background_jobs_worker/` |
+| Kafka, NATS, WebSocket, real-time, event stream, pub/sub | `realtime_networking/` |
+| AWS, GCP, S3, Lambda, SQS, Secrets Manager, cloud | `cloud_provider_sdk/` |
+| K8s, Helm, CRD, Operator, cluster, pod, deployment manifest | `cloud_native_k8s_operators/` |
+| CI/CD, GitHub Actions, GitLab CI, release, deploy pipeline | `ci_cd_pipeline/` |
+| Cache Redis, in-memory cache, stampede, TTL, invalidation | `caching_strategy/` (full) |
+| Saga, outbox, CQRS, event sourcing, distributed tx | `distributed_patterns_resilience/` (full) |
+| Performance, profiling, pprof, GC pressure, memory leak | `runtime_internals/` |
+| Search, vector, AI/ML inference, embedding, ONNX | `ai_data_infra/` |
+| Low-latency, HFT, zero-alloc, matching engine, order book | `hft_zero_alloc/` |
+| Linux syscall, epoll, cgroups, seccomp, raw socket | `system_programming_linux/` |
+| Security audit, zero-trust, OPA, SPIFFE, cosign, SBOM | `cybersecurity_zerotrust/` |
+| Code generation, AST, linter custom, WASM plugin | `ast_metaprogramming/` |
+| Game server, multiplayer, tick loop, leaderboard | `game_backend/` |
+| Distributed consensus, Raft, etcd, WAL, BadgerDB | `distributed_consensus_storage/` |
+| IoT, embedded, TinyGo, GPIO, edge device | `embedded_tinygo/` |
+| QUIC, WireGuard, DNS, MQTT, raw TCP protocol | `advanced_networking_protocols/` |
+
+
+
+## 📦 Core References (Wajib Baca Setiap Project)
+
+Domain yang hampir selalu relevan untuk Go service manapun:
+
+| Domain | Referensi | File Spesifik |
+| :--- | :--- | :--- |
+| **Concurrency** | `references/concurrency/` | semua |
+| **DB & Cache** | `references/db_sqlc/` | semua |
+| **API & gRPC** | `references/microservices_grpc/` | semua |
+| **Observability** | `references/observability_resilience/` | semua |
+| **Security** | `references/security_owasp/` | semua |
+| **Testing** | `references/testing_quality/` | semua |
+| **Architecture** | `references/arch_patterns/` | semua |
+| **Docker & DevOps** | `references/devops_control_planes/` | semua |
+| **Resilience Patterns** | `references/distributed_patterns_resilience/` | `retry_backoff_jitter.md`, `idempotency_key_engine.md`, `bulkhead_isolation.md` |
+| **Caching** | `references/caching_strategy/` | `cache_aside_singleflight.md`, `multilevel_cache_l1l2.md` |
+
+---
+
+## 🎯 Context References (Baca Sesuai Kebutuhan)
+
+| Konteks / Keyword | Baca Referensi |
+| :--- | :--- |
+| Runtime internals, GC tuning, CGO, PGO, goroutine stack | `references/runtime_internals/` |
+| Distributed transactions, saga, outbox, CQRS, feature flags, multi-tenancy | `references/distributed_patterns_resilience/` |
+| Raft, etcd, LSM, WAL, gossip, vector clock, BadgerDB | `references/distributed_consensus_storage/` |
+| Payment, ledger, decimal, ISO 20022, PCI-DSS, reconciliation, ClickHouse | `references/fintech_reliability/` |
+| WebSocket, Kafka, NATS, eBPF, TCP, binary protocol | `references/realtime_networking/` |
+| Zero-alloc, HFT, lock-free ring buffer, SIMD, CPU cache, FIX parser | `references/hft_zero_alloc/` |
+| epoll, cgroups, seccomp, inotify, Unix socket, POSIX signal | `references/system_programming_linux/` |
+| K8s Operator, CRD, admission webhook, client-go informer, Helm | `references/cloud_native_k8s_operators/` |
+| QUIC, WireGuard, MQTT, ConnectRPC, DNS, SOCKS5 | `references/advanced_networking_protocols/` |
+| SPIFFE, OPA, cosign, SBOM, Vault rotation, fuzzing | `references/cybersecurity_zerotrust/` |
+| AST, custom linter, code gen, WASM plugin, protoc plugin | `references/ast_metaprogramming/` |
+| TinyGo, GPIO, I2C/SPI, edge MQTT, WASM browser | `references/embedded_tinygo/` |
+| Game server, tick loop, spatial hash, dead reckoning, leaderboard | `references/game_backend/` |
+| HNSW, LLM proxy, Apache Arrow, DataFusion, pgvector, ONNX | `references/ai_data_infra/` |
+| GitHub Actions, GitLab CI, GoReleaser, security scan CI, blue/green deploy, monorepo | `references/ci_cd_pipeline/` |
+| AWS SDK v2 (S3/SQS/DynamoDB), GCP client, Lambda, Secrets Manager, SNS fanout | `references/cloud_provider_sdk/` |
+| Background jobs, asynq, River (Postgres), cron distributed, worker pool, saga jobs | `references/background_jobs_worker/` |
+| Cache-aside, singleflight, L1/L2 multilevel, Redis patterns, cache invalidation, CDN headers | `references/caching_strategy/` |
+
+---
+
+## ✅ Quality Gate (Checklist Sebelum Selesai)
+
+**Go & Code Quality:**
+- `go test -race ./...` — zero data race
+- `golangci-lint run` — zero lint error
+- Clean Architecture: `DTO → Handler → Service → Repository` — no business logic di Handler
+- Strongly-Typed Error: `errors.As` / Sentinel Errors — no bare `nil` return
+- `context.WithTimeout` pada SEMUA panggilan DB, Redis, gRPC, HTTP Client
+- `defer recover()` pada setiap goroutine baru yang di-spawn
+- `SetMaxOpenConns` / `SetMaxIdleConns` / `SetConnMaxLifetime` — no default unlimited pool
+
+**API & System:**
+- Prefix versi API (`/api/v1/`) + Pagination (cursor/offset)
+- Idempotency Key (Redis/DB) pada POST yang mutate state
+- OpenAPI spec (`swaggo`/`ogen`) sejak awal
+- Correlation ID (`X-Request-ID`) propagasi ke semua downstream
+- `/health` + `/ready` endpoint pada setiap service
+- Zero-Downtime Migration — kolom baru `nullable`, no rename/drop langsung
 
 **Observability & Security:**
-21. WAJIB RED Metrics (Rate/Error/Duration) + OpenTelemetry distributed tracing per service.
-22. WAJIB Structured Logging (`zerolog`/`slog`) — DILARANG log struct berisi token/password/PII secara raw.
-23. WAJIB Circuit Breaker + timeout + retry pada semua external service calls.
-24. WAJIB Rate Limiting pada endpoint publik (auth, register, reset password).
-25. WAJIB OWASP Checklist: SQL Injection, IDOR, Mass Assignment, Broken Auth — eksplisit sebelum selesai.
-26. WAJIB audit N+1 Query di setiap loop DB. Gunakan batch query atau eager loading.
-27. WAJIB p99 < 200ms SLA — verifikasi dengan `go test -bench` sebelum deploy.
+- RED Metrics + OpenTelemetry tracing per service
+- Structured Logging (`zerolog`/`slog`) — no PII/token di log
+- Circuit Breaker + timeout + retry untuk semua external calls
+- Rate Limiting pada endpoint publik
+- OWASP: SQL Injection, IDOR, Mass Assignment, Broken Auth
+- Audit N+1 Query — gunakan batch atau eager loading
+- p99 < 200ms — verifikasi dengan `go test -bench`
 
-| Topik Task | Domain Referensi |
-| :--- | :--- |
-| GMP scheduler, work-stealing, SIGURG preemption, memory allocator (mcache/mcentral/mheap), GC tri-color, escape analysis, generics GC-shape stenciling, CGO ABI, goroutine stack growth, PGO build | `references/runtime_internals/` |
-| Goroutine leak detection (`goleak`), channel fan-out/fan-in, sync primitives (Mutex/RWMutex/Pool/Once), context timeout/cancellation, atomic lock-free, errgroup, singleflight, distributed Redis lock, race detector | `references/concurrency/` |
-| sqlc + pgx/v5, ACID isolation levels, pessimistic/optimistic locking, advisory locks, zero-downtime migration, multi-layer cache (L1/L2/L3), N+1 query, connection pool tuning, TimescaleDB | `references/db_sqlc/` |
-| gRPC protobuf patterns, interceptor chaining, bidirectional streaming, Chi middleware stack, GraphQL gqlgen + dataloader, API versioning, service mesh LB, webhook HMAC, OpenAPI ogen | `references/microservices_grpc/` |
-| Zero-allocation patterns (sync.Pool), limit orderbook matching, SIMD assembly Plan9, memory arena, lock-free ring buffer, CPU cache alignment, zero-copy sendfile/splice, FIX feed parser | `references/hft_zero_alloc/` |
-| OpenTelemetry tracing + OTLP, Prometheus RED metrics, zerolog structured logging, circuit breaker (gobreaker), graceful shutdown drain, token bucket rate limiting, health check, baggage propagation | `references/observability_resilience/` |
-| OWASP input validation, JWT dual-token RS256, Casbin RBAC/ABAC, AES-256-GCM, Argon2id, audit log HMAC chain, mTLS + SPIFFE, HashiCorp Vault dynamic secrets | `references/security_owasp/` |
-| testify table-driven tests, gomock/moq interface mocking, testcontainers-go, benchmarking + pprof, native Go fuzzing, govulncheck + gosec, property-based testing (rapid), E2E httptest | `references/testing_quality/` |
-| Saga orchestration/choreography, transactional outbox, consistent hashing ring, idempotency key engine, multi-tenancy RLS, Temporal workflow, CQRS + event sourcing, feature flags | `references/distributed_patterns_resilience/` |
-| Raft consensus (hashicorp/raft), LSM pebble, WAL CRC32 + group commit, etcd client watches/leases, gossip memberlist, vector clocks + HLC, groupcache, BadgerDB | `references/distributed_consensus_storage/` |
-| Double-entry ledger, decimal arithmetic (shopspring), payment idempotency, ISO 20022/SWIFT, PCI-DSS tokenization (FPE), reconciliation engine, pricing rule engine, ClickHouse OLAP | `references/fintech_reliability/` |
-| WebSocket gnet/epoll, eBPF cilium-go XDP/TC, custom binary protocol framing, raw sockets gopacket, Kafka EOS + DLQ, TCP socket options, NATS JetStream pull consumer | `references/realtime_networking/` |
-| epoll non-blocking via `golang.org/x/sys/unix`, cgroups v2 + namespaces, seccomp BPF, inotify fsnotify, Unix domain socket SCM_RIGHTS, exec subprocess, POSIX signal handling | `references/system_programming_linux/` |
-| controller-runtime Reconciler, CRD kubebuilder markers, admission webhooks (CustomValidator/CustomDefaulter), client-go SharedInformer + WorkQueue, OLM CSV, Helm chart Go testing | `references/cloud_native_k8s_operators/` |
-| QUIC/HTTP3 quic-go, WireGuard userspace wgctrl, NATS cluster JetStream R=3, MQTT paho + mochi-broker, ConnectRPC tri-protocol, miekg/dns, SOCKS5 proxy | `references/advanced_networking_protocols/` |
-| Clean hexagonal architecture, DDD aggregate/repository, CQRS event store PostgreSQL, modular monolith `internal/`, event-driven watermill, dependency injection wire/fx | `references/arch_patterns/` |
-| go/ast traversal, custom linter `analysis.Analyzer`, code gen text/template + go/format, wazero WASM plugin, reflect.StructOf dynamic struct, protoc plugin protogen | `references/ast_metaprogramming/` |
-| SPIFFE/SPIRE workload identity, OPA rego policy engine, cosign keyless signing + SBOM, network CVE scanning, Vault secrets rotation, security fuzzing | `references/cybersecurity_zerotrust/` |
-| Custom Terraform provider (plugin-framework), Kubernetes CNI plugin netlink, Flux GitOps source-controller, Backstage catalog module, Crossplane composition upjet | `references/devops_control_planes/` |
-| TinyGo target boards + machine package, GPIO interrupt PWM ADC, I2C/SPI peripheral driver, MQTT edge QoS, TinyGo WASM + syscall/js DOM | `references/embedded_tinygo/` |
-| Authoritative game server UDP, fixed-timestep tick loop, spatial hash grid + quadtree, snapshot interpolation + dead reckoning, Redis session state + leaderboard ZADD | `references/game_backend/` |
-| HNSW vector search, LLM proxy SSE streaming + tiktoken, Apache Arrow RecordBatch, DataFusion CGO FFI, watermill stream pipeline, ONNX embedding, pgvector hybrid search | `references/ai_data_infra/` |
+**Docker & Container:**
+- Multi-stage build: `golang:1.23-alpine` → `distroless/static-debian12:nonroot` atau `scratch`
+- Non-root user — no `root` di production container
+- `.dockerignore` eksplisit — no `.env*`, `.git/`, `*_test.go` ikut ter-COPY
+- `ENTRYPOINT ["/app"]` exec form — no shell form (SIGTERM tidak sampai ke app)
+- `HEALTHCHECK` di Dockerfile selaras dengan `/health` endpoint
+- No hardcode credentials — gunakan `ENV` + secret manager
+- Resource limits di `docker-compose.yml` / K8s manifest
+- `depends_on.condition: service_healthy` untuk DB/Redis dependency

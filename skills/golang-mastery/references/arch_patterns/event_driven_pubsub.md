@@ -232,3 +232,117 @@ kafka.Publish("ProcessImageRequest", image)
 3. **Evolusi Schema dan Ketidakcocokan Versi Field:**
    Publisher mengubah struktur struct dari `{"age": 20}` (int) ke `{"age": "dua puluh"}` (string). Consumer versi lama seketika *panic* saat unmarshal.
    *Defensive:* Versi event bersifat esensial. Setiap publikasi **wajib** mencantumkan label versi di metadata (`msg.Metadata.Set("schema_version", "2")`). Konsumer lama menolak mengeksekusi dan dengan aman meng-ACK pesan tak dikenal (Forward Compatibility), atau gunakan format serialization tangguh berstandar seperti Protobuf/Avro yang memiliki registri kompatibilitas terpusat (Schema Registry).
+
+## 5. Transactional Outbox + Watermill Integration
+
+Pola **Transactional Outbox** adalah jaminan absolut (*bulletproof*) untuk masalah *dual-write*. Daripada memodifikasi basis data bisnis lalu mengirim pesan ke *message broker* melalui jaringan yang rawan gagal, kita menyimpan pesannya di tabel basis data (dalam *transaction* SQL yang sama). Pekerja (Worker) terpisah akan mengambil pesan dari tabel ini dan meneruskannya ke *message broker*.
+
+### At-Least-Once vs Exactly-Once Guarantee
+- **Exactly-Once Delivery** ke *Message Broker* sangat sulit dicapai secara matematis. Pola Outbox ini memberikan jaminan **At-Least-Once**.
+- Jika *publisher worker* berhasil mengirim pesan ke Kafka namun *crash* sebelum sempat menandai event tersebut terkirim di tabel DB, *worker* baru akan membaca event itu lagi saat hidup kembali, menyebabkan duplikasi ke Kafka. Karenanya, Consumer akhir di layanan hilir (downstream) **harus idempotent**.
+
+### Schema Tabel Outbox
+```sql
+CREATE TABLE outbox_events (
+    id UUID PRIMARY KEY,
+    aggregate_id VARCHAR(255) NOT NULL, -- ID entitas domain (misal user_id)
+    event_type VARCHAR(255) NOT NULL,
+    payload JSONB NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    published_at TIMESTAMP WITH TIME ZONE -- NULL jika belum terkirim
+);
+-- Indeks agar poller outbox berjalan instan
+CREATE INDEX idx_outbox_unpublished ON outbox_events(created_at) WHERE published_at IS NULL;
+```
+
+### Contoh Kode Go: Outbox Writer & Polling Publisher
+
+```go
+package outbox
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"github.com/ThreeDotsLabs/watermill"
+	"github.com/ThreeDotsLabs/watermill-sql/v2/pkg/sql_pubsub"
+	"github.com/ThreeDotsLabs/watermill/message"
+)
+
+// 1. Transactional Outbox Writer (Domain Service)
+func RegisterUser(ctx context.Context, tx *sql.Tx, userID string, email string) error {
+	// A. Modifikasi data utama
+	_, err := tx.ExecContext(ctx, "INSERT INTO users (id, email) VALUES ($1, $2)", userID, email)
+	if err != nil {
+		return err
+	}
+
+	// B. Tulis Event ke Outbox dalam Transaksi yang Sama
+	payload, _ := json.Marshal(map[string]string{"email": email})
+	
+	outboxQuery := `
+		INSERT INTO outbox_events (id, aggregate_id, event_type, payload) 
+		VALUES ($1, $2, $3, $4)
+	`
+	_, err = tx.ExecContext(ctx, outboxQuery, watermill.NewUUID(), userID, "UserRegistered", payload)
+	
+	// C. Commit transaksi (jika error bubble up) akan menjamin kedua tindakan atomic!
+	return err
+}
+
+// 2. Polling Publisher (Watermill SQL Publisher worker)
+// Fungsi ini berjalan sebagai daemon/background worker terpisah.
+func StartOutboxForwarder(db *sql.DB, brokerPublisher message.Publisher) error {
+	logger := watermill.NewStdLogger(false, false)
+
+	// Inisialisasi Subscriber berbasis SQL
+	subscriber, err := sql_pubsub.NewSubscriber(
+		db,
+		sql_pubsub.SubscriberConfig{
+			SchemaAdapter:    sql_pubsub.DefaultPostgreSQLSchema{},
+			OffsetsAdapter:   sql_pubsub.DefaultPostgreSQLOffsetsAdapter{},
+			InitializeSchema: true,
+		},
+		logger,
+	)
+	if err != nil {
+		return err
+	}
+	defer subscriber.Close()
+
+	// Menarik pesan dari tabel outbox_events untuk dipublish
+	messages, err := subscriber.Subscribe(context.Background(), "outbox_events")
+	if err != nil {
+		return err
+	}
+
+	fmt.Println("[Outbox Relay] Worker started...")
+
+	// Loop pengiriman (Relay) pesan
+	for msg := range messages {
+		// Teruskan pesan ke Message Broker sesungguhnya (Kafka/RabbitMQ)
+		if err := brokerPublisher.Publish("user_events", msg); err != nil {
+			fmt.Printf("Failed to relay message %s: %v\n", msg.UUID, err)
+			msg.Nack() // Tolak, kembalikan antrian untuk dicoba ulang
+			continue
+		}
+		
+		// Jika sukses ke Broker, Ack akan memodifikasi DB Outbox (published_at)
+		msg.Ack()
+		fmt.Printf("Message %s relayed to Broker\n", msg.UUID)
+	}
+
+	return nil
+}
+```
+
+### Edge Cases Tambahan
+
+1. **Duplicate Event Downstream (Duplikasi Hilir)**: 
+   Karena worker *outbox* menggunakan pendekatan At-Least-Once, sangat dimungkinkan *consumer* downstream (misalnya service e-mail) menerima event *UserRegistered* 2 kali. *Consumer* wajib mendesain logika mereka sedemikian rupa agar aman dieksekusi berulang kali (*Idempotent*). Caranya: gunakan `msg.UUID` sebagai *idempotency key* di DB tujuan untuk mencegat proses duplikat.
+   
+2. **Outbox Table Growth Management (Ukuran Tabel Membengkak)**:
+   Karena setiap event yang diterbitkan direkam secara abadi di tabel `outbox_events`, tabel tersebut bisa membengkak menjadi jutaan baris dalam hitungan hari. Ini membebani ruang disk dan performa DB. Solusi: Buat operasi pembersihan asinkron (*cron job*) atau *partitioning* DB untuk menghapus (`DELETE`) rekaman di tabel *outbox_events* yang `published_at`-nya sudah lebih lama dari 7 hari.

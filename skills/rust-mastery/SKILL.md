@@ -44,6 +44,16 @@ SSOT arsitektur & rekayasa Rust systems & enterprise.
 26. WAJIB audit N+1 Query di setiap loop DB — gunakan batch query atau `JOIN`.
 27. WAJIB p99 < 200ms SLA — verifikasi dengan `cargo criterion` sebelum deploy.
 
+**Docker & Container (Startup Standard):**
+28. WAJIB Multi-Stage Build: `builder` (rust:1.82-alpine / rust:1.82-slim) → `runtime` (gcr.io/distroless/cc-debian12 atau scratch) — binary Rust di-strip (`strip`/`cargo-strip`) sebelum dikopi ke stage final, image final DILARANG contain Cargo/rustc.
+29. WAJIB Non-Root User: `USER nonroot:nonroot` (distroless) atau `adduser -D appuser` (alpine) — DILARANG run sebagai root di production container.
+30. WAJIB `.dockerignore` eksplisit: exclude `.git/`, `target/`, `tests/`, `benches/`, `docs/` — `target/` terutama critical karena bisa 10GB+, DILARANG COPY tanpa filter.
+31. WAJIB Health Check di Dockerfile: `HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD ["/bin/grpc_health_probe","-addr=:50051"]` atau HTTP `wget` sesuai protokol service.
+32. WAJIB `SIGTERM` Graceful Shutdown di container: gunakan `ENTRYPOINT ["/app"]` (exec form) — Tokio harus handle `tokio::signal::unix::signal(SignalKind::terminate())` secara eksplisit.
+33. WAJIB Environment Config via `ENV` / `ARG` — DILARANG hardcode credentials/secrets di Dockerfile. Gunakan Docker Secrets atau secret manager.
+34. WAJIB Resource Limits di `docker-compose.yml` / K8s manifest: `deploy.resources.limits.memory`, `cpus` — Rust service tanpa memory limit tetap bisa OOM jika ada leak di unsafe block.
+35. WAJIB `docker-compose.yml` menyediakan `healthcheck`, `depends_on.condition: service_healthy`, dan `restart: unless-stopped` untuk semua service dependencies (DB, Redis, etc.).
+
 | Topik Task | Domain Referensi |
 | :--- | :--- |
 | Borrow checker NLL, lifetime variance, smart pointers (Box/Rc/Arc/Weak), interior mutability (Cell/RefCell/UnsafeCell), Cow<'a,B>, LazyLock, Pin<P> + Unpin, PhantomData variance, dropck eyepatch | `references/core_memory_ownership/` |
@@ -68,3 +78,4 @@ SSOT arsitektur & rekayasa Rust systems & enterprise.
 | Treiber lock-free stack, Michael-Scott queue, crossbeam epoch-based reclamation, SeqLock, AtomicCell, hazard pointers | `references/lockfree_atomic_structures/` |
 | Bump allocator #![no_std], slab allocator fixed-size, typed-arena, GlobalAlloc trait impl, tracking allocator for leak detection | `references/custom_allocators_internals/` |
 | syn VisitMut AST traversal, quote_spanned! error diagnostics, proc-macro attribute + derive, TokenStream manipulation, macro hygiene | `references/advanced_procmacro_engineering/` |
+| Multi-stage Dockerfile (builder→distroless/cc-debian12/scratch), binary strip, non-root user, .dockerignore (target/ exclude), HEALTHCHECK, SIGTERM Tokio signal handler, docker-compose healthcheck + depends_on, resource limits, K8s-ready probe | `references/docker_container_standards/` |

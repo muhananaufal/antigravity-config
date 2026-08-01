@@ -233,3 +233,66 @@ ALTER TABLE transactions ALTER COLUMN id TYPE BIGINT;
 
 3. **Batasan Timeout Pgbouncer untuk Migrasi**
    Jika Anda mengeksekusi Goose/Migrator di lingkungan produksi yang dilindungi oleh Pgbouncer (koneksi proxy), berhati-hatilah dengan `query_wait_timeout` atau limit proxy. Tugas migrasi (terutama pembuatan indeks raksasa) bisa diputus Pgbouncer di tengah jalan. Biasakan untuk me-rute tugas migrasi menggunakan konfigurasi koneksi DNS yang mengarah secara **langsung (Direct)** ke Primary Master PostgreSQL, bukan melalui proxy *Transaction Pooling*.
+
+4. **Large Table Backfill dengan Batching**
+   Saat Anda harus mengisi jutaan baris data (misal populate default value untuk kolom baru), menggunakan satu statement `UPDATE users SET new_col = 1` akan mengunci seluruh tabel (table lock) dan memenuhi WAL log.
+   *Solusi*: Buat script Go terpisah yang me-loop ID dan menggunakan klausa `LIMIT`.
+   ```go
+   lastID := 0
+   for {
+       res, _ := db.Exec("UPDATE users SET new_col = 1 WHERE id > $1 AND id <= $2", lastID, lastID+1000)
+       affected, _ := res.RowsAffected()
+       if affected == 0 { break }
+       lastID += 1000
+       time.Sleep(50 * time.Millisecond) // Jitter untuk memberi nafas ke replikasi dan query lain
+   }
+   ```
+
+## 6. Foreign Key Zero-Downtime Pattern
+
+Menambahkan batasan Foreign Key (FK) pada tabel yang sibuk dengan jutaan baris (misalnya tabel `orders` yang merujuk tabel `users`) adalah mimpi buruk *downtime* potensial, karena operasi tersebut mengunci tabel yang merujuk (table lock) saat PostgreSQL memindai seluruh kolom untuk memvalidasi kunci relasi ke tabel tujuan.
+
+### Mekanisme NOT VALID dan VALIDATE CONSTRAINT
+PostgreSQL memiliki mekanisme 2 langkah yang tidak mengganggu:
+1. **`NOT VALID`**: Tambahkan FK constraint. FK ini akan langsung diwajibkan untuk semua sisipan data *baru* (`INSERT/UPDATE`), tetapi *tidak akan* memvalidasi data *lama* sehingga kembali secara instan dan tidak mengunci tabel.
+2. **`VALIDATE CONSTRAINT`**: Jalankan perintah terpisah di luar transaksi. Ini akan memindai data lama dan memvalidasinya di *background* menggunakan tipe lock parsial, tanpa memblokir lalu lintas aplikasi baca/tulis normal.
+
+### Urutan Deployment Timing
+1. **Deploy v1**: Jalankan migrasi menambahkan kolom `user_id` (NULLable) dan tambahkan `FOREIGN KEY (user_id) REFERENCES users(id) NOT VALID`.
+2. **Backfill**: Aplikasikan Data Backfill secara halus untuk menetapkan data relasi.
+3. **Validate**: Jalankan migrasi mandiri `ALTER TABLE orders VALIDATE CONSTRAINT fk_user_id`. (Tabel tidak terkunci penuh).
+4. **Deploy v2**: Paksa keamanan ketat dengan migrasi `ALTER TABLE orders ALTER COLUMN user_id SET NOT NULL`.
+
+### Contoh Kode: Urutan Migration dengan `golang-migrate` / `goose`
+
+**File 1: `001_add_fk_not_valid.sql`**
+```sql
+-- +goose Up
+-- +goose StatementBegin
+ALTER TABLE orders ADD COLUMN user_id INT;
+
+-- Instan. Tidak memblokir tabel orders. 
+-- Data BARU yang di INSERT ke orders sudah mulai dipantau oleh FK.
+ALTER TABLE orders 
+  ADD CONSTRAINT fk_orders_user_id 
+  FOREIGN KEY (user_id) REFERENCES users(id) 
+  NOT VALID;
+-- +goose StatementEnd
+```
+
+**File 2: `002_validate_fk.sql`** (Biasanya dijalankan setelah Data Backfill selesai)
+```sql
+-- +goose Up
+-- Harus menggunakan NO TRANSACTION atau Statement ini di-lock Goose secara eksklusif.
+-- +goose NO TRANSACTION
+-- Memindai tabel di background tanpa read/write blocking penuh pada orders.
+ALTER TABLE orders VALIDATE CONSTRAINT fk_orders_user_id;
+```
+
+### Edge Cases 
+
+1. **Validasi Gagal di Tengah Jalan:**
+   Jika `VALIDATE CONSTRAINT` gagal karena ternyata ada data lama yang kotor (misal `user_id = 99999` namun ID tersebut tidak ada di tabel `users`), Postgres akan menggugurkan validasi. Namun, Constraint akan tetap nangkring dalam status `NOT VALID`. *Tindakan*: Bersihkan/hapus/betulkan baris bermasalah itu, lalu jalankan `VALIDATE CONSTRAINT` lagi secara manual atau migrasi retry.
+
+2. **FK ke Tabel Tujuan yang Sangat Besar:**
+   Walau memvalidasi dari tabel *asal* tidak terlalu mengunci, PostgreSQL di balik layar memicu mekanisme `SELECT FOR SHARE` pada tabel *tujuan* (tabel `users` yang dirujuk) untuk memastikan konsistensi. Jika ada kueri lain yang berniat memodifikasi (`UPDATE`/`DELETE`) struktur atau baris-baris tertentu yang sedang di-*share-lock* pada tabel `users`, kueri mutasi tersebut akan terblokir menanti validasi selesai. *Tindakan*: Eksekusi di jam *low-traffic* jika tabel rujukan dimutasi tinggi secara reguler.

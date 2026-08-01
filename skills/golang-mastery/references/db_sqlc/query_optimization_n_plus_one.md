@@ -257,4 +257,85 @@ func TestParseJSONAggregation_Robustness(t *testing.T) {
 		})
 	}
 }
+
+---
+
+## Anti-Pattern 3: JSONB Abuse (Penyalahgunaan JSONB)
+Terkadang developer yang malas melakukan normalisasi memilih untuk membuang semua child entities ke dalam satu kolom `JSONB`. 
+```go
+// ❌ BAD: Memasukkan relasi dinamis yang Sering Difilter ke JSONB
+db.Query(ctx, "SELECT * FROM posts WHERE metadata->>'author_type' = 'admin'") 
 ```
+**Impact:** Query planner Postgres tidak bisa menggunakan statistics secara efisien untuk JSONB. Melakukan sekuensial scan atau bahkan harus membuat GIN index raksasa.
+**✅ Solusi:** Normalisasikan ke kolom nyata / tabel nyata jika *field* tersebut sering menjadi klausa `WHERE`. JSONB hanya untuk atribut bebas yang *jarang* di-filter.
+```
+
+## 6. EXPLAIN ANALYZE Workflow di Go
+
+Untuk meyakinkan diri kita bahwa kueri kita telah teroptimasi dengan indeks (*Index Scan*) dan bukan memindai semua baris secara kotor (*Sequential Scan*), kita bisa langsung mengujinya di dalam *test suite* Go dengan mengeksekusi `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)`.
+
+### Deteksi Auto via EXPLAIN dan `pg_stat_statements`
+1. **`pg_stat_statements`**: Ekstensi Postgres ini terus mencatat waktu eksekusi kueri riil. Jika di *production*, monitoring Go (Prometheus) bisa melirik ke log tabel fungsi tersebut untuk menemukan kueri lambat.
+2. **Regresi via JSON Plan**: Di pipeline CI/CD (Test Go), kita mengeksekusi *EXPLAIN JSON* untuk menangkap rencana eksekusi dan memastikannya *Index Scan*. Jika kode berubah dan kueri ter-downgrade menjadi lamban *Sequential Scan*, *Test* akan otomatis melempar `t.Fatal()`.
+
+### Contoh Kode Go: Query Plan Capture (Regresi Test)
+
+```go
+package database_test
+
+import (
+	"context"
+	"encoding/json"
+	"strings"
+	"testing"
+)
+
+// Struct ringkas untuk mem-parsing respons JSON EXPLAIN dari PostgreSQL
+type ExplainPlan []struct {
+	Plan struct {
+		NodeType string `json:"Node Type"`
+		Plans    []struct {
+			NodeType string `json:"Node Type"`
+		} `json:"Plans"`
+	} `json:"Plan"`
+}
+
+func TestQueryDoesNotUseSequentialScan(t *testing.T) {
+	ctx := context.Background()
+	// db := ... inisialisasi pool pgx test
+
+	query := `SELECT * FROM users WHERE email = $1`
+	
+	// Prefix dengan EXPLAIN (ANALYZE, FORMAT JSON)
+	explainQuery := "EXPLAIN (ANALYZE, FORMAT JSON) " + query
+	
+	var planJSON string
+	err := db.QueryRow(ctx, explainQuery, "test@test.com").Scan(&planJSON)
+	if err != nil {
+		t.Fatalf("Failed to run explain: %v", err)
+	}
+
+	var plan ExplainPlan
+	if err := json.Unmarshal([]byte(planJSON), &plan); err != nil {
+		t.Fatalf("Failed to parse plan json: %v", err)
+	}
+
+	// Deteksi rekursif sederhana jika mengandung kata "Seq Scan"
+	if strings.Contains(planJSON, "Seq Scan") {
+		t.Errorf("PERFORMANCE REGRESSION DETECTED: Query uses Sequential Scan! Add an index. Plan: %v", plan[0].Plan.NodeType)
+	}
+}
+```
+
+### Edge Case: EXPLAIN ANALYZE pada Production
+
+**Masalah:** 
+Perintah `EXPLAIN ANALYZE` **BENAR-BENAR MENGEKSEKUSI** *kueri* yang ada di belakangnya secara nyata, untuk mengukur waktu milidetiknya. Jika Anda merancang *diagnostic endpoint* `/debug/explain?q=DELETE FROM users`, dan user memanggilnya, *semua user Anda benar-benar akan terhapus!*
+
+**Dampak Samping Eksekusi:**
+- Data termutasi secara tak terduga (*side effect*).
+- Jika pada tabel raksasa (*heavy query*), akan membebani CPU server Production seketika.
+
+**Solusi:**
+1. Hanya gunakan flag `ANALYZE` di lingkungan tes atau replika. 
+2. Jika terpaksa di production (untuk kueri mutasi seperti `UPDATE/DELETE`), selalu bungkus dalam blok `BEGIN; EXPLAIN ANALYZE ...; ROLLBACK;` untuk mencegah mutasi permanen!

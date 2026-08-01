@@ -1,0 +1,23 @@
+## rework skills rust ##
+
+protocol di skills golang mastery kita bisa dibuat lebih thin nggak? kayak core2 references untuk setiap project itu merujuk ke folder apa saja, terus yang niche tergantung context apa saja, jadi di skill md yang tidak ada di references saja, gimana
+
+domain untuk core reference ada yang terlewat nggak? deep dive
+
+maksud saya yang belum ada di lokal saya, misal domain apa apa gitu wkwk, ada nggak
+
+tolong semua, pastikan kamu tidak menahan diri speerti biasa, saya ignin kualitas top 1% bukan hanya dari struktur tapi materinya juga, okeii?
+
+brarti udh top 1% semua (dalam catatan sub agents, bukan thin file) tinggal cek manual isi kualitasnya ya ya? yang belum⭐ Manual Verified
+
+nanti dulu itu terakhir, ada core domain yang ketinggalan belum ada di lokal kita?
+
+brarti gaperlu ada tambahan domain lagi untuk core ref?
+
+yakin? tidak perlu buat domain baru?
+
+sudah yakin tutup untuk golang? last confirmation
+
+di SKILLS.md golang udah otomatis membaca core ataupun yang niche domain kan misal init fitur atau init project baru
+
+sebenarnya saya ingin nya nggak perlu keyword si agent udah ada rekomendasinya, misal pakai ini ini ini ini nggak? takutnya kan saya kelewatan ngeprompt soalnya asumsi itu kamu sudah tau hal itu jadi nggak perlu eksplisit, takutnya gitu
