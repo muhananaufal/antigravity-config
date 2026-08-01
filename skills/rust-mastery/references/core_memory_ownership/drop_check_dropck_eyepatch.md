@@ -1,98 +1,178 @@
-# Drop Check (Dropck) & May Dangle Eyepatch
+# Drop Check, `#[may_dangle]`, dan Variance di Rust
 
-## Konsep Utama
-Drop Check (Dropck) adalah aturan borrow checker yang berjalan saat destruksi objek (via trait `Drop`). Tujuannya adalah mencegah memanggil method pada data yang sudah dihancurkan.
-Aturan ketat Dropck: "Jika Anda memanggil Drop pada tipe `T` yang memiliki parameter generik (Lifetime atau Type), Anda tidak boleh mengakses data yang memiliki lifetime yang sama atau lebih pendek, karena itu mungkin sudah dealokasi".
-- `#[may_dangle]` (Nightly Only / Unstable, disebut Eyepatch): Atribut untuk bypass aturan ketat Dropck. Ini memberitahu compiler: "Percayalah padaku, saat fungsi Drop dipanggil, aku tidak akan menyentuh atau mendereferensi data di dalam tipe parametrik ini".
-- PhantomData sangat vital di sini untuk memberi tahu compiler siapa yang secara logikal "dimiliki" (owned) sehingga urutan drop dijamin aman.
+Konsep Drop Check (`dropck`) di Rust adalah mekanisme krusial pada kompilator yang menjamin memori ter-deallokasi secara aman tanpa memicu *Use-After-Free* (UAF) selama eksekusi destruktor (`Drop::drop`). Pada level Systems Engineering, pemahaman mendalam tentang `dropck`, `variance`, dan *destructor ordering* membedakan antara kode yang sekadar berjalan dengan yang benar-benar sound (aman secara teoritis memori).
 
-**Kapan Digunakan:**
-Menulis custom data structures standar (seperti implementasi internal `std::vec::Vec`, `LinkedList`, dll), mengelola resource FFI, dan men-bypass deadlocks lifetime ketat di sistem arena memory.
+Atribut nightly `#[may_dangle]` (sering disebut *dropck eyepatch*) mengizinkan kita untuk mem-bypass analisis ketat `dropck`. Ini esensial ketika merancang struktur data kustom (seperti `Vec` atau `Box` kustom) di mana kita tahu bahwa destruktor tidak akan pernah mengakses data yang dipinjam oleh generic type parameter tertentu, meskipun kompilator berasumsi sebaliknya.
 
-## Arsitektur / Flow
-```text
-Urutan Drop Otomatis:
-Struct {
-   a: String,  <-- 1. Struct di-drop
-   b: Vec<T>,  <-- 2. Field A di-drop (FIFO urutan deklarasi)
-}              <-- 3. Field B di-drop
+## Arsitektur Memori & Drop Flow
 
-Jika Dropck aktif dan kita memiliki `impl<T> Drop for Vec<T>`, 
-compiler cemas kita mungkin memanggil method T di dalam blok Drop,
-kecuali kita pasang eyepatch #[may_dangle].
+```ascii
+[ Stack Frame ]                           [ Heap Arena / Data ]
++---------------------+                   +-------------------+
+| struct CustomBox<T> | --(UniquePtr)-->  | T (Data)          |
+| - ptr: *mut T       |                   |                   |
+| - _marker           |                   +-------------------+
++---------------------+
+           |
+      [ Drop Call ]
+           |
+           v
++-----------------------------------+
+| 1. dropck checks lifetimes        |
+|    - Is T strictly outliving Box? |
+|    - If #[may_dangle], skip check |
+| 2. Execute CustomBox::drop        |
+|    - deallocate memory            |
+|    - call T::drop (if needed)     |
++-----------------------------------+
 ```
 
-## Implementasi Production-Ready (Teoritis / Fitur Unstable)
+## Produksi-Ready Code: Sound Custom Box dengan `#[may_dangle]`
 
-*Catatan: `#![feature(dropck_eyepatch)]` hanya bisa digunakan di Nightly Rust compiler.*
+Kode ini mengimplementasikan semantik memori yang aman menggunakan `#[may_dangle]`, menjamin kebenaran variance dan dropck.
 
 ```rust
 #![feature(dropck_eyepatch)]
+#![feature(allocator_api)]
 
-use std::ptr::NonNull;
-use std::alloc::{alloc, dealloc, Layout};
+use std::alloc::{AllocError, Allocator, Global, Layout};
 use std::marker::PhantomData;
+use std::ptr::{drop_in_place, NonNull};
 
-/// Custom Vec minimal yang mendemonstrasikan bypass Dropck.
-pub struct MyVec<T> {
+/// CustomBox adalah smart pointer mirip Box, namun didesain untuk
+/// menunjukkan manipulasi variance dan dropck yang eksplisit.
+pub struct CustomBox<T, A: Allocator = Global> {
     ptr: NonNull<T>,
-    cap: usize,
-    len: usize,
-    // Menjamin MyVec secara logikal memiliki (owns) elemen bertipe T 
-    // demi perhitungan rules Dropck yang akurat.
+    alloc: A,
+    // PhantomData menginformasikan kompilator bahwa CustomBox "memiliki" T,
+    // sehingga memicu variance yang tepat (covariant terhadap T).
     _marker: PhantomData<T>,
 }
 
-impl<T> MyVec<T> {
-    pub fn new() -> Self {
+impl<T> CustomBox<T> {
+    /// Membuat alokasi heap baru untuk T.
+    pub fn new(value: T) -> Self {
+        Self::new_in(value, Global)
+    }
+}
+
+impl<T, A: Allocator> CustomBox<T, A> {
+    pub fn new_in(value: T, alloc: A) -> Self {
+        let layout = Layout::new::<T>();
+        // SAFETY: Alokasi dicek, dan memori diinisialisasi.
+        let ptr = alloc.allocate(layout).expect("OOM").cast::<T>();
+        unsafe {
+            ptr.as_ptr().write(value);
+        }
         Self {
-            ptr: NonNull::dangling(),
-            cap: 0,
-            len: 0,
+            ptr,
+            alloc,
             _marker: PhantomData,
         }
     }
-    // Implementasi push, pop diabaikan demi fokus pada Dropck
+
+    pub fn into_raw(self) -> NonNull<T> {
+        let ptr = self.ptr;
+        std::mem::forget(self);
+        ptr
+    }
 }
 
-/// Secara normal, Dropck akan menolak kode jika MyVec menyimpan reference (mis. MyVec<&'a str>)
-/// dan di-drop BERSAMAAN dengan berakhirnya lifetime &'a.
-/// Dengan #[may_dangle], kita berjanji `drop` tidak akan menjalankan metode apapun pada T
-/// yang membutuhkan T untuk hidup.
-unsafe impl<#[may_dangle] T> Drop for MyVec<T> {
+// SAFETY: #[may_dangle] menyatakan bahwa implementasi Drop ini tidak akan
+// mengakses data di dalam `T` secara langsung selain untuk mendestruksinya.
+// Ini mencegah kompilator menolak kode jika T berisi reference yang sudah mati.
+unsafe impl<#[may_dangle] T, A: Allocator> Drop for CustomBox<T, A> {
     fn drop(&mut self) {
-        if self.cap != 0 {
-            // Kita drop elemen demi elemen secara eksplisit
-            while self.len > 0 {
-                self.len -= 1;
-                unsafe {
-                    // Berbahaya: Ini memanggil drop() dari T.
-                    // Jika T adalah struct yang implement Drop, ini dipanggil.
-                    // Jika T adalah trait object dengan lifetime pendek, ini aman
-                    // SELAMA implementasi drop dari T tidak menelusuri dangling pointers.
-                    std::ptr::drop_in_place(self.ptr.as_ptr().add(self.len));
-                }
-            }
+        unsafe {
+            // Kita drop instance T yang ada di dalam pointer.
+            // Jika T adalah type yang punya referensi, kita hanya drop T-nya,
+            // tidak membaca isi referensi tersebut.
+            drop_in_place(self.ptr.as_ptr());
             
-            // Dealokasi memori heap utama
-            let layout = Layout::array::<T>(self.cap).unwrap();
-            unsafe {
-                dealloc(self.ptr.as_ptr() as *mut u8, layout);
-            }
+            // Deallokasi memori heap
+            let layout = Layout::new::<T>();
+            self.alloc.deallocate(self.ptr.cast(), layout);
         }
+    }
+}
+
+impl<T, A: Allocator> std::ops::Deref for CustomBox<T, A> {
+    type Target = T;
+    fn deref(&self) -> &Self::Target {
+        // SAFETY: pointer valid selama siklus hidup CustomBox.
+        unsafe { self.ptr.as_ref() }
+    }
+}
+
+impl<T, A: Allocator> std::ops::DerefMut for CustomBox<T, A> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        // SAFETY: mutable reference eksklusif.
+        unsafe { self.ptr.as_mut() }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::Cell;
+
+    struct Inspector<'a>(&'a Cell<bool>);
+    
+    impl<'a> Drop for Inspector<'a> {
+        fn drop(&mut self) {
+            self.0.set(true);
+        }
+    }
+
+    #[test]
+    fn test_custom_box_drop() {
+        let flag = Cell::new(false);
+        {
+            let _bx = CustomBox::new(Inspector(&flag));
+        }
+        assert!(flag.get(), "Inspector should be dropped");
+    }
+    
+    #[test]
+    fn test_variance_covariance() {
+        // Harus bisa mengonversi CustomBox<&'static str> ke CustomBox<&'a str>
+        let s: &'static str = "hello";
+        let bx: CustomBox<&'static str> = CustomBox::new(s);
+        let _bx_shorter: CustomBox<&str> = bx;
     }
 }
 ```
 
 ## Anti-Patterns
 
-1. **Mengakses Nilai di dalam `#[may_dangle] Drop`:**
-   Mencetak nilai log menggunakan parameter `T` saat `Drop` jika `T` ditandai dengan `#[may_dangle]`.
-   *Mengapa Berbahaya:* Atribut may_dangle adalah kontrak "mata tertutup". Jika Anda memanggil `println!("{}", value_t)` di `drop`, Anda membaca memori yang kemungkinan besar sudah di-dealokasi atau pointer dangling. UB (Undefined Behavior) akan terjadi.
+1. **Lupa Menambahkan `PhantomData<T>` pada Struct Unsafe**
+   **Mengapa berbahaya:** Jika menggunakan `*mut T` atau `NonNull<T>` tanpa `PhantomData<T>`, kompilator menganggap tipe ini tidak memiliki (own) `T`. Akibatnya, `dropck` tidak akan mengecek apakah `T` didrop dengan benar, dan kompilator bisa mengubah variance menjadi *invariant*. Ini menyebabkan ergonomi lifetime hancur dan berpotensi memori tidak bersih.
+   ```rust
+   // ANTI-PATTERN
+   pub struct BadBox<T> {
+       ptr: NonNull<T>, // T is invariant, dropck is oblivious
+   }
+   ```
 
-2. **Melupakan `PhantomData` pada Custom Container yang Menggunakan Unsafe Pointers:**
-   Membuat struktur koleksi tipe pointer (seperti `*mut T`) tetapi tidak menaruh `PhantomData<T>`.
-   *Mengapa Berbahaya:* Jika tipe data koleksi Anda tidak secara otomatis memicu Drop pada data `T`, dan Anda tidak menggunakan PhantomData, Rust compiler berasumsi koleksi Anda TIDAK memiliki memori tersebut. Ini bisa merusak keamanan thread, subtyping variance, dan melewatkan rule Drop Check krusial di struct yang di-nesting.
+2. **Mengakses Data T pada Destruktor dengan `#[may_dangle]`**
+   **Mengapa berbahaya:** `#[may_dangle]` adalah janji pada kompilator: "Saya tidak akan mengakses isi T saat T di-drop". Jika di dalam `drop()` Anda mencetak/membaca atribut dari `T`, namun `T` memegang referensi ke data yang sudah mati, ini adalah *Use-After-Free* (UB).
+   ```rust
+   // ANTI-PATTERN
+   unsafe impl<#[may_dangle] T: std::fmt::Debug> Drop for BadBox<T> {
+       fn drop(&mut self) {
+           // UB! Kita membaca T padahal lifetime T mungkin sudah kedaluwarsa.
+           println!("Dropping: {:?}", unsafe { self.ptr.as_ref() }); 
+       }
+   }
+   ```
 
-## Edge Cases & Defensive Engineering
-- **Stable Rust Alternative:** Karena `#[may_dangle]` tidak stabil, programmer sering membungkus container pointer unsafe mereka di dalam standard struct jika memungkinkan. Anda tidak dapat membuat tipe bypass dropck di stable Rust, jadi perancangan arsitektur lifetime di luar crate standar harus direncanakan lebih ketat agar lifetime koleksi selalu outlive (berumur lebih panjang) dari data yang ditunjuk.
+## Edge Cases dan Defensive Programming
+
+1. **OOM (Out Of Memory) saat Instansiasi:**
+   Saat alokasi heap via `Layout::new::<T>()` gagal di production (OOM), panic atau `expect("OOM")` bisa meruntuhkan seluruh service. Defensive approach: Sediakan API `try_new` yang mengembalikan `Result<CustomBox<T>, AllocError>` daripada selalu melakukan unwrap internal.
+   
+2. **Dropck Ordering dan Nested Self-References:**
+   Rust mendestruksi variabel lokal dengan urutan kebalikan dari deklarasinya (LIFO). Jika sebuah `struct` memiliki field yang merujuk satu sama lain, atau ada tuple berantai, destruktor yang dijalankan di luar urutan bisa mengakibatkan akses dangling sebelum struct sepenuhnya mati. `#[may_dangle]` menghindari over-restriction, tetapi tidak memperbaiki logika akses terlarang.
+
+3. **Panic dalam Destruktor T (Double Panic / Abort):**
+   Jika saat memanggil `drop_in_place(self.ptr.as_ptr())` tipe `T` mengalami panic, dan thread saat itu sudah sedang unwind karena panic lain, proses akan abort seketika. Selalu minimalkan logika yang bisa memicu panic di dalam `Drop` instance yang dimanage memori tingkat rendah.

@@ -1,50 +1,66 @@
-# Mocking Integrasi dengan `mockall`
+# Mockall: Integrasi Mocking untuk Trait dan API Eksternal
 
-## 1. Konsep Utama & Kapan Digunakan
-Dalam Rust, mocking jauh lebih ketat karena *static typing* dan *trait boundaries*. `mockall` adalah library paling populer di ekosistem Rust untuk membuat mock implementation dari sebuah Trait secara otomatis menggunakan macro. 
+## Deskripsi dan Konsep Utama
+Dalam sistem terdistribusi, pengujian *business logic* yang terikat dengan entitas eksternal (Database, S3, gRPC service) sangat lambat jika harus memanggil entitas sungguhan. `mockall` adalah *crate* untuk mendefinisikan *mock objects* di Rust secara otomatis, memanfaatkan procedural macros. Kita dapat mengatur ekspektasi ketat (`expect_foo().times(1).returning(...)`) untuk memastikan *trait behavior* (seperti jumlah panggilan, input spesifik, dan output) ditaati oleh *System Under Test* (SUT).
 
-Gunakan `mockall` ketika:
-- Anda ingin melakukan Unit Testing secara terisolasi tanpa menyentuh dependensi I/O asli (Database, Network, Filesystem).
-- Kode Anda dirancang menggunakan arsitektur Trait (dependency inversion), misalnya fungsi Anda menerima `&dyn Repository` atau argumen generic `<T: Repository>`.
-
-## 2. Arsitektur / Flow
-
-```ascii
-[ Business Logic ] ---> calls `fetch_user()` ---> (Trait: UserRepository)
+## Arsitektur & Flow (ASCII Diagram)
+```text
+ +----------------+      (trait Dependency)     +-----------------+
+ | Business Logic | --------------------------> | Actual Database | (Prod)
+ +----------------+                             +-----------------+
         |
-        +---> (Production)  ---> [ SqlxUserRepository ] -> (Database)
+    (test env)
         |
-        +---> (Unit Test)   ---> [ MockUserRepository ] -> (Returns predefined values)
+        v
+ +----------------+                             +-----------------+
+ | Business Logic | --- (calls method) -------> | MockDatabase    | (Test)
+ +----------------+                             +-----------------+
+                                                       |
+                                               [Check Expectations]
+                                         (e.g., fetch_user called 1 time?)
 ```
 
-## 3. Kode Rust Production-Ready
-
+## Implementasi Produksi (Rust)
 ```rust
 use async_trait::async_trait;
-#[cfg(test)]
 use mockall::{automock, predicate::*};
+use std::sync::Arc;
 
-/// 1. Definisikan Trait untuk komponen yang akan di-mock.
-/// #[automock] akan men-generate struct `MockPaymentGateway` di mode testing.
-#[cfg_attr(test, automock)]
+// Entity target
+#[derive(Debug, PartialEq, Clone)]
+pub struct User {
+    pub id: u32,
+    pub name: String,
+}
+
+// Definisikan Behavior (Trait)
+// #[automock] secara ajaib akan men-generate struct MockUserRepository
+#[automock]
 #[async_trait]
-pub trait PaymentGateway {
-    async fn charge_card(&self, amount: u64, token: &str) -> Result<String, String>;
-    fn is_online(&self) -> bool;
+pub trait UserRepository: Send + Sync {
+    async fn fetch_user(&self, user_id: u32) -> Result<User, String>;
+    async fn delete_user(&self, user_id: u32) -> Result<(), String>;
 }
 
-/// 2. Komponen Domain / Bisnis Logic yang menerima dependensi.
-pub struct CheckoutService<P: PaymentGateway> {
-    pub gateway: P,
+// System Under Test (SUT): Business logic kita
+pub struct UserService {
+    repo: Arc<dyn UserRepository>,
 }
 
-impl<P: PaymentGateway> CheckoutService<P> {
-    pub async fn process_order(&self, total: u64, token: &str) -> Result<String, String> {
-        if !self.gateway.is_online() {
-            return Err("Gateway offline".to_string());
+impl UserService {
+    pub fn new(repo: Arc<dyn UserRepository>) -> Self {
+        Self { repo }
+    }
+
+    pub async fn remove_user_safely(&self, user_id: u32) -> Result<String, String> {
+        let user = self.repo.fetch_user(user_id).await?;
+        
+        if user.name == "admin" {
+            return Err("Cannot delete admin".to_string());
         }
 
-        self.gateway.charge_card(total, token).await
+        self.repo.delete_user(user_id).await?;
+        Ok(format!("Deleted {}", user.name))
     }
 }
 
@@ -53,41 +69,64 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_checkout_success() {
-        // 3. Inisialisasi struct Mock yang di-generate
-        let mut mock_gw = MockPaymentGateway::new();
+    async fn test_delete_normal_user_success() {
+        // Inisiasi mock
+        let mut mock_repo = MockUserRepository::new();
 
-        // 4. Atur ekspektasi (Expectations)
-        
-        // Ekspektasi 1: is_online dipanggil persis 1 kali, mengembalikan true.
-        mock_gw.expect_is_online()
+        // Tetapkan ekspektasi pertama: fetch_user
+        mock_repo
+            .expect_fetch_user()
+            .with(eq(42))
             .times(1)
-            .return_const(true);
+            .returning(|id| Ok(User { id, name: "johndoe".to_string() }));
 
-        // Ekspektasi 2: charge_card dipanggil dengan parameter tertentu
-        mock_gw.expect_charge_card()
-            .with(eq(5000), eq("tok_123")) // Predicate matching
+        // Tetapkan ekspektasi kedua: delete_user
+        mock_repo
+            .expect_delete_user()
+            .with(eq(42))
             .times(1)
-            .returning(|_, _| Ok("txn_999".to_string())); // Returning mengizinkan logic dinamis closure
+            .returning(|_| Ok(()));
 
-        let service = CheckoutService { gateway: mock_gw };
+        let service = UserService::new(Arc::new(mock_repo));
         
-        let result = service.process_order(5000, "tok_123").await;
+        let result = service.remove_user_safely(42).await;
+        assert_eq!(result.unwrap(), "Deleted johndoe");
+    }
+
+    #[tokio::test]
+    async fn test_cannot_delete_admin() {
+        let mut mock_repo = MockUserRepository::new();
+
+        mock_repo
+            .expect_fetch_user()
+            .with(eq(1))
+            .times(1)
+            .returning(|id| Ok(User { id, name: "admin".to_string() }));
+
+        // delete_user TIDAK boleh dipanggil (times = 0, secara implisit)
+        // Jika delete_user dipanggil, test ini akan panic (failed).
+        mock_repo
+            .expect_delete_user()
+            .times(0);
+
+        let service = UserService::new(Arc::new(mock_repo));
+        let result = service.remove_user_safely(1).await;
         
-        assert_eq!(result, Ok("txn_999".to_string()));
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "Cannot delete admin");
     }
 }
 ```
 
-## 4. Anti-Pattern Spesifik
-1. **Mocking tipe konkrit alih-alih Trait (walau diizinkan via `mock!`).**
-   - *Bahaya*: Membatasi fleksibilitas desain dan membuat refactoring sulit. Meng-mock struct eksternal (seperti `reqwest::Client`) sangat rapuh.
-   - *Solusi*: Buat Trait wrapper perantara di domain Anda dan mock Trait perantara tersebut.
-2. **Tidak membatasi `.times()` pada ekspektasi mock.**
-   - *Bahaya*: Jika kode implementasi memiliki bug infinite loop yang memanggil mock fungsi, test tetap lolos atau hang.
-   - *Solusi*: Selalu gunakan `.times(n)` atau `.at_least(1)` untuk memvalidasi interaksi secara ketat.
+## Anti-Patterns
 
-## 5. Edge Cases & Defensive Programming
-- **Reference Parameters**: Jika parameter trait berupa reference (contoh `&Struct`), mockall mewajibkan predicate pencocokan nilai.
-- **Multithreading / Cloning**: Terkadang Anda perlu meng-clone dependensi ke thread/task lain. `Mock` objects by default tidak mengimplementasikan `Clone`. Anda harus mengatur arsitekturnya, misal membungkus mock dalam `Arc`, atau membuat closure yang menginisiasi mock baru.
-- **Urutan Panggilan (Sequence)**: Gunakan `mockall::Sequence` jika urutan pemanggilan `gateway.is_online()` HARUS mendahului `gateway.charge_card()`. Kegagalan mematuhi sequence akan langsung panic di testing.
+1. **Over-Mocking (Mocking segalanya)**: Menggunakan `mockall` untuk fungsi matematika sederhana atau struct *in-memory* yang tidak memiliki I/O network atau I/O disk.
+   *Mengapa berbahaya*: Test akan menjadi *brittle* (rapuh). Ketika detail internal / refaktor logika berubah sedikit, seluruh konfigurasi *mock expectations* harus diubah ulang, meskipun output *business logic* sebenarnya tidak salah. Test yang bagus menguji behavior (*black box*), bukan internal *call chain*.
+2. **Missing `times(1)` Expectations**: Menulis mock handler tanpa mendefinisikan *berapa kali* fungsi tersebut ekspek dipanggil.
+   *Mengapa berbahaya*: Tanpa `.times(1)`, jika logika aplikasi memanggil API pengiriman Email 10 kali (karena bug perulangan), mock akan terus mengembalikan *Ok* dan test *pass*, padahal ada *severe bug* yang berdampak pada produksi.
+
+## Edge Cases & Defensive Programming
+
+1. **Send + Sync Bounds dengan Mockall**: Ketika *mocked trait* akan dimasukkan ke `Arc<dyn Trait>` yang dibagikan melintasi `tokio::spawn`, trait aslinya *wajib* meminta trait bounds `Send + Sync`. Jika tidak, compiler akan protes keras terhadap *Arc bounding* dan *Mock struct* generasinya.
+2. **Returning References atau Lifetimes yang Kompleks**: Mengembalikan referensi (`&str`) atau variabel dengan lifetimes kompleks dari *mock object*. `mockall` cukup kesulitan melakukan *lifetime tracing* untuk hasil yang dimiliki oleh *mock struct*. Lebih baik men-*clone* data saat *mocking*, atau refactor arsitektur aplikasi agar menerima kepemilikan (ownership).
+3. **Async Method Mocking**: `mockall` dan `async_trait` bisa konflik pada spesifikasi tipe `BoxFuture` yang dihasilkan oleh proc-macro. Biasanya tidak ada masalah sejak `mockall` v0.11+, namun perhatikan error mutabilitas: closure pada `.returning()` seringkali dimutasi oleh multiple threads async (sehingga butuh *Clone* atau state dienkapsulasi dengan *Mutex* di dalam mock, jika *stateful returning* dibutuhkan).

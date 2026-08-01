@@ -1,89 +1,141 @@
-# Mimalloc & Per-Thread Cache Design
+# Mimalloc Thread Cache
 
-Mimalloc (dikembangkan oleh Microsoft) berfokus pada fitur thread-local free list yang terisolasi dengan kuat untuk meminimalisasi lock contention. Performanya sangat bersaing (atau lebih baik) dari jemalloc dalam sistem highly concurrent dan coroutine/async workloads (seperti Tokio `spawn` heavy loads).
+Microsoft's `mimalloc` adalah salah satu system allocator paling mutakhir, dirancang dengan filosofi ekstrem seputar *Thread-Local Caching* (Tcache) dan *Sharding*. Berbeda dengan global allocator glibc standar yang harus mengakuisisi atomic lock saat thread membutuhkan memori, mimalloc memastikan bahwa 99% fungsi alokasi berjalan sebagai operasi inkremental (pointer bump) murni di dalam memori cache spesifik milik thread pemanggil (Thread-Local Free List).
 
-## Arsitektur Thread Cache
+Hal ini membuat aplikasi Rust yang sangat paralel memecahkan bottleneck sinkronisasi, memungkinkan pergerakan latensi konstan hingga level mikrodetik. 
 
-```text
- Thread 1 Local Heap        Thread 2 Local Heap
- [ TLAB (Thread Local       [ TLAB ]
-   Allocation Buffer) ]     
-      |                        |
- +--------------------------------+
- | OS Virtual Memory (mmap/sbrk)  |
- +--------------------------------+
+## Arsitektur Free-List Per-Thread & Cross-Thread Freeing
+
+```ascii
+[ Thread 1 CPU Core ]                  [ Thread 2 CPU Core ]
+         |                                      |
++--------------------+                 +--------------------+
+| Thread Local Cache |                 | Thread Local Cache |
+| - Page 1 (32b)     |                 | - Page X (128b)    |
+| - Page 2 (64b)     |                 | - Page Y (256b)    |
+|                    |                 |                    |
+| Fast Free List ptr |                 | Fast Free List ptr |
++--------------------+                 +--------------------+
+         |   ^                                  |   ^
+ (Local  |   | (Local                   (Cross- |   | (Delayed
+  Alloc) v   |  Free)                   Thread) v   |  Free / GC)
++--------------------+                 +--------------------+
+| Local Heap Segment |                 | Local Heap Segment |
++--------------------+                 +--------------------+
+         \                                      /
+          \----> [ Global OS Memory Pages ] <---/
 ```
-Setiap thread di mimalloc mendelegasikan alokasinya secara eksklusif ke heap thread-lokal. Jika Thread A mengalokasikan dan Thread B mendealokasikan, blok dikembalikan ke *local free list* milik Thread A dengan teknik *lock-free deferred freeing*, meminimalisasi blocking global.
 
-## Implementasi Production-Ready
+## Produksi-Ready Code: Eksplorasi Thread-Local Overhead via Mimalloc
 
-```toml
-[dependencies]
-mimalloc = "0.1"
-```
+Kode ini meng-emulasikan pola alokasi intensif yang dipisahkan antar thread vs alokasi *cross-thread free* untuk menunjukkan dampak pada pipeline thread local dari allocator modern.
 
 ```rust
-use mimalloc::MiMalloc;
-
+#[cfg(feature = "mimalloc")]
 #[global_allocator]
-static GLOBAL: MiMalloc = MiMalloc;
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-/// API diagnostik sys mimalloc untuk integrasi advanced
-#[cfg(feature = "mimalloc-sys")]
-pub fn dump_mimalloc_stats() {
-    unsafe {
-        // mimalloc-sys mengekspos API FFI langsung.
-        // `mi_stats_print` mencetak status internal (fragmentasi, tcache, 
-        // waktu eksekusi malloc) ke stderr/stdout.
-        // mimalloc_sys::mi_stats_print(std::ptr::null_mut());
+use std::thread;
+use std::sync::mpsc;
+use std::time::Duration;
+
+/// Struktur yang mensimulasikan message berat di Rust
+/// dialokasikan di heap
+pub struct BoxedPayload {
+    data: Box<[u8]>,
+}
+
+impl BoxedPayload {
+    pub fn new(size: usize) -> Self {
+        // Alokasi terjadi pada Thread Cache (Tcache) milik thread pemanggil saat ini.
+        Self {
+            data: vec![0u8; size].into_boxed_slice(),
+        }
     }
 }
 
-/// Implementasi wrapper aman (Contoh conceptual penggunaan allocator secure)
-/// Mimalloc memiliki fitur `mi_zalloc` (zero allocated memory).
-pub fn allocate_secure_buffer(size: usize) -> Vec<u8> {
-    // Standar `vec![0; size]` biasanya akan menggunakan OS zero-pages 
-    // atau memset melalui allocator standar. 
-    // mimalloc sangat efisien menangani permintaan alloc-and-zero.
-    vec![0; size]
+/// Mensimulasikan pipeline "Cross-Thread Freeing"
+/// Ini adalah pola yang MENDEGRADASI performa Mimalloc
+/// karena Thread B membebaskan blok memori milik Thread A.
+pub fn simulate_cross_thread_alloc_free(msg_count: usize, size: usize) {
+    let (tx, rx) = mpsc::sync_channel(1000);
+    
+    // Thread Produser: Mengalokasikan objek dalam loop ketat
+    let producer = thread::spawn(move || {
+        for _ in 0..msg_count {
+            let payload = BoxedPayload::new(size);
+            tx.send(payload).expect("Channel closed");
+        }
+    });
+
+    // Thread Konsumer: Menghancurkan (Free) objek yang dibuat oleh Produser
+    let consumer = thread::spawn(move || {
+        let mut consumed = 0;
+        while let Ok(_payload) = rx.recv() {
+            // Drop secara implisit memanggil `free()`.
+            // Mimalloc mendeteksi bahwa memori ini milik segmen thread Produser.
+            // Memori tidak bisa dikembalikan ke Fast List Thread Konsumer, 
+            // melainkan masuk ke "Delayed Free List" atomik milik Produser.
+            consumed += 1;
+        }
+        assert_eq!(consumed, msg_count);
+    });
+
+    producer.join().unwrap();
+    consumer.join().unwrap();
+}
+
+/// Mensimulasikan pipeline murni Thread-Local Allocation/Freeing
+/// Pola OPTIMAL untuk allocator modern.
+pub fn simulate_local_alloc_free(msg_count: usize, size: usize) {
+    let worker = thread::spawn(move || {
+        let mut count = 0;
+        for _ in 0..msg_count {
+            // Alokasi dan Deallokasi terjadi pada thread yang SAMA
+            // Operasi ini nyaris zero-cost (pure pointer bump di Tcache)
+            let _payload = BoxedPayload::new(size);
+            count += 1;
+        }
+        assert_eq!(count, msg_count);
+    });
+
+    worker.join().unwrap();
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::thread;
 
     #[test]
-    fn test_concurrent_allocation_mimalloc() {
-        // Membuktikan bahwa alokasi dari thread berbeda menggunakan 
-        // local heap yang di-handle dengan baik oleh mimalloc
-        let handles: Vec<_> = (0..10).map(|_| {
-            thread::spawn(|| {
-                let mut data = allocate_secure_buffer(1024 * 64);
-                data[0] = 1;
-                data.iter().sum::<u8>()
-            })
-        }).collect();
-
-        let sum: u8 = handles.into_iter().map(|h| h.join().unwrap()).sum();
-        assert_eq!(sum, 10);
+    fn test_cross_thread_memory() {
+        // Test cross-thread pattern, expects no panic and memory cleanliness
+        simulate_cross_thread_alloc_free(5000, 1024);
+    }
+    
+    #[test]
+    fn test_local_thread_memory() {
+        simulate_local_alloc_free(5000, 1024);
     }
 }
 ```
 
-## Fitur Secure & Edge Cases Mimalloc
+## Anti-Patterns
 
-Mimalloc memiliki varian *secure* yang bisa diaktifkan pada build level (melalui C flags `MI_SECURE=1`).
-- Mengaktifkan **guard pages**: mencegah buffer overflow ke struktur data heap allocator.
-- Mengaktifkan **randomized block allocation**: menyulitkan serangan *heap exploitation* eksploitasi use-after-free karena alamat berikutnya teracak.
+1. **Pembuatan Objek Skala Besar untuk Thread Lain (Cross-Thread Freeing Bomb)**
+   **Mengapa berbahaya:** Jika Thread A (Web socket handler) melakukan `serde_json::from_slice` sehingga mengalokasikan 100 ribu string (`String`, `Vec<u8>`), dan mengoper string ini ke Thread B (Database writer) via channel, Thread B harus me-free string tersebut. Pada mimalloc, `free` lintas thread memaksa *Atomic Compare-And-Swap (CAS)* yang memicu cache-line bouncing (False Sharing) di L3 Cache CPU, mengubah allocator O(1) Anda menjadi O(N) dengan resiko latensi parah.
+   **Solusi:** Batasi batas cross-thread freeing. Klon data di batas pool (mengubah pemilik memori segment) atau gunakan *bump arena* (seperti `Bumpalo`) untuk parse data, sehingga destuksi bulk terjadi seketika di thread pembuatnya.
 
-## Anti-Pattern Terlarang
+2. **Memanfaatkan Terlalu Banyak Thread Transient (Sering Dibuat dan Dihancurkan)**
+   **Mengapa berbahaya:** Ketika thread mati (destroyed), mimalloc harus "meninggalkan" (abandon) heap local milik thread tersebut, mereset statusnya, dan menempatkannya ke antrean global agar bisa direklamasi thread lain. Siklus spawn dan destroy thread berfrekuensi tinggi membanjiri OS dengan overhead manajerial arena memory. 
+   **Solusi:** Selalu gunakan Thread Pool persisten (`tokio::spawn` pada multi-thread runtime atau `rayon`) agar cache memory dan segment Tcache tetap "hangat" seumur hidup layanan.
 
-1. **Leak Thread Heap via Thread Pool Kustom:**
-   *Mengapa berbahaya:* Jika Anda membuat thread manual via API OS dan tidak membiarkan Rust runtime memanggil thread teardown saat exit, local heap milik thread (`mi_heap_t`) tidak dapat dihancurkan dengan benar secara transparan. Jika menggunakan thread-pool dari crate ternama (`rayon`, `tokio`), ini sudah tertangani.
-2. **False Sharing dari Padding Object:**
-   *Mengapa berbahaya:* Meskipun mimalloc mencegah lock contention di layer heap, jika program membagikan pointer ke data L1 cache line yang sama antar thread, CPU stall (false sharing) tetap terjadi. Selalu selaraskan (align) struct concurrency-heavy ke `#[repr(align(64))]`.
+## Edge Cases dan Defensive Programming
 
-## Defensive Programming
+1. **Memory Bloat akibat Delayed Free Queue:**
+   Ketika "Cross-Thread Freeing Bomb" terjadi, Thread B menumpuk pointer di struktur *Delayed Free* (semacam kotak surat atomik) milik Thread A. Masalahnya: Thread A *harus mengalokasikan (malloc) atau membebaskan (free) memori baru* agar secara proaktif memeriksa dan mengosongkan antrean delayed free ini (garbage collection step). Jika Thread A idle (misal sedang blocked pada Socket Read), memori yang sudah di-free Thread B sebenarnya tertahan dan belum kembali ke OS. Ini menghasilkan semacam "Phantom Memory Leak" yang membesarkan RSS memory.
 
-- **Memory Abandonment:** Jika thread 1 melempar panic (unwinding) dan memiliki struktur dialokasikan di TLAB-nya yang ter-transfer kepemilikannya ke Thread 2 (contoh channel MPSC), mimalloc menggunakan mekanisme internal "abandoned memory queue" yang secara berkala di-garbage-collect oleh thread lain. Ini menjamin sistem tidak akan crash atau leak dalam sistem asinkron/message passing.
+2. **Secure/Hardened Environments (Linux `mprotect`):**
+   Mimalloc default agresif mendelegasikan dan menjaga blok memory secara lazily. Di beberapa system hardened (SELinux atau seccomp), panggilan `mmap` berulang atau manipulasi address space yang tidak lazim dapat disensor oleh kernel, menyebabkan abort `mmap-failed`. Parameter kompilasi fitur mimalloc yang statis (secure override) diperlukan di env ter-isolasi militer/keuangan tersebut.
+
+3. **Injeksi LD_PRELOAD dengan Rust `global_allocator`:**
+   Mencampur library kompilasi C++ yang menggunakan `.so` yang memaksa `mimalloc` (lewat flag LD_PRELOAD di docker) dengan kode Rust yang juga meng-link `mimalloc` sebagai `[global_allocator]` dapat merusak state registri POSIX thread-local storage (`TLS`). Salah satu (biasanya allocator Rust) akan crash dengan invalid pointer jika memori disilang pada FFI boundary.

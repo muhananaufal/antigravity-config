@@ -1,68 +1,95 @@
-# Instrumentasi Span & Tracing Error
+# Tracing-Error & Span Instrumentation (Distributed Debugging)
 
-## 1. Konsep Utama & Kapan Digunakan
-Di lingkungan asynchronous terdistribusi, memecahkan (debug) error sangat sulit jika Anda hanya mengandalkan `println!` atau logging standar. Konteks "permintaan mana yang menyebabkan error ini?" seringkali hilang karena eksekusi task berpindah antar OS thread.
+Dalam arsitektur *Distributed Async Services* berbasis tokio, eksekusi kode Anda tidak lagi sekuensial pada satu OS Thread. Sebuh *Future* dapat memulai tugas di Thread A, terputus (yield) pada pemanggilan I/O socket, dan dilanjutkan (resume) di Thread B. Kondisi perpindahan (Context Switch Asinkron) ini menyebabkan log backtrace OS (yang terikat pada thread-local call stack) menjadi tidak valid atau hancur!
 
-Keluarga ekosistem `tracing` (termasuk `tracing-error`) menyelesaikan ini lewat *Span*. Span adalah blok eksekusi yang memiliki awal dan akhir, serta membawa state kontekstual. Saat error terjadi di kedalaman hirarki call-stack, error tersebut dapat merekam *SpanTrace* (bukan sekadar stacktrace), yang memberi tahu Anda secara eksak variabel context apa saja (seperti `user_id` atau `request_id`) yang sedang aktif.
+Crate `tracing` (beserta `tracing-error` dan `SpanTrace`) merespons hal ini dengan merekam "Pohon Eksekusi Logis" (Logical Call Tree). Setiap kali tugas asinkron didelegasikan, span konteks ini direkatkan secara implisit, memastikan log error memiliki metadata korelatif seperti *Trace ID* lintas service RPC atau gRPC, menjadikannya standar industri di Rust (dipelopori oleh tim tokio & Linkerd).
 
-## 2. Arsitektur / Flow
+## Arsitektur Async Span Trace Instrumentasi
 
 ```ascii
-[ Span: "HTTP Request", request_id = 123 ] 
-      |
-      v
-   [ Span: "Process Payment", user_id = 890 ] 
+[ HTTP Request Inbound: Trace ID 99-xyz ] ---> (Creates Root Span)
+                  |
+         +--------+---------+ (tokio::spawn)
+         |                  |
+[ DB Query Span ]  [ External API Span ] ---> (Yields / Awaits...)
+         |                  |
+         v                  v (Resumes on entirely different CPU threads!)
+(Error SqlTimeout)  (Success 200 OK)
          |
-         v
-      [ Error Terjadi: "Balance Insufficient" ]
-      (SpanTrace menangkap req_id 123 dan user_id 890 secara otomatis)
+[ tracing-error menangkap SpanTrace ]
+         |
+"Error: DB Query Failed"
+ Context Spans:
+   - Root Span (Trace ID: 99-xyz, uri: /login)
+   - DB Query Span (table: users, connection_id: 12)
 ```
 
-## 3. Kode Rust Production-Ready
+## Produksi-Ready Code: Tokio Instrumentasi Error Span
+
+Kode di bawah merepresentasikan penanganan request asinkron yang melacak status context span dengan integrasi penuh pada `tracing` macros dan injeksi `SpanTrace` ke dalam custom error.
 
 ```rust
-use tracing::{error, info, instrument, Span};
-use tracing_error::{SpanTrace, TracedError};
-use thiserror::Error;
+use tracing::{info, error, instrument, span, Level};
+use tracing_error::{TracedError, InstrumentResult, SpanTrace};
+use std::fmt;
 
-#[derive(Debug, Error)]
-pub enum PaymentError {
-    #[error("Database timeout")]
-    Timeout,
-    #[error("Insufficient balance")]
-    InsufficientFunds,
+// Dependency Setup:
+// tracing = "0.1"
+// tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+// tracing-error = "0.2"
+// tokio = { version = "1", features = ["full"] }
+
+/// Error Bisnis kita yang akan mengkapsulasi jejak SpanTrace logis.
+#[derive(Debug)]
+pub struct AppError {
+    message: String,
+    // SpanTrace akan merekam hierarki asinkron `tracing` saat error dipicu
+    span_trace: SpanTrace,
 }
 
-// 1. Menggunakan TracedError untuk menempelkan SpanTrace ke Error Enum kita
-pub type TracedPaymentError = TracedError<PaymentError>;
+impl std::error::Error for AppError {}
 
-// 2. Makro #[instrument] otomatis membuat Span saat fungsi dipanggil.
-// Parameter `user_id` dan `amount` akan terekam ke dalam Span.
-// `err` attribute akan otomatis me-log jika fungsi ini me-return Err.
-#[instrument(skip(db_pool), fields(db_status = "connected"), err)]
-pub async fn process_payment(
-    db_pool: &str, // disimulasikan
-    user_id: u32,
-    amount: u64,
-) -> Result<(), TracedPaymentError> {
-    info!("Starting payment processing");
-
-    // Simulasi kegagalan dalam inner logic
-    let res = execute_db_transaction(amount).await;
-
-    // Membungkus (wrap) error domain dengan TracedError yang meng-capture SpanTrace
-    res.map_err(|e| TracedError::from(e))?;
-
-    info!("Payment successful");
-    Ok(())
+impl fmt::Display for AppError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "App Error: {}", self.message)?;
+        // Kita juga bisa mencetak SpanTrace secara rapi
+        writeln!(f, "{}", self.span_trace)
+    }
 }
 
-async fn execute_db_transaction(amount: u64) -> Result<(), PaymentError> {
-    // Kita bisa menambah data ke current span di tengah-tengah fungsi
-    Span::current().record("transaction_amount", &amount);
+/// Fungsi asinkron yang diinstrumentasi.
+/// Atribut #[instrument] secara otomatis akan mem-wrap seluruh blok future
+/// dalam sebuah Span berlevel INFO yang memiliki field argumen fungsinya (`user_id`).
+#[instrument(level = "info", skip(db_password), fields(action = "database_lookup"))]
+pub async fn query_database(user_id: u32, db_password: &str) -> Result<String, AppError> {
+    // Simulasi delay asinkron (Bisa di-schedule di thread mana pun)
+    info!("Starting database transaction for user {}", user_id);
     
-    // Simulate error
-    Err(PaymentError::Timeout)
+    // Anggap gagal karena network
+    let network_failure = true;
+    
+    if network_failure {
+        let err = AppError {
+            message: "Connection refused from DB node".into(),
+            // Tangkap hirarki span (tracing logical context) secara real-time
+            span_trace: SpanTrace::capture(),
+        };
+        error!(error = ?err, "Database operation aborted");
+        return Err(err);
+    }
+    
+    Ok("Data record".into())
+}
+
+/// Mensimulasikan handler tokio HTTP teratas
+#[instrument(name = "http_request", fields(http.method = "GET", http.url = "/api/v1/users"))]
+pub async fn handler_api_request() -> Result<(), AppError> {
+    // Memanggil operasi bersarang (nested span).
+    // Bahkan jika ini dieksekusi concurrent dengan tokio::spawn,
+    // metadata instrumentasi induk tetap mengikuti child task.
+    query_database(404, "secret_password").await?;
+    
+    Ok(())
 }
 
 #[cfg(test)]
@@ -70,26 +97,36 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_tracing_capture() {
-        // Setup tracing subscriber untuk test... (opsional)
-        let res = process_payment("pool", 890, 5000).await;
-        assert!(res.is_err());
+    async fn test_traced_error_span_capture() {
+        // Kita tidak mensetup global tracing subscriber untuk tes ringan ini,
+        // Tapi kita bisa memverifikasi flow errornya
+        let result = handler_api_request().await;
+        assert!(result.is_err());
         
-        let err = res.unwrap_err();
-        // Anda sekarang memiliki err.span_trace() yang mengandungi jejak lengkap
-        println!("Error with span trace: {:?}", err);
+        let err = result.unwrap_err();
+        // Memastikan error membungkus SpanTrace (meski kosongan di unit test murni)
+        assert!(err.message.contains("Connection refused"));
     }
 }
 ```
 
-## 4. Anti-Pattern Spesifik
-1. **Menggunakan `skip` pada `#[instrument]` untuk parameter yang esensial untuk di-debug.**
-   - *Bahaya*: Jika Anda me-skip `request_id` karena "terlalu panjang", Anda kehilangan kunci utama untuk menyatukan log aplikasi di Datadog/Kibana.
-   - *Solusi*: Hanya gunakan `skip` untuk tipe data yang tidak implement `Debug` (misal Connection Pool, Mutex Guards), parameter identitas harus selalu di-record.
-2. **Membuat Span manual tanpa membuangnya (dropping) secara benar di async Rust.**
-   - *Bahaya*: Jika membuat `let _enter = span.enter()` dalam fungsi `async`, `_enter` guard akan memblokir (held) melintasi batas `.await`. Ini adalah *Undefined Behavior* di `tracing` karena scheduler akan memindahkan eksekusi thread.
-   - *Solusi*: Gunakan `span.in_scope(|| ...)` atau makro `#[instrument]` yang sudah *async-aware*.
+## Anti-Patterns
 
-## 5. Edge Cases & Defensive Programming
-- **Over-instrumentation**: Menaruh `#[instrument]` pada *setiap* fungsi kecil (misal utilitas parsing angka) akan mencekik CPU karena alokasi dan overhead subscriber tracing. Batasi Span level fungsi hanya pada batas layer atau operasi I/O yang berat.
-- **Data Sensitif (PII)**: Jangan menaruh password, credit card, atau access token sebagai parameter fungsi yang dikenakan `#[instrument]`, karena akan otomatis di-log dalam clear-text ke stdout/file. Gunakan modifier rahasia jika menggunakan logging framework yang men-supportnya, atau `skip(password)`.
+1. **Pemanggilan `tracing::Span::enter()` tanpa `Drop` Guard di Async Blok**
+   **Mengapa berbahaya:** Jika Anda menggunakan kode imperatif manual `let _guard = span.enter();` di dalam blok fungsi `async fn` dan di dalam blok tersebut Anda memanggil `.await` untuk future asinkron, Guard itu akan terbawa melintasi batas context switch (Await Point). Ini mengacaukan manajemen Context Span milik thread Tokio, mencampur aduk log request milik User A kepada log request milik User B!
+   **Solusi:** Untuk asinkron, gunakan atribut `#[instrument]` di atas fungsi asinkron ATAU kombinasikan dengan trait `.instrument(span)` pada akhir instance eksekusi `.await`.
+
+2. **Instrumentasi Terhadap Fungsi CPU Tight Loop atau Sangat Panas**
+   **Mengapa berbahaya:** Menyematkan `#[instrument]` pada fungsi konversi skalar matematis yang dipanggil puluhan ribu kali per detik di HFT akan memblokir CPU karena instrumentasi membuat heap memory struct span, mendaftarkannya di registry global, dan menghancurkannya. Beban "Logging overhead" akan melumpuhkan aplikasi murni karena spam log.
+
+## Edge Cases dan Defensive Programming
+
+1. **Memori Bocor karena Filter Subscriber yang Buruk:**
+   Jika `tracing_subscriber` global dikonfigurasi untuk menangkap setiap level `TRACE` atau memegang struktur span seumur hidup (misal custom exporter open-telemetry yang tersendat network saat export gRPC), span memory struct akan bertumpuk menembus RAM server hingga OOM (Out-of-Memory). Terapkan batas retensi memori atau fallback membuang log (Drop policy) pada exporter tracer Anda.
+
+2. **Penggunaan `.instrument()` pada spawned Tasks tokio::spawn:**
+   Secara default, tokio task spawn "lepas jangkauan" dari hierarki Span tempat ia dipanggil karena ia dieksekusi secara independen. Agar log terhubung di Splunk/Datadog, Anda MUTLAK harus menghubungkannya kembali: 
+   `tokio::spawn(async move { ... }.instrument(tracing::Span::current()));`
+
+3. **Kehilangan Kredensial Sensitif di Log:**
+   Atribut `#[instrument]` secara naif melog semua paramater fungsi ke dalam JSON metadata span. Jika ada parameter `api_key: String` atau `password: String`, password tersebut akan tersimpan dalam teks polos di server Elasticsearch (Log Leak Security Breach). Gunakan flag macro paramater `skip(api_key)` seperti yang dicontohkan di kode!

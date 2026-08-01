@@ -1,165 +1,135 @@
-# Token Budget Optimization: Panduan Efisiensi System Prompt
+# Optimasi Anggaran Token dan Efisiensi Konteks (Token Budget Optimization)
 
-Dokumen ini berisi panduan untuk menjaga konsumsi token pada system prompt tetap efisien saat mengelola Skill Bundles di Antigravity.
+Dokumen ini adalah referensi definitif (Single Source of Truth) untuk mencapai kepadatan makna ekstrem (High Signal-to-Noise Ratio) dalam penyusunan Skill Bundles dan interaksi Subagent. Tujuannya adalah memaksimalkan output fungsional tanpa memicu *Context Window Bloat* (pembengkakan konteks yang menyebabkan LLM "amnesia" pada instruksi awal) atau melakukan penyunatan detail krusial.
 
----
+## 1. Filosofi High Signal-to-Noise Ratio (SNR)
 
-## 1. Arsitektur Token: Apa yang Masuk ke System Prompt
+Di dunia pemrograman berbasis LLM, setiap token berharga. Menulis dengan kepadatan tinggi berarti merangkai instruksi teknis yang to-the-point, tanpa basa-basi, namun tidak kehilangan kedalaman struktural. Bahasa Indonesia memiliki kecenderungan menjadi bertele-tele jika tidak dikendalikan. 
 
-### 1.1. Komponen System Prompt per Skill Bundle
+### Prinsip Penulisan Instruksi:
+1. **Gunakan Kalimat Imperatif Padat:** Hindari kata pengantar. Langsung ke kata kerja aksi.
+2. **Singkatan Teknis Baku:** Gunakan akronim standar industri (DB, API, RPC, dll) alih-alih menjabarkannya berulang kali.
+3. **Format Bullet Point/Checklist:** Otak LLM memproses struktur hierarkis (Markdown) jauh lebih baik daripada paragraf tebal naratif.
 
-| Komponen | Estimasi Token | Dibaca Setiap Percakapan? |
-| :--- | :--- | :--- |
-| `name` di YAML frontmatter | ~5–10 token | ✅ Ya — selalu |
-| `description` di YAML frontmatter | ~40–80 token | ✅ Ya — selalu |
-| Isi `SKILL.md` (di luar YAML) | ~0 token | ❌ Tidak — hanya saat trigger |
-| Isi `references/<domain>/*.md` | ~0 token | ❌ Tidak — hanya saat dibutuhkan |
+## 2. Arsitektur Thin `SKILL.md` vs Fat `references/`
 
-**Insight kritis:** Yang membebani system prompt bukanlah isi `SKILL.md` atau file referensi, melainkan YAML frontmatter yang terdaftar. Ini berarti jumlah Master Bundles (bukan jumlah file referensi) yang menentukan overhead.
+Kunci dari efisiensi token adalah pemisahan beban (Separation of Concerns) antara routing logika dan penyimpanan pengetahuan domain.
 
-### 1.2. Diagram: Token Flow di System Prompt
+### File Index: `SKILL.md` (Thin)
+- Berfungsi sebagai **Router Utama** dan pengatur state mesin.
+- Memuat instruksi mutlak, daftar perintah, dan pranala (link) absolut ke file referensi.
+- Tidak boleh memuat teori panjang lebar atau panduan instalasi.
+- Ketebalan optimal: 50 - 150 baris yang berisi struktur kondisional (Kapan menggunakan X, ke mana membaca Y).
 
-```
-System Prompt
-├── AGENTS.md rules (~200-400 token) — selalu dimuat
-├── Skill Bundle #1 YAML (~75 token) — selalu dimuat
-│   └── golang-mastery: name + description
-├── Skill Bundle #2 YAML (~75 token) — selalu dimuat
-│   └── rust-mastery: name + description
-├── Skill Bundle #3 YAML (~75 token) — selalu dimuat
-│   └── skill-engineering-mastery: name + description
-└── (SKILL.md isi + references → dibaca via view_file, tidak memakan budget)
+### File Domain: Direktori `references/` (Fat)
+- Gudang pengetahuan tak terbatas.
+- Hanya dibaca (*loaded*) ke dalam context window saat task benar-benar relevan.
+- Ketebalan: Bisa ribuan baris, lengkap dengan cuplikan kode, dokumentasi arsitektur, dll.
 
-Total Overhead: ~225 token dari skill bundles (~1.1% dari 20K budget)
-```
+## 3. Delegasi Beban Komputasi ke Ruang Subagent (Isolasi Konteks)
 
----
+Ketika menghadapi tugas kompleks (seperti refactoring 10 file atau audit sistem menyeluruh), penggunaan Agen tunggal akan menghancurkan anggaran token (Token Budget). 
 
-## 2. Kalkulasi Token Budget
+**Strategi Isolasi:**
+1. **Spawn Paralel:** Parent Agent mendelegasikan tugas-tugas spesifik ke Subagents (`invoke_subagent`).
+2. **Konteks Spesifik:** Subagent hanya diberikan prompt dan file referensi yang khusus untuk tugasnya. Subagent A memeriksa UI, Subagent B memeriksa Database.
+3. **Ringkasan Komunikasi:** Subagent TIDAK BOLEH mengirimkan log penuh atau kode balik ke Parent. Subagent menggunakan tool `replace_file_content` ke disk, dan HANYA mengirimkan laporan status padat ("File X berhasil diedit, 2 bug ditemukan dan diperbaiki") via `send_message`.
 
-### 2.1. Rumus Estimasi
+## 4. Pencegahan Redundansi Log dan Pengulangan File
 
-```
-Total Token Skill = Jumlah_Master_Bundles × ~75 token
-```
+Seringkali, LLM memuntahkan kembali isi file yang tidak berubah, menghabiskan ribuan token sia-sia.
 
-**Perbandingan arsitektur:**
-
-| Arsitektur | Jumlah Bundle | Token | % Budget (20K) | Status |
-|---|---|---|---|---|
-| ✅ Master Bundle (saat ini) | 3 | ~225 | ~1.1% | Optimal |
-| ⚠️ Sedikit lebih banyak | 6 | ~450 | ~2.25% | Masih aman |
-| 🟡 Mulai berat | 12 | ~900 | ~4.5% | Perhatikan |
-| ❌ Micro-Skill lama (26 folder) | 26 | ~1.950 | ~10-15% | Berbahaya |
-
-### 2.2. Threshold Rekomendasi per Kategori
-
-| Kategori | Target Budget | Status |
-| :--- | :---: | :--- |
-| **AGENTS.md rules** | < 5% | 🟢 Sehat |
-| **Total Skills (semua YAML)** | < 3% | 🟢 Sehat |
-| **MCP Tools** | < 2% | 🟢 Sehat |
-| **Total Customization** | < 10% | 🟢 Optimal |
-| **Total Customization** | 10–25% | 🟡 Hati-hati |
-| **Total Customization** | > 25% | 🔴 Risiko auto-truncation |
+- **DILARANG:** `view_file` lalu mencetak isinya di response.
+- **WAJIB:** Simpan data di otak (context), langsung pakai tool `write_to_file` atau `replace_file_content`. Jangan regurgitasi (memuntahkan ulang).
+- **Pengeditan Presisi:** Jika hanya mengubah baris 45-50, GUNAKAN `multi_replace_file_content` atau `replace_file_content` dengan `StartLine` & `EndLine`. Jangan menimpa seluruh file jika file tersebut panjang.
 
 ---
 
-## 3. Optimasi Deskripsi YAML
+## Diagram ASCII: Alur Kompresi Makna vs Context Window
 
-### 3.1. Teknik Kompresi Tanpa Kehilangan Trigger Accuracy
+```text
+========================================================================
+                      TOKEN CONTEXT WINDOW PIPELINE                     
+========================================================================
 
-Gunakan teknik berikut untuk mempersingkat deskripsi tanpa mengorbankan cakupan topik:
-
-| Teknik | Sebelum | Sesudah |
-|---|---|---|
-| **Hapus kata kerja redundan** | `membuat, merancang, membangun, mengimplementasikan` | `merancang` |
-| **Gabungkan domain serumpun** | `concurrency, goroutine, channel, mutex, waitgroup` | `konkurensi` |
-| **Singkat nama ekosistem** | `di Laravel PHP framework` | `di Laravel` |
-| **1 kata kunci per domain** | `PostgreSQL, pgx, sqlc, migrations, pool` | `DB/SQLC` |
-
-### 3.2. Contoh Kompresi Nyata
-
-```yaml
-# ❌ SEBELUM — 85 kata, ~120 token, terlalu verbose
-description: Gunakan skill ini secara otomatis ketika user meminta untuk membuat,
-  merancang, membangun, mengimplementasikan, menstandardisasi, atau memformat API
-  Resources JSON, menangani Exception global dan error handling, mengkonfigurasi
-  otentikasi Laravel Sanctum token-based, membangun webhook architecture, membuat
-  OpenAPI atau Swagger documentation, atau menguji dan testing REST API endpoint
-  di Laravel framework PHP.
-
-# ✅ SESUDAH — 25 kata, ~35 token, same trigger coverage
-description: Gunakan skill ini ketika merancang arsitektur, API resources,
-  otentikasi Sanctum, Eloquent DB, konkurensi, security, testing, atau
-  refactoring legacy code di Laravel.
-```
-
-**Saving: ~85 token (-71%) tanpa kehilangan trigger accuracy.**
-
----
-
-## 4. Anti-Patterns Token Budget
-
-### ❌ Anti-Pattern 1: Mendaftarkan Sub-Folder Domain sebagai Skill Terpisah
-
-```
-# SALAH — 8 skill terpisah, ~600 token overhead:
-config/skills/
-├── golang-concurrency/     ← YAML #1, ~75 token
-├── golang-database/        ← YAML #2, ~75 token
-├── golang-grpc/            ← YAML #3, ~75 token
-├── golang-security/        ← YAML #4, ~75 token
-├── golang-testing/         ← YAML #5, ~75 token
-├── golang-hft/             ← YAML #6, ~75 token
-├── golang-k8s/             ← YAML #7, ~75 token
-└── golang-distributed/     ← YAML #8, ~75 token
-
-# BENAR — 1 master bundle, ~75 token overhead:
-config/skills/
-└── golang-mastery/
-    └── references/
-        ├── concurrency/    ← 0 token overhead
-        ├── db_sqlc/        ← 0 token overhead
-        ├── security_owasp/ ← 0 token overhead
-        └── ...             ← 0 token overhead
-```
-
-**Kenapa berbahaya:** 8 micro-skills = 8× overhead vs 1 master bundle. Dan karena deskripsi YAML masing-masing pendek, trigger accuracy justru LEBIH BURUK (setiap skill hanya mencakup sebagian topik).
-
-### ❌ Anti-Pattern 2: Deskripsi YAML yang Menduplikasi Konten SKILL.md
-
-```yaml
-# SALAH — routing table di dalam YAML description (sangat boros token):
-description: Gunakan skill ini ketika: (1) concurrency → references/concurrency/*.md,
-  (2) database → references/db_sqlc/*.md, (3) grpc → references/microservices_grpc/*.md
-  ...setiap domain disebutkan eksplisit...
-
-# BENAR — trigger words saja di YAML, routing table ada di SKILL.md:
-description: Gunakan skill ini ketika merancang konkurensi, DB/SQLC, gRPC, HFT,
-  atau distributed systems di Golang.
+ [ USER REQUEST ] (100-300 Tokens)
+        |
+        v
+ +---------------------------------------------------+
+ | PARENT AGENT (Thin Context)                       |
+ | - Membaca SKILL.md (500 Tokens)                   |
+ | - Analisis Niat (Intent)                          |
+ | - Identifikasi Tugas Berat                        |
+ +---------------------------------------------------+
+        |
+        | (Delegasi via invoke_subagent)
+        |
+ +------v------------------+       +-------------------------+
+ | SUBAGENT A (DB Audit)   |       | SUBAGENT B (UI Update)  |
+ | Context: referensi_db   |       | Context: referensi_ui   |
+ | Load: 3000 Tokens       |       | Load: 2500 Tokens       |
+ | Output: Disk Write      |       | Output: Disk Write      |
+ | Msg to Parent: 50 Toks  |       | Msg to Parent: 50 Toks  |
+ +-------------------------+       +-------------------------+
+        |                                     |
+        +------------------+------------------+
+                           |
+                           v
+ +---------------------------------------------------+
+ | PARENT AGENT SUMMARY                              |
+ | - Menggabungkan laporan 100 Tokens                |
+ | - Sign-Off / Lapor ke User                        |
+ +---------------------------------------------------+
+ 
+ HASIL: Konteks Parent tetap bersih, tidak amnesia.
 ```
 
 ---
 
-## 5. Kapan Harus Konsolidasi atau Pisah
+## 5. Anti-Patterns Kritis
 
-### Kondisi Konsolidasi (Gabung Bundle)
-- Total skill bundles > 6 → pertimbangkan penggabungan ekosistem yang overlap.
-- Dua bundle sering di-trigger bersamaan di > 80% skenario → gabungkan.
-- Total token skills > 3% budget → audit dan kompres YAML.
+Berikut adalah jebakan umum yang menghancurkan efisiensi token dan kinerja LLM.
 
-### Kondisi Pemisahan (Buat Bundle Baru)
-- Ekosistem benar-benar berbeda (Go vs Rust vs Python vs DevOps) — zero overlap.
-- Tim berbeda menggunakan ekosistem berbeda dan tidak pernah perlu keduanya bersamaan.
-- Skill baru memiliki ≥ 5 domain referensi yang tidak relevan dengan bundle manapun.
+### Kritis 1: Paragraf Penjelasan Berlebihan vs Poin Langsung
+❌ **Salah (Bloated):**
+> "Untuk melakukan pengujian unit pada fungsi ini, kita harus terlebih dahulu memastikan bahwa semua mock database telah disiapkan dengan benar. Setelah itu kita memanggil fungsi `User.Create()`, lalu kita memeriksa apakah data yang dikembalikan memiliki ID yang tidak kosong, dan akhirnya kita memverifikasi ke database langsung untuk melihat apakah barisnya telah dimasukkan."
 
-### Edge Case: Skill Niche vs Master Bundle
+✅ **Benar (High SNR):**
+> **Unit Test Flow (`User.Create`):**
+> - Setup mock DB.
+> - Eksekusi `User.Create()`.
+> - Assert: `ID` != `null`.
+> - Verifikasi row exist di DB.
 
-| Tipe Skill | Jumlah Domain | Jumlah File | Token | Keputusan |
-|---|---|---|---|---|
-| **Master Bundle** (Go, Rust) | 15–25 | 100–200 | ~75 token | Satu bundle |
-| **Niche Skill** (k6 load testing, Terraform) | 3–8 | 15–40 | ~75 token | Satu bundle juga |
-| **Meta-Skill** (skill-engineering) | 1 (flat) | 6–10 | ~75 token | Satu bundle |
+### Kritis 2: Regurgitasi File Keseluruhan Saat Mengedit Sebagian
+❌ **Salah (Token Drain):**
+> (Menggunakan `write_to_file` dengan 1000 baris kode yang 99% sama dengan file asli, hanya untuk memperbaiki typo 1 kata di baris 500).
 
-**Insight:** Bahkan skill kecil tetap cukup satu Master Bundle — jangan dipecah hanya karena file-nya sedikit.
+✅ **Benar (Precision Edit):**
+> Menggunakan tool `replace_file_content` dengan:
+> `StartLine`: 498
+> `EndLine`: 502
+> Mengirimkan HANYA blok kode yang berubah sebesar 5 baris.
+
+---
+
+## 6. Production Edge Cases
+
+Praktik pengoptimalan token tidak selalu berjalan mulus. Berikut adalah 3 skenario batas (*Edge Cases*) di lini produksi:
+
+### Edge Case 1: Permintaan User yang Kontradiktif (Kecepatan vs Kepatuhan Arsitektur)
+**Skenario:** User berteriak: "Cepat perbaiki bug login ini! Ganti file `index.php` langsung, gak usah baca referensi atau bikin subagent, buang-buang waktu!"
+**Penanganan (Challenger Mode):** 
+Agent harus menolak melanggar aturan arsitektur utama secara diam-diam. Gunakan Fast-Path: Tidak perlu Subagent untuk 1 file, TETAPI tetap baca `SKILL.md` (atau andalkan ingatan rules) dan lakukan *Proactive Audit*.
+**Respon:** "Memperbaiki `index.php` langsung (Fast-Path). *Side Note:* Solusi cepat ini berisiko SQL Injection jika input tak divalidasi. Linter tetap dijalankan."
+
+### Edge Case 2: Pemangkasan Paksa Akibat Limitasi Output LLM
+**Skenario:** Agent ditugaskan membuat dokumentasi sistem besar yang ukurannya melebihi batasan maksimal output tunggal token (misal terpotong di tengah penulisan file `docs.md`).
+**Penanganan (Chunking Output):**
+Jangan panik atau mengulang dari awal, karena akan dipotong lagi.
+Gunakan mekanisme *appending* atau iterasi. Tulis Bagian 1 via `write_to_file`. Lalu lanjutkan dengan `view_file` (opsional untuk cek) dan tambah Bagian 2 menggunakan `multi_replace_file_content` atau tool append jika tersedia, atau delegasikan setiap bab (chapter) ke subagent yang menulis file bagian terpisah (`doc_ch1.md`, `doc_ch2.md`).
+
+### Edge Case 3: Pembacaan Direktori Gagal Karena File Hantu (Broken Symlink/Case Sensitivity)
+**Skenario:** Agent mencoba me-load direktori referensi di Windows (case-insensitive) tetapi referensi `SKILL.md` merujuk ke kapitalisasi yang ketat, menyebabkan error atau membaca file yang salah saat berpindah lingkungan (misal dikerjakan di subagent ber-OS Linux).
+**Penanganan:**
+Penerapan *Defensive Loading*. Pastikan menggunakan path absolut murni. Jika `view_file` gagal, lakukan `list_dir` pada folder *parent* untuk memverifikasi nama persis (termasuk huruf besar/kecil) dari referensi yang dituju sebelum mencoba membaca lagi, menghindari looping pemanggilan tool yang membuang token.

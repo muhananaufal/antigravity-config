@@ -1,70 +1,99 @@
-# Kombinator `Result` & `Option` di Rust
+# Result & Option Combinators (Zero-Branch Monadic Chaining)
 
-## 1. Konsep Utama & Kapan Digunakan
-Rust menghindari exception (`try-catch`), dan menggunakan tipe aljabar (enum) `Result<T, E>` dan `Option<T>`. Kombinator (methods pada `Option`/`Result` yang menerima closure) memungkinkan transformasi fungsional yang deklaratif, aman, dan tanpa variabel mutable berlebih.
+Dalam kode Rust Systems tingkat lanjut (misal State Machine HFT atau Network Packet Parsers), kemunculan blok `match` atau `if let` yang bertumpuk untuk memeriksa `Option` atau `Result` (biasa disebut *Arrow Anti-Pattern* atau *Pyramid of Doom*) tidak hanya merusak keterbacaan (readability), tetapi juga membingungkan Branch Predictor CPU jika tidak di-inline dengan baik.
 
-Gunakan combinators ketika:
-- Anda ingin menghindari blok `match` atau `if let` bersarang yang dalam ("Pyramid of Doom").
-- Mengonversi `Option` ke `Result` atau sebaliknya secara elegan.
-- Melakukan chaining transformasi data yang kompleks.
+Rust menyediakan **Monadic Combinators** bawaan pada `Option` dan `Result` seperti `and_then`, `or_else`, `map_or_else`, `transpose`, dan `flatten`. Menggunakan rantai (chaining) dari kombinasinya menghasilkan alur data fungsional linier yang secara sempurna dikompilasi (zero-cost abstraction) ke bentuk machine code tanpa instruksi loncatan bercabang ganda.
 
-## 2. Arsitektur / Flow
+## Arsitektur Monadic Transformation Flow
 
 ```ascii
-[ Option<T> ] 
-  -- map() --> [ Option<U> ]
-  -- ok_or() --> [ Result<T, E> ]
-
-[ Result<T, E> ]
-  -- map_err() --> [ Result<T, F> ]
-  -- and_then() --> [ Result<U, F> ]
-  -- ok() --> [ Option<T> ]
+[ Data Stream: Option<Result<Payload, Error>> ]
+           |
+           v
+  ( transpose() ) ---> Mengubah Option<Result> menjadi Result<Option>
+           |
+[ Result<Option<Payload>, Error> ]
+           |
+           v ( ? Operator Unwrapping pada outer Result )
+[ Option<Payload> ]
+           |
+           v
+  ( and_then() ) ----> [ Chain Operation yang bisa gagal (mengembalikan Option) ]
+           |
+  ( or_else() ) -----> [ Fallback State Recovery tanpa break / return awal ]
+           |
+           v
+  ( map_or_else() ) -> [ Transformasi akhir ke tipe Skalar Konkret T ]
+           |
+       [ Final Value (Zero Nested Branches!) ]
 ```
 
-## 3. Kode Rust Production-Ready
+## Produksi-Ready Code: Data Pipeline Monadik Murni
+
+Kode di bawah menunjukkan pipeline parsing dan validasi token autentikasi yang kompleks menjadi linier tanpa ada satu pun statement `match` secara eksplisit, menghapus potensi percabangan instruksi yang bersarang.
 
 ```rust
-use std::env;
+use std::num::ParseIntError;
 
-#[derive(Debug, PartialEq)]
-pub struct DatabaseConfig {
-    pub url: String,
-    pub pool_size: u32,
+#[derive(Debug, PartialEq, Eq)]
+pub struct AuthContext {
+    user_id: u32,
+    role: String,
 }
 
-#[derive(Debug, PartialEq)]
-pub enum ConfigError {
-    MissingUrl,
-    InvalidPoolSize(std::num::ParseIntError),
+#[derive(Debug, PartialEq, Eq)]
+pub enum AuthError {
+    InvalidFormat,
+    Expired,
+    ParseError(ParseIntError),
 }
 
-pub fn load_db_config() -> Result<DatabaseConfig, ConfigError> {
-    // 1. Mengubah Option ke Result menggunakan ok_or_else
-    let url = env::var("DATABASE_URL")
-        .ok_or_else(|| ConfigError::MissingUrl)?;
-
-    // 2. Chaining: Option -> Option (map) -> Option (unwrap_or)
-    let pool_size_str = env::var("POOL_SIZE").unwrap_or_else(|_| "10".to_string());
-
-    // 3. Result -> Result (map_err)
-    let pool_size = pool_size_str
-        .parse::<u32>()
-        .map_err(ConfigError::InvalidPoolSize)?;
-
-    Ok(DatabaseConfig { url, pool_size })
+/// Mensimulasikan fetch token kotor dari Request Header (bisa saja None)
+pub fn fetch_header_token() -> Option<String> {
+    Some("Bearer 99281_admin".to_string())
 }
 
-pub fn parse_csv_row(row: &str) -> Option<u32> {
-    // Transpose pattern: Iterator of Results -> Result of Vector
-    // .and_then meratakan (flattens) Option<Option<T>> menjadi Option<T>
-    row.split(',')
-        .next()
-        .and_then(|first_col| first_col.parse::<u32>().ok())
-}
+/// Pipeline parsing dengan kombinator Zero-Branch
+pub fn process_authentication() -> Result<AuthContext, AuthError> {
+    // Pipeline data monadik. 
+    // Tidak ada `match` atau `if let` sama sekali.
+    let ctx = fetch_header_token()
+        // 1. Membuang awalan yang statis
+        .and_then(|token| token.strip_prefix("Bearer ").map(String::from))
+        
+        // 2. Transisi Option ke Result dengan tipe error kita jika None
+        .ok_or(AuthError::InvalidFormat)
+        
+        // 3. and_then pada Result, operasi parsial memecah string menjadi struct
+        .and_then(|payload| {
+            let parts: Vec<&str> = payload.split('_').collect();
+            
+            // Mengubah Option (dari parts.get) menjadi Result
+            let id_str = parts.get(0).ok_or(AuthError::InvalidFormat)?;
+            let role_str = parts.get(1).ok_or(AuthError::InvalidFormat)?;
+            
+            // Map error dari ParseIntError bawaan ke custom enum
+            let user_id = id_str.parse::<u32>().map_err(AuthError::ParseError)?;
+            
+            Ok(AuthContext {
+                user_id,
+                role: role_str.to_string(),
+            })
+        })
+        // 4. or_else untuk Fallback Mechanism jika terjadi gagal spesifik
+        .or_else(|err| {
+            // Jika InvalidFormat, kita bisa fallback sebagai "Guest"
+            if err == AuthError::InvalidFormat {
+                Ok(AuthContext {
+                    user_id: 0,
+                    role: "guest".to_string(),
+                })
+            } else {
+                Err(err)
+            }
+        });
 
-pub fn collect_results(results: Vec<Result<i32, &'static str>>) -> Result<Vec<i32>, &'static str> {
-    // Ajaib! collect() tahu cara membalik Result<Vec> menjadi Vec<Result> dan berhenti di Error pertama.
-    results.into_iter().collect::<Result<Vec<i32>, _>>()
+    ctx
 }
 
 #[cfg(test)]
@@ -72,22 +101,45 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_collect_results() {
-        let items = vec![Ok(1), Ok(2), Err("fail"), Ok(4)];
-        let res = collect_results(items);
-        assert_eq!(res, Err("fail"));
+    fn test_combinator_pipeline() {
+        let result = process_authentication();
+        assert!(result.is_ok());
+        let ctx = result.unwrap();
+        
+        assert_eq!(ctx.user_id, 99281);
+        assert_eq!(ctx.role, "admin");
+    }
+
+    #[test]
+    fn test_option_result_transpose() {
+        // Contoh spesifik untuk `transpose()`
+        // Bayangkan API me-return array dimana salah satu isinya adalah Option<Result<u32>>
+        let opt_res: Option<Result<u32, &'static str>> = Some(Err("Network lag"));
+        
+        // Diubah menjadi Result<Option<u32>>, sehingga operator `?` bisa dipakai langsung
+        let res_opt: Result<Option<u32>, &'static str> = opt_res.transpose();
+        
+        assert_eq!(res_opt, Err("Network lag"));
     }
 }
 ```
 
-## 4. Anti-Pattern Spesifik
-1. **Menggunakan `unwrap()` atau `expect()` pada path produksi.**
-   - *Bahaya*: Langsung menghentikan (panic) aplikasi. Jika ini adalah HTTP handler, satu payload yang salah mematikan thread/task.
-   - *Solusi*: Gunakan operator `?` atau ubah ke `.unwrap_or_default()` jika ada nilai default yang masuk akal.
-2. **Bersarang panjang dengan `map` padahal fungsi dalam `map` me-return `Option`.**
-   - *Bahaya*: Menghasilkan `Option<Option<T>>` atau `Result<Result<T, E>, E>`, yang membingungkan.
-   - *Solusi*: Gunakan `and_then` (monadic bind) alih-alih `map` untuk fungsi yang mengembalikan tipe serupa, meratakannya ke `Option<T>` atau `Result<T, E>`.
+## Anti-Patterns
 
-## 5. Edge Cases & Defensive Programming
-- **`transpose`**: Metode `.transpose()` sangat kuat. Seringkali Anda memiliki `Option<Result<T, E>>` (misal: "Mungkin ada nilai, jika ada ia mungkin error") tapi API mengharapkan `Result<Option<T>, E>` (misal: "Proses errornya sekarang juga, kalau sukses berikan sisa option-nya"). Gunakan `let res = opt_res.transpose()?;`.
-- **Malas vs Eager**: Perhatikan beda `unwrap_or` (eager evaluation) vs `unwrap_or_else` (lazy closure evaluation). Selalu gunakan `_else` jika argumen berupa function call atau alokasi (misal `String::new()`).
+1. **Penggunaan `unwrap_or()` Memakan Eksekusi Penuh secara Instan**
+   **Mengapa berbahaya:** `unwrap_or(compute_expensive_fallback())` akan SELALU mengeksekusi `compute_expensive_fallback()` sebelum nilai result dievaluasi! Hal ini karena Rust menjalankan fungsi argument parameter (eager evaluation). Ini bisa melumpuhkan performa CPU atau Database.
+   **Solusi:** Harus selalu menggunakan `unwrap_or_else(|| compute_expensive_fallback())` yang berbentuk *closure* (lazy evaluation), sehingga logika fallback hanya berjalan jika memang terdeteksi `Err` atau `None`.
+
+2. **Memaksakan `match` Beruntun (Arrow Anti-Pattern)**
+   **Mengapa berbahaya:** Anda menjorokkan kode ke kanan secara ekstrem. Selain kode menjadi rawan kotor, kompilator LLVM kadang gagal mengidentifikasi bahwa flow ini murni berantai dan gagal menerapkan Inlining blok fungsi, sehingga jump instructions bertambah banyak yang me-miss instruction cache L1.
+
+## Edge Cases dan Defensive Programming
+
+1. **Borrow Checker Constraints pada Kombinator Closures:**
+   Seringkali saat menulis `result.and_then(|val| ... )`, jika Anda perlu mengembalikan referensi dengan lifetime ke memori lokal di luar closure tersebut, Borrow Checker akan memblokir Anda (Closure outlives lifetime constraint). Anda akan dipaksa mengubah aliran menjadi `match` tradisional yang secara lifetime lebih transparan bagi kompilator. 
+
+2. **Operator `?` di dalam `map` Closure:**
+   Anda **TIDAK BISA** menggunakan operator `?` untuk kembali secara sepihak (early return) pada fungsi luar dari dalam block closure fungsi kombinaor `map(|x| ...)`. Operator `?` di dalam closure hanya akan berlaku pada closure itu sendiri. Solusinya, ubah desain dari fungsi pemetaan (map) ke `and_then` agar bisa mengembalikan `Result`, baru panggil operator `?` pada rantai terluarnya.
+
+3. **Tipe Data Kompleks Menggagalkan Type Inference:**
+   Ketika melakukan rantai `.and_then(...).or_else(...).map_err(...)`, ada kalanya kompilator Rust bingung menebak tipe *Err* menengah jika menggunakan closure dinamis yang kosong seperti `|e| e.into()`. Anda terpaksa memberikan *Type Hint* atau *turbofish* (contoh: `.map_err::<DatabaseError, _>(...)`) untuk meredakan kebingungan type inference LLVM.

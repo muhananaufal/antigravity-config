@@ -1,95 +1,193 @@
-# OpenTelemetry, Tracing, & Metrics
+# OpenTelemetry Tracing & Metrics di Rust Microservices
 
-## Konsep Utama
-Observability adalah pilar microservices (Logs, Metrics, Traces). Dalam Rust, crate `tracing` digunakan sebagai fasad standar untuk merekam event, dan `opentelemetry` digunakan untuk mengekspor data ke kolektor terdistribusi (seperti Jaeger, Zipkin, atau Prometheus) dalam format OTLP.
-- **Trace & Spans:** Mewakili masa hidup sebuah operasi (seperti 1 HTTP Request).
-- **Span Context Propagation:** Teknik meneruskan `TraceId` di HTTP Headers (W3C TraceContext: `traceparent`) sehingga layanan A dan layanan B terlihat dalam satu trace yang sama.
-- **Metrics:** Pengukuran numerik untuk *Dashboarding* dan *Alerting* (seperti HTTP req count, latency P99).
+## Deskripsi dan Konsep Utama
+Observability adalah pondasi utama dalam microservices. OpenTelemetry (OTel) memberikan standar untuk Traces, Metrics, dan Logs. Integrasi OTel SDK di Rust (menggunakan `opentelemetry-otlp`) memungkinkan kita mengekspor data telemetri ke collector (seperti Jaeger, Prometheus). Tracing span correlation, khususnya menggunakan `X-Request-ID`, memastikan bahwa perjalanan request melintasi beberapa services dapat dilacak secara koheren. Prometheus RED (Rate, Errors, Duration) metrics digunakan untuk mengukur *health* service.
 
-**Kapan Digunakan:**
-- Investigasi kemacetan (bottlenecks) dalam pemanggilan lintas microservices.
-- Pemonitoran kesehatan aplikasi (SLO/SLA dashboard) via Grafana.
-
-## Arsitektur & Flow
-
-```ascii
-+----------------+      W3C Trace Header      +----------------+
-| Microservice A | -------------------------> | Microservice B |
-+-------+--------+                            +--------+-------+
-        |  Otlp Exporter (gRPC)                        |
-        v                                              v
-+-------------------------------------------------------------+
-| OpenTelemetry Collector / Jaeger                            |
-+-------------------------------------------------------------+
+## Arsitektur & Flow (ASCII Diagram)
+```text
+[Client] --(HTTP/gRPC)--> [Tower Layer: Trace / Metrics] 
+                                    | 
+                             (Extrapolate X-Request-ID)
+                                    v
+                           [Axum / Tonic Handler]
+                            |                  |
+                       [Tracing Span]     [OTel Meter]
+                            |                  |
+                     (OTLP Exporter)   (Prometheus Exporter)
+                            |                  |
+                            v                  v
+                   [Jaeger/Zipkin]     [Prometheus Scraper]
 ```
 
-## Production-Ready Code
-
+## Implementasi Produksi (Rust)
 ```rust
-use axum::{routing::get, Router};
-use opentelemetry::{global, KeyValue};
-use opentelemetry_otlp::WithExportConfig;
-use opentelemetry_sdk::{trace as sdktrace, Resource};
-use tracing::{info, instrument};
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Registry};
+use axum::{
+    body::Body,
+    http::Request,
+    response::Response,
+    routing::get,
+    Router,
+};
+use opentelemetry::{
+    global,
+    metrics::{Counter, Histogram},
+    KeyValue,
+};
+use std::{net::SocketAddr, time::Instant};
+use tower::{Layer, Service};
+use tracing::{info, instrument, span, Level};
+use tracing_subscriber::{layer::SubscriberExt, Registry};
+use core::task::{Context, Poll};
+use futures_util::future::BoxFuture;
 
-// 1. Inisialisasi OpenTelemetry Tracer (ke Collector)
-pub fn init_tracer() {
-    let tracer = opentelemetry_otlp::new_pipeline()
-        .tracing()
-        .with_exporter(
-            opentelemetry_otlp::new_exporter()
-                .tonic()
-                .with_endpoint("http://localhost:4317"), // OTLP gRPC endpoint
-        )
-        .with_trace_config(
-            sdktrace::config().with_resource(Resource::new(vec![
-                KeyValue::new("service.name", "my-microservice"),
-            ])),
-        )
-        .install_batch(opentelemetry_sdk::runtime::Tokio)
-        .expect("Gagal inisiasi OTLP tracer");
-
-    let telemetry = tracing_opentelemetry::layer().with_tracer(tracer);
-
-    // Setup logging ke stdout bersamaan dengan otlp traces
-    let fmt_layer = tracing_subscriber::fmt::layer().json();
-
-    Registry::default()
-        .with(tracing_subscriber::EnvFilter::new("INFO"))
-        .with(fmt_layer)
-        .with(telemetry)
-        .init();
+// Komponen Metrics
+#[derive(Clone)]
+pub struct HttpMetrics {
+    pub requests_total: Counter<u64>,
+    pub request_duration: Histogram<f64>,
 }
 
-// 2. Instrumentasi Fungsi menggunakan makro #[instrument]
-// Secara otomatis membuat "Span" bernama "process_payment"
-#[instrument(skip(credit_card_no), fields(payment.amount = amount))]
-async fn process_payment(amount: f64, credit_card_no: &str) -> String {
-    info!("Memulai proses pembayaran ke gateway eksternal");
-    // Simulasi delay gateway
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    info!("Pembayaran berhasil");
-    "SUCCESS".to_string()
+impl HttpMetrics {
+    pub fn new() -> Self {
+        let meter = global::meter("http_service");
+        Self {
+            requests_total: meter
+                .u64_counter("http_requests_total")
+                .with_description("Total HTTP requests")
+                .init(),
+            request_duration: meter
+                .f64_histogram("http_request_duration_seconds")
+                .with_description("HTTP request duration in seconds")
+                .init(),
+        }
+    }
 }
 
-pub fn app() -> Router {
-    Router::new().route("/pay", get(|| async { 
-        process_payment(150.0, "1234-5678-9876").await 
-    }))
+// Middleware Tower untuk OTel
+#[derive(Clone)]
+pub struct TelemetryMiddleware<S> {
+    inner: S,
+    metrics: HttpMetrics,
 }
 
-// Untuk flush on shutdown:
-// opentelemetry::global::shutdown_tracer_provider();
+impl<S, ReqBody, ResBody> Service<Request<ReqBody>> for TelemetryMiddleware<S>
+where
+    S: Service<Request<ReqBody>, Response = Response<ResBody>> + Clone + Send + 'static,
+    S::Future: Send + 'static,
+    ReqBody: Send + 'static,
+    ResBody: Send + 'static,
+{
+    type Response = S::Response;
+    type Error = S::Error;
+    type Future = BoxFuture<'static, Result<Self::Response, Self::Error>>;
+
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready(cx)
+    }
+
+    fn call(&mut self, req: Request<ReqBody>) -> Self::Future {
+        let metrics = self.metrics.clone();
+        let clone = self.inner.clone();
+        let mut inner = std::mem::replace(&mut self.inner, clone);
+        
+        // Ambil Request ID
+        let req_id = req
+            .headers()
+            .get("x-request-id")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("unknown_id")
+            .to_string();
+
+        let span = tracing::info_span!("http_request", request_id = %req_id, path = %req.uri().path());
+
+        Box::pin(async move {
+            let start = Instant::now();
+            let _enter = span.enter();
+            
+            let response = inner.call(req).await;
+            
+            let duration = start.elapsed().as_secs_f64();
+            let status = match &response {
+                Ok(res) => res.status().as_u16().to_string(),
+                Err(_) => "500".to_string(),
+            };
+
+            let labels = [
+                KeyValue::new("status", status),
+                KeyValue::new("request_id", req_id),
+            ];
+
+            metrics.requests_total.add(1, &labels);
+            metrics.request_duration.record(duration, &labels);
+
+            response
+        })
+    }
+}
+
+pub struct TelemetryLayer {
+    metrics: HttpMetrics,
+}
+
+impl<S> Layer<S> for TelemetryLayer {
+    type Service = TelemetryMiddleware<S>;
+
+    fn layer(&self, inner: S) -> Self::Service {
+        TelemetryMiddleware {
+            inner,
+            metrics: self.metrics.clone(),
+        }
+    }
+}
+
+#[instrument(skip_all, fields(worker_id = 42))]
+async fn process_data() -> &'static str {
+    info!("Processing data internally");
+    "Data processed"
+}
+
+pub fn build_router() -> Router {
+    let metrics = HttpMetrics::new();
+    Router::new()
+        .route("/process", get(process_data))
+        .layer(TelemetryLayer { metrics })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{body::Body, http::Request};
+    use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn test_telemetry_layer() {
+        let app = build_router();
+        
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/process")
+                    .header("x-request-id", "test-12345")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status().as_u16(), 200);
+    }
+}
 ```
 
 ## Anti-Patterns
 
-1. **Memblokir Subscriber (Log I/O Berjalan Secara Sinkron)**
-   - **MENGAPA BERBAHAYA:** Menulis log ke terminal (stdout) atau file secara sinkron (seperti `std::println!`) di dalam async handler menghambat thread. Selalu gunakan `tracing_appender::non_blocking` (dengan worker thread terpisah) untuk produksi yang padat traffic, jika melakukan filesystem logging.
-2. **Kardinalitas Metrik yang Terlalu Tinggi (High Cardinality)**
-   - **MENGAPA BERBAHAYA:** Menggunakan nilai unik per-request (seperti UUID User atau Session ID) sebagai 'Label/Tag' dalam sistem Metrik (Prometheus/StatsD). Ini akan menghabiskan memori TSDB seketika dan membuat instance Prometheus crash (karena setiap label kombinasi unik membuat time-series baru). Batasi label hanya pada finite enum (status code, method, route pattern).
+1. **Memblokir OTLP Exporter di Main Thread**: Menginisiasi *OTLP exporter pipeline* secara *synchronous* atau tanpa buffer yang cukup. 
+   *Mengapa berbahaya*: Timeout dari collector akan memblokir *async executor*, menunda HTTP response aplikasi secara total.
+2. **Cardinality Ledakan di Metrics (High Cardinality)**: Menggunakan user ID, UUID, atau parameter URL dinamis langsung ke sebagai label Prometheus di *metrics*.
+   *Mengapa berbahaya*: Prometheus akan mengalokasikan time series baru per label unik, menyebabkan OOM (Out of Memory) pada metrics server dan aplikasi Rust sendiri karena struktur hash map yang membengkak.
 
-## Edge Context & Defensive Programming
-- **Header Extraction untuk Trace Terdistribusi:** Kode di atas baru menyetel tracer internal. Untuk *Menerima* trace ID dari layanan pemanggil sebelumnya, Anda harus membuat Middleware Tower (atau ekstrak dari header axum menggunakan `opentelemetry::global::get_text_map_propagator()`) lalu menjadikan span yang diekstrak sebagai parent dari span saat ini.
-- **Graceful Flush Traces:** Batch exporter menyimpan trace di memori secara periodik. Pastikan menaruh `opentelemetry::global::shutdown_tracer_provider();` saat proses shutdown untuk mengeksekusi flush data yang ada di buffer, sebelum aplikasi benar-benar berhenti, sehingga trace terakhir (seperti penyebab crash) tidak hilang.
+## Edge Cases & Defensive Programming
+
+1. **Trace Context Hilang di Boundary Task Baru**: Saat men-spawn task dengan `tokio::spawn`, *tracing context* (Span saat ini) tidak ikut secara default. Solusinya, gunakan `Instrument::instrument` atau `in_current_span()` dari `tracing` crate untuk mengikat span induk ke future task yang berjalan di *background*.
+2. **Clock Skew pada Durasi Histogram**: Waktu (Instant) yang melompat karena sinkronisasi NTP server (NTP adjustments). Meskipun `Instant::elapsed` di Rust dijamin monotonic, jeda saat sistem tertidur (*suspend*) bisa memperpanjang durasi secara anomali, yang memicu P99 alert di observability (Padahal bukan salah request).
+3. **Trace Header Malformed**: Jika *upstream proxy* mengirimkan trace context yang invalid secara spek W3C (contohnya `traceparent` tidak lengkap), parser dapat panik atau gagal *silently*. Crate telemetri harus diset untuk menolerir kesalahan ini dengan membuat root span baru.

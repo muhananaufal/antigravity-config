@@ -5,7 +5,7 @@ description: Gunakan skill ini ketika merancang arsitektur, konkurensi, DB/SQLC,
 
 # Golang Mastery
 
-SSOT arsitektur & rekayasa sistem Golang enterprise & high-throughput.
+SSOT arsitektur & rekayasa sistem Golang enterprise & high-throughput (28 Domain, 197 File Mahakarya).
 
 ## 🔁 Greenfield Protocol (Init Proyek dari Nol — Dynamic Swarm Scaling)
 
@@ -62,6 +62,8 @@ Agent wajib mencocokkan nature of task ke domain berikut **secara proaktif**:
 | Distributed consensus, Raft, etcd, WAL, BadgerDB | `distributed_consensus_storage/` |
 | IoT, embedded, TinyGo, GPIO, edge device | `embedded_tinygo/` |
 | QUIC, WireGuard, DNS, MQTT, raw TCP protocol | `advanced_networking_protocols/` |
+| Streaming Excel 1 Juta baris (`excelize`), govips JIT image, FFmpeg video HLS, chromedp PDF | `media_asset_pipeline/` |
+| Katalog dinamis `x/text`, format uang/mata uang ICU, propagasi zona waktu Context, multi-region router | `i18n_localization/` |
 
 
 
@@ -106,6 +108,8 @@ Domain yang hampir selalu relevan untuk Go service manapun:
 | AWS SDK v2 (S3/SQS/DynamoDB), GCP client, Lambda, Secrets Manager, SNS fanout | `references/cloud_provider_sdk/` |
 | Background jobs, asynq, River (Postgres), cron distributed, worker pool, saga jobs | `references/background_jobs_worker/` |
 | Cache-aside, singleflight, L1/L2 multilevel, Redis patterns, cache invalidation, CDN headers | `references/caching_strategy/` |
+| Streaming Excel 1 Juta baris (`excelize`), govips JIT image resizing, FFmpeg video HLS, chromedp PDF | `references/media_asset_pipeline/` |
+| Katalog terjemahan `x/text`, format mata uang & bilangan ICU, propagasi zona waktu Context, multi-region routing | `references/i18n_localization/` |
 
 ---
 

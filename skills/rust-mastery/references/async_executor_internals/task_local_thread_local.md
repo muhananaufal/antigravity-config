@@ -1,88 +1,115 @@
-# Task-Local Data & Thread-Local Storage
+# Task-Local vs Thread-Local: Internals Async Executor
 
-## Konsep Utama
-Di dunia sinkron, data konteks (seperti user auth, tracing span) disimpan di `thread_local!` karena 1 thread = 1 request. Di dunia asinkron, hal ini salah! Task dapat bermigrasi antar OS thread melalui *work-stealing*. Untuk menyimpan data spesifik task dengan aman melewati *await points*, kita menggunakan *Task-Local Storage* (seperti makro `tokio::task_local!`). Di bawah kap mesin, ia menyisipkan referensi ke dalam thread-local selagi task tersebut di-polling secara sinkron, dan membuangnya saat polling terjeda (`Poll::Pending`), memastikan lokalisasi scope berdasarkan Task.
+## Deskripsi dan Konsep Utama
+Dalam model pemrograman thread *blocking* tradisional (synchronous), kita sering memakai `std::thread_local!` untuk menyimpan state global per-thread tanpa harus terus-menerus mem-passing *struct argument* (argument drilling). Namun, di ekosistem asynchronous Tokio (M:N execution model, *work-stealing* scheduler), satu *Task* bisa berpindah-pindah antar *OS Threads* sesuka hati di titik interupsi (`.await`). Jika kita menggunakan `std::thread_local!` dalam *async*, data akan bocor/tersangkut di *Worker Thread A* padahal eksekusi tasknya sudah dilanjutkan oleh *Worker Thread B*. Disinilah `tokio::task_local!` dibutuhkan: ia menyediakan penyimpanan *context-aware* yang akan menempel terus mengikuti *Async Task*, apapun *thread* yang mem-poll-nya.
 
-## Arsitektur & Context Propagation
-
+## Arsitektur & Flow (ASCII Diagram)
 ```text
-       Task A (Running on Thread 1)              Thread Local Storage (TLS)
-       +-------------------------+               +--------------------------+
-       | task_local.scope()      | --- set ----> | SLOT: "TraceID-A"        |
-       | async I/O await         | <--- yield    | (Valid only during poll) |
-       +-------------------------+
-                  |
-        Migrates via work-stealing
-                  v
-       Task A (Running on Thread 2)              Thread Local Storage (TLS)
-       +-------------------------+               +--------------------------+
-       | I/O Ready, poll resumes | --- set ----> | SLOT: "TraceID-A"        |
-       | task_local.get()        |               | (Restored properly)      |
-       +-------------------------+               +--------------------------+
+[OS Thread 1 (Worker)]                  [OS Thread 2 (Worker)]
+          |                                       |
+ +--------+--------+                     +--------+--------+
+ | std::thread_local|                    | std::thread_local| (State stuck here!)
+ +--------+--------+                     +--------+--------+
+          |                                       |
+ [Task A execution] --- ( yield .await ) --+      |
+ [Task_Local state]                        |      |
+                                           v
+                                   [Task A resumed (Polled)]
+                                   [Task_Local state MOVES!]
 ```
 
-## Production-Ready Code
-
+## Implementasi Produksi (Rust)
 ```rust
-use std::future::Future;
-use tokio::task;
+use std::cell::RefCell;
+use tokio::task_local;
 
-// Definisikan task-local key. Hanya valid dalam lingkup Tokio executor.
-tokio::task_local! {
-    pub static TRACE_ID: String;
+// Definisi Task Local:
+// Data yang akan selalu menempel pada instance tokio::spawn spesifik.
+task_local! {
+    pub static REQUEST_ID: String;
+    pub static USER_SESSION: RefCell<SessionState>;
 }
 
-/// Fungsi asinkron yang bisa membaca task-local data
-async fn process_database_query() -> String {
-    // Ambil data dari task-local. Akan panic (atau return error) jika dipanggil
-    // di luar scope tokio::task_local.
-    let current_trace_id = TRACE_ID.with(|id| id.clone());
+// Struct state simulasi
+#[derive(Debug, Clone, PartialEq)]
+pub struct SessionState {
+    pub user_id: u32,
+    pub role: String,
+}
+
+// Fungsi dalam tumpukan panggilan (call stack) yang sangat dalam.
+// Tidak perlu argument drilling (passing REQUEST_ID dari fungsi A -> B -> C).
+pub async fn deep_database_call() {
+    // Membaca task-local state (aman melintasi threads).
+    let req_id = REQUEST_ID.with(|id| id.clone());
     
-    // Simulasi delay (await point dimana task bisa pindah thread)
-    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    // Membaca via RefCell mutability, butuh di-borrow hati-hati
+    let user_role = USER_SESSION.with(|session| {
+        session.borrow().role.clone()
+    });
 
-    // Data aman dan konsisten dengan Task A, bukan TLS thread acak
-    format!("Query run under trace: {}", current_trace_id)
+    println!("DB Call by Request ID: {}, Role: {}", req_id, user_role);
 }
 
-/// Entry point simulasi
-pub async fn run_server_request(trace_id: String) -> String {
-    // Membungkus eksekusi Future ke dalam scope `TRACE_ID`
-    TRACE_ID.scope(trace_id, async {
-        let result = process_database_query().await;
-        result
-    }).await
+pub async fn handle_http_request() {
+    let session = SessionState {
+        user_id: 101,
+        role: "admin".to_string(),
+    };
+
+    // Kita menyuntikkan (scope) nilai ini khusus untuk Future (blok async) ini
+    REQUEST_ID.scope("req-xyz-789".to_string(), async {
+        USER_SESSION.scope(RefCell::new(session), async {
+            // Future apapun (bahkan span tokio baru) yang dieksekusi di dalam
+            // tree scope ini dapat mengakses TASK_LOCAL.
+            
+            // Misal: Future yield, executor bisa mencabut task ini 
+            // dan melempar ke worker thread lain.
+            tokio::task::yield_now().await;
+            
+            // Bahkan di dalam pemanggilan fungsi terdalam...
+            deep_database_call().await;
+        }).await;
+    }).await;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_task_local_across_await() {
-        let res1 = run_server_request("REQ-001".to_string());
-        let res2 = run_server_request("REQ-002".to_string());
+
+    #[tokio::test]
+    async fn test_task_local_encapsulation() {
+        // Jalankan dua request simultan.
+        // Task-local akan mencegah kontaminasi state (isolation).
         
-        // Eksekusi paralel
-        let (out1, out2) = tokio::join!(res1, res2);
-        
-        assert_eq!(out1, "Query run under trace: REQ-001");
-        assert_eq!(out2, "Query run under trace: REQ-002");
+        let t1 = tokio::spawn(async {
+            REQUEST_ID.scope("id-1".to_string(), async {
+                tokio::task::yield_now().await;
+                REQUEST_ID.with(|id| assert_eq!(id, "id-1"));
+            }).await;
+        });
+
+        let t2 = tokio::spawn(async {
+            REQUEST_ID.scope("id-2".to_string(), async {
+                tokio::task::yield_now().await;
+                REQUEST_ID.with(|id| assert_eq!(id, "id-2"));
+            }).await;
+        });
+
+        let _ = tokio::join!(t1, t2);
     }
 }
 ```
 
 ## Anti-Patterns
 
-1. **Menggunakan `std::thread_local!` di Code Async**
-   - *Deskripsi*: Menyimpan ID request atau tracing context di `std::thread_local!`.
-   - *Mengapa Berbahaya*: Setelah `await`, task mungkin dijemput oleh Thread B. Thread B akan mencoba membaca TLS, yang berisiko membaca context dari request *lain* yang sedang ditangani oleh Thread B (Security Bypass / Data Leakage) atau mereturn `None`.
-
-2. **Memblokir Scope dengan Heavy Synchronous Work**
-   - *Deskripsi*: Memanggil `task_local!.with(...)` lalu melakukan komputasi kriptografi intensif tanpa `yield`.
-   - *Mengapa Berbahaya*: Walau secara logik context task local valid, ini akan menunda execution polling task lain di thread yang sama. Task-local dirancang ringan untuk meta-data, bukan untuk bypass state management.
+1. **Memakai `std::thread_local!` di Blok Async (Work Stealing Trap)**: Menyimpan akses koneksi atau `UUID` otentikasi di statik `std::thread_local!`.
+   *Mengapa berbahaya*: Saat `tokio` scheduler meresume Future, sangat umum state otentikasi `Thread 1` bocor dan dibaca oleh *Request HTTP B* yang kebetulan numpang dialokasikan di `Thread 1` yang sama, memicu peretasan data rahasia lintas-user.
+2. **`RefCell` Borrow Memlintasi `.await` pada Task-Local**: Memanggil `.borrow_mut()` lalu mempertahankan *guard*-nya melintasi titik yield `.await`.
+   *Mengapa berbahaya*: `RefCell` tidak thread-safe. Begitu thread lain mengambil alih task, mengakses `RefCell` ini akan memicu *Runtime Panic* karena borrow guard masih nyangkut, membuat executor panik secara instan.
 
 ## Edge Cases & Defensive Programming
 
-- **Nested Scopes**: Makro `task_local!` mendukung masking, di mana scope dalam menimpa (shadow) scope luar. Harus waspada jika Anda menggunakan nama ID yang ambigu, bisa menyebabkan trace span tidak linier.
-- **Men-Spawn Background Task tanpa Scope**: `tokio::spawn` melepaskan context. Jika Anda melakukan `tokio::spawn(async { ... })` di dalam blok, task baru *tidak* secara otomatis mewarisi `TRACE_ID`. Anda harus secara manual membungkusnya lagi: `tokio::spawn(TRACE_ID.scope(id.clone(), async { ... }))` (seperti yang dilakukan oleh library `tracing` dengan `Instrument` trait).
+1. **Panic pada Akses di Luar Scope (`.with()`)**: Jika Anda mengeksekusi `REQUEST_ID.with(...)` tetapi di stack root belum dideklarasikan `.scope(...)`, aplikasi akan langsung *Panic* (unwinding thread). Pastikan middleware di lapis terluar *routing framework* menangani injeksi Task Local ini secara komprehensif, atau tangani panic dengan *fallible API* bawaan (`.try_with()`).
+2. **Drop Overhead dan Memory Retention**: Nilai di dalam `task_local!` akan tetap hidup hingga Scope (Future yang di-wrap) selesai. Memasukkan byte buffer ukuran besar yang berumur panjang (seperti 10MB chunk data) ke Task-local akan menyita memori (RAM) dengan ketat, terutama kalau request timeout ditahan oleh I/O.
+3. **Propagation pada Tokio Spawn Baru**: Saat men-spawn task terpisah (`tokio::spawn(async move { ... })`), *state task_local* milik parent (induk) **TIDAK** di-copy secara otomatis ke *child task* baru. Induk dan Anak memiliki root stack terpisah. Anda harus mengekstraksinya dahulu dan menginjeksinya ulang dengan manual `.scope()` pada task anak yang disinggahi.

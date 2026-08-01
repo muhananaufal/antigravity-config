@@ -1,155 +1,167 @@
-# Template SKILL.md: Standar Penulisan File Indeks Master Skill Bundle
+# Template dan Buku Panduan SKILL.md (Mahakarya Abadi)
 
-Dokumen ini berisi template standar dan panduan penulisan file `SKILL.md` untuk setiap Master Skill Bundle.
+Dokumen ini adalah template definitif dan panduan penyusunan file `SKILL.md`. File ini adalah jantung dari sebuah *Skill Bundle*. Jika `SKILL.md` ditulis dengan buruk, maka seluruh sistem agen akan gagal beroperasi. Kami menetapkan standar yang sangat ketat, tanpa kompromi.
 
----
+## 1. Aturan Hukum Verifikasi
+Setiap modifikasi, pembacaan, atau implementasi yang dipandu oleh `SKILL.md` WAJIB melalui proses verifikasi. Tidak boleh ada asumsi "kode saya pasti benar tanpa dites". Setiap agen wajib menjalankan *Automated Quality Gates* sebelum melapor selesai.
 
-## 1. Struktur Wajib File SKILL.md
+## 2. Template Frontmatter YAML
 
-Setiap file `SKILL.md` WAJIB mengandung 2 komponen utama:
-
-### Komponen A: YAML Frontmatter (Metadata Trigger)
-
-```yaml
----
-name: {ecosystem}-mastery
-description: Gunakan skill ini ketika {daftar kata kunci trigger, mencakup seluruh domain}.
----
-```
-
-**Aturan penulisan deskripsi YAML:**
-1. Awali dengan `"Gunakan skill ini ketika..."`.
-2. Sertakan kata kunci pemicu yang mencakup SEMUA domain di `references/`.
-3. Maksimal 60 kata (~80 token) — ini dibaca di SETIAP percakapan baru.
+Wajib ada di baris pertama `SKILL.md`. Tidak boleh diubah strukturnya, hanya nilainya.
 
 ```yaml
-# ✅ BAIK — dense, trigger-rich, ≤60 kata
 ---
-name: golang-mastery
-description: Gunakan skill ini ketika merancang arsitektur, konkurensi, DB/SQLC, gRPC, HFT, testing, security, distributed systems, K8s Operators, Linux Systems Programming, atau runtime internals di Golang.
----
-
-# ❌ BURUK — terlalu granular (pola Micro-Skill lama)
----
-name: golang-concurrency-engineering
-description: Skill untuk goroutine dan concurrency di Go.
----
-
-# ❌ BURUK — terlalu panjang, membebani token budget
----
-name: golang-mastery
-description: Gunakan skill ini secara otomatis ketika user meminta untuk membuat, merancang, membangun, mengimplementasikan goroutine, channel, mutex, rwmutex, waitgroup, atomic... (200 kata lagi)
+name: "nama-teknologi-mastery"
+description: "Gunakan skill ini ketika merancang arsitektur, optimasi, deployment, atau penyelesaian masalah tingkat lanjut pada [Sebutkan Teknologi]. Mewajibkan standar Top 1%."
+version: "2.0.0"
+author: "Antigravity Meta-Architecture Team"
 ---
 ```
 
----
+## 3. Pilar Revolusioner: Greenfield Protocol & Brownfield Protocol
 
-### Komponen B: Protocol Rules + Routing Table
+Skill Bundle harus cerdas beradaptasi dengan kondisi medan tempur proyek. 
 
-Setelah YAML frontmatter, WAJIB sertakan:
-1. **Core Protocol** — 2 aturan universal (reference loading + no-steering grilling)
-2. **Language/Domain-Specific Quality Gate** — aturan spesifik per ekosistem
-3. **Routing Table** — mapping topik → domain wildcard
+### A. Greenfield Protocol (Dynamic Swarm Scaling)
+Digunakan saat proyek dibuat dari nol (0 file, atau sekadar `README.md`).
+- **Pendekatan:** Skalakan *Subagent Swarm* secara dinamis untuk membangun fondasi secara paralel.
+- **Strategi:**
+  1. Subagent 1 (Arsitek): Membuat kerangka folder dan file konfigurasi awal.
+  2. Subagent 2 (DevOps): Membuat Dockerfile, CI/CD pipeline, dan skrip Makefile.
+  3. Subagent 3 (Security): Mengamankan konfigurasi (misal, helmet, cors, SSL stubs).
 
-```markdown
-## 🔁 Protocol & Routing Table
+### B. Brownfield Protocol (Dynamic Reconnaissance & Partitioning)
+Digunakan saat menangani repositori eksisting/legacy.
+- **Pendekatan:** DILARANG *Big Bang Rewrite*. Lakukan *Dynamic Reconnaissance* (Pengintaian Dinamis) dan pemisahan area (Partitioning).
+- **Strategi:**
+  1. Deteksi *tech stack* (misal parsing `go.mod`, `composer.json`, `package.json`).
+  2. Gunakan `grep_search` untuk memetakan titik masuk/exit sistem (Routing, Controller, Repositories).
+  3. Karantina perubahan baru dengan standar baru tanpa merusak fungsi eksisting.
 
-**Core Protocol:**
-1. WAJIB `view_file` SELURUH file referensi di `references/<domain>/` yang relevan — DILARANG mengarang dari hafalan LLM.
-2. WAJIB sajikan minimal 2-3 opsi netral + trade-off saat Grilling — DILARANG langsung rekomendasikan 1 opsi.
+## 4. Tabel Auto-Detect Niche Domain
 
-**{Bahasa}-Specific Quality Gate:**
-3. WAJIB `{perintah test}` — zero error sebelum lapor selesai.
-4. WAJIB unit test pada modul bisnis utama.
-5. ... (aturan spesifik ekosistem, max 12-15 rules)
+Agen wajib melakukan *parsing* manifes proyek untuk menentukan file Niche mana dari direktori `references/niche/` yang harus dimuat oleh Subagent.
 
-| Topik Task | Domain Referensi |
-| :--- | :--- |
-| {kata kunci domain A + sinonim} | `references/{domain_a}/` |
-| {kata kunci domain B + sinonim} | `references/{domain_b}/` |
+| Deteksi (Regex / Dependency Match) | Kondisi Repositori | File Niche yang Dipicu (`references/niche/...`) | Subagent Role |
+| :--- | :--- | :--- | :--- |
+| `github.com/redis/go-redis` | Proyek Golang menggunakan Redis | `caching_redis_pubsub.md` | Redis Optimization Engineer |
+| `"react": "^18.0.0"` | Proyek Node.js dengan React | `react_concurrent_mode.md` | React Architecture Specialist |
+| `aws/aws-sdk-php` | Proyek Laravel terhubung ke AWS | `aws_vapor_lambda_native.md` | Cloud Native Integrator |
+| `gorm.io/gorm` | Proyek Golang dengan GORM ORM | `database_gorm_patterns.md` | Database Performance DBA |
+
+## 5. Automated Quality Gates (Cross-Platform Terminal Scripts)
+
+Dalam direktori `scripts/`, file otomatisasi penegakan hukum wajib disediakan dalam format cross-platform (`audit_quality_gate.ps1` untuk Windows PowerShell dan `quality_gate.sh` untuk Linux/macOS). Ini adalah contoh skrip mutlak yang harus dipanggil agen setelah setiap fase pengerjaan kritis. DILARANG KERAS menggunakan `grep` UNIX mentah pada skrip PowerShell Windows.
+
+### A. Windows PowerShell Quality Gate (`scripts/audit_quality_gate.ps1`)
+```powershell
+# scripts/audit_quality_gate.ps1
+# DILARANG MENGABAIKAN ERROR DARI SCRIPT INI!
+$ErrorActionPreference = "Stop"
+Write-Host "🚀 Memulai Antigravity Quality Gate (Strict Mode - PowerShell)..." -ForegroundColor Cyan
+
+# 1. Linting & Formatting Check (Contoh Deteksi Polyglot)
+if (Test-Path "go.mod") {
+    Write-Host "🔍 Mendeteksi Golang Project. Menjalankan test & lint..." -ForegroundColor Yellow
+    go test ./... -timeout=5m -v
+} elseif (Test-Path "Cargo.toml") {
+    Write-Host "🔍 Mendeteksi Rust Project. Menjalankan clippy..." -ForegroundColor Yellow
+    cargo clippy -- -D warnings
+} elseif (Test-Path "composer.json") {
+    Write-Host "🔍 Mendeteksi PHP/Laravel Project. Menjalankan stan & tests..." -ForegroundColor Yellow
+    ./vendor/bin/phpstan analyse --level=9
+}
+
+# 2. No-Hardcoded-Secrets Check (Native PowerShell Select-String Tanpa Dependensi Unix Grep!)
+Write-Host "🔑 Memeriksa Hardcoded Secrets..." -ForegroundColor Cyan
+$secrets = Get-ChildItem -Path "./src", "./internal", "./app" -Recurse -Include *.go,*.rs,*.php,*.js,*.ts -ErrorAction SilentlyContinue | 
+           Select-String -Pattern "password\s*[:=]\s*['\""][^'\""]+['\""]", "api_key\s*[:=]\s*['\""][^'\""]+['\""]"
+
+if ($secrets) {
+    Write-Host "❌ ERROR FATAL: Ditemukan kemungkinan hardcoded secret pada file berikut. Pindahkan ke .env!" -ForegroundColor Red
+    $secrets | ForEach-Object { Write-Host " - $($_.Filename):$($_.LineNumber) -> $($_.Line.Trim())" -ForegroundColor Red }
+    exit 1
+}
+
+Write-Host "✅ Quality Gate Berhasil Dilewati. Kode Anda aman dan layak di-deploy." -ForegroundColor Green
 ```
 
-**Aturan penulisan routing table:**
-- Kolom kiri: kata kunci kaya sinonim yang mungkin digunakan user.
-- Kolom kanan: path domain saja — Agent membaca SEMUA file di domain tersebut.
-- 1 baris per domain di `references/`.
+### B. Linux/macOS Bash Quality Gate (`scripts/quality_gate.sh`)
+```bash
+#!/usr/bin/env bash
+# scripts/quality_gate.sh
+# DILARANG MENGABAIKAN ERROR DARI SCRIPT INI!
+set -euo pipefail
 
----
+echo "🚀 Memulai Antigravity Quality Gate (Strict Mode - Bash)..."
 
-## 2. Panjang SKILL.md
+# 1. Security Audit
+if [ -f "package.json" ]; then
+    npm audit --audit-level=high
+elif [ -f "Cargo.toml" ]; then
+    cargo audit
+fi
 
-**Tidak ada batas baris maksimum.** SKILL.md yang efektif adalah yang:
-- Semua protocol rules spesifik, actionable, dan tidak redundan satu sama lain.
-- Routing table mencakup SEMUA domain tanpa ada yang terlewat.
-- Tidak ada padding atau rule generik yang sudah ditangani AGENTS.md.
+# 2. No-Hardcoded-Secrets Check (Bash Ripgrep / Grep Fallback)
+echo "🔑 Memeriksa Hardcoded Secrets..."
+if command -v rg &> /dev/null; then
+    if rg -i "password\s*[:=]\s*[\"'][^\"']+[\"']" ./src/ 2>/dev/null; then
+        echo "❌ ERROR: Ditemukan hardcoded secret! Pindahkan ke .env!"
+        exit 1
+    fi
+elif grep -rEi "password\s*[:=]\s*[\"'][^\"']+[\"']" ./src/ 2>/dev/null; then
+    echo "❌ ERROR: Ditemukan hardcoded secret! Pindahkan ke .env!"
+    exit 1
+fi
 
-> Contoh: `golang-mastery/SKILL.md` yang optimal adalah ~90-120 baris dengan 27 specific rules + 22 domain routing table — bukan 45 baris dengan hanya 2 generic rules.
-
----
-
-## 3. Contoh SKILL.md Lengkap (Production-Ready)
-
-```markdown
----
-name: golang-mastery
-description: Gunakan skill ini ketika merancang arsitektur, konkurensi, DB/SQLC, gRPC, HFT, testing, security, distributed systems, K8s Operators, Linux Systems Programming, atau runtime internals di Golang.
----
-
-# Golang Mastery
-
-SSOT arsitektur & rekayasa sistem Golang enterprise & high-throughput.
-
-## 🔁 Protocol & Routing Table
-
-**Core Protocol:**
-1. WAJIB `view_file` SELURUH file referensi di `references/<domain>/` — DILARANG mengarang dari hafalan LLM.
-2. WAJIB sajikan minimal 2-3 opsi netral + trade-off saat Grilling — DILARANG label "(Recommended)".
-
-**Go-Specific Quality Gate:**
-3. WAJIB `go test -race ./...` — bebas data race sebelum lapor selesai.
-4. WAJIB `golangci-lint run` — zero lint error sebelum merge.
-5. WAJIB unit test `_test.go` pada modul bisnis utama.
-6. WAJIB Clean Architecture: DTO → Handler → Service → Repository.
-7. WAJIB `context.WithTimeout` pada SEMUA panggilan DB/Redis/gRPC/HTTP.
-8. WAJIB Graceful Shutdown: `os.Signal` + drain DB/Redis sebelum exit.
-
-| Topik Task | Domain Referensi |
-| :--- | :--- |
-| GMP scheduler, GC, escape analysis, goroutine stack, generics, CGO | `references/runtime_internals/` |
-| Goroutine leak, channel fan-out/fan-in, sync primitives, context, atomic | `references/concurrency/` |
-| sqlc + pgx, ACID, locking, migration, cache L1/L2/L3, N+1, pool | `references/db_sqlc/` |
+echo "✅ Quality Gate Berhasil Dilewati."
 ```
 
----
+## 6. Diagram ASCII: Alur Routing Protokol
 
-## 4. Anti-Patterns dalam Penulisan SKILL.md
-
-### ❌ Anti-Pattern 1: Protocol Rules yang Overlap dengan AGENTS.md
-```markdown
-# SALAH — rule ini sudah ada di AGENTS.md global:
-3. WAJIB gunakan Bahasa Indonesia dalam respon.
-4. WAJIB edit presisi dengan replace_file_content.
-5. WAJIB jalankan linter sebelum selesai.
+```ascii
+                      [ USER REQUEST ]
+                             |
+                     (Baca SKILL.md)
+                             |
+           +-----------------+-----------------+
+           |                                   |
+    [0 File Ditemukan]                [Proyek Eksisting]
+    Greenfield Protocol               Brownfield Protocol
+           |                                   |
+   Spawn Arsitek Subagent          Deteksi Manifes (go.mod dkk)
+   Spawn DevOps Subagent           Grep Routing & Controller
+   Spawn Security Subagent         Isolasi Modifikasi (No Big Bang)
+           |                                   |
+   Parallel Code Gen                 Targeted Code Injection
+           |                                   |
+           +-----------------+-----------------+
+                             |
+                   Jalankan quality_gate.sh
+                             |
+                     Laporan Selesai (SSOT)
 ```
-**Kenapa berbahaya**: Duplikasi = token waste. Rules di SKILL.md harus EKSKLUSIF — hal-hal yang spesifik untuk ekosistem ini yang tidak ada di AGENTS.md.
 
-### ❌ Anti-Pattern 2: Routing Table dengan Path File Spesifik
-```markdown
-# SALAH — menunjuk file tertentu, bukan domain wildcard:
-| Goroutine | `references/concurrency/goroutine_lifecycle_leaks.md` |
+## 7. Anti-Patterns Kritis (Zero-Tolerance)
 
-# BENAR — domain wildcard:
-| Goroutine leak, channel, sync primitives, context | `references/concurrency/` |
-```
-**Kenapa berbahaya**: Jika ada file baru di domain tersebut, routing table tidak akan mentrigger pembacaannya. Wildcard domain memastikan SEMUA file terbaca.
+❌ **Anti-Pattern 1: Mengabaikan Skrip Verifikasi**
+**Salah:** Agen mengubah kode, lalu langsung merespons "Sudah saya perbaiki." tanpa menjalankan *tests* atau linter.
+**Benar:** Agen wajib mengeksekusi `./scripts/quality_gate.sh` via tool `run_command` dan hanya berani melapor jika output *exit code* adalah 0.
 
----
+❌ **Anti-Pattern 2: Merusak Brownfield dengan Gaya Greenfield**
+**Salah:** Agen melihat repositori *legacy* yang tidak memakai arsitektur *Clean Code*, lalu memutuskan untuk memindahkan paksa 50 file ke struktur baru dalam satu langkah, merusak seluruh dependency paths.
+**Benar:** Terapkan prinsip *Strangler Fig*. Tambahkan fitur baru dengan struktur rapi di folder `v2/`, sambil membiarkan kode lama bekerja. Refaktor kode lama hanya jika diminta secara eksplisit.
 
-## 5. Perbedaan SKILL.md vs AGENTS.md
+## 8. Production Edge Cases
 
-| Aspek | `SKILL.md` | `AGENTS.md` |
-|---|---|---|
-| **Scope** | Spesifik per ekosistem (Go, Rust, dll) | Global untuk semua task |
-| **Trigger** | Hanya saat topik skill relevant | Setiap percakapan |
-| **Isi** | Protocol ekosistem + routing table | SWE quality gate, workflow, subagent protocol |
-| **Contoh rule** | `WAJIB go test -race ./...` | `WAJIB review mandiri sebelum lapor selesai` |
+1. **Edge Case 1: Ketiadaan Toolchains di Mesin User**
+   - **Kondisi:** Skrip `quality_gate.sh` gagal karena mesin lokal pengguna (Windows) tidak memiliki `golangci-lint` atau `cargo-audit`.
+   - **Penanganan:** Agen wajib mampu mendeteksi ketiadaan dependensi dari output error `run_command`. Agen harus mem-fallback ke inspeksi manual terbatas (menggunakan `grep_search` regex pola anti-pattern) ATAU merekomendasikan instalasi *toolchain* via instruksi OS (misal `choco install` atau `go install`).
+
+2. **Edge Case 2: Dependensi Melingkar (Circular Dependencies) saat Auto-Detect**
+   - **Kondisi:** Saat agen menjalankan *Brownfield Protocol*, analisis memori mendeteksi siklus dependensi antara modul A dan Modul B yang sangat rumit, menyebabkan Subagent terjebak dalam *infinite loop* perbaikan.
+   - **Penanganan:** Agen wajib memiliki ambang batas rekursi. Jika linter gagal di poin yang sama >3 kali, hentikan eksekusi, buat *Artifact* markdown (`circular_dep_report.md`), dan lemparkan status ke User dengan opsi "Zero-Steering Grilling" untuk menyepakati strategi pemutusan dependensi.
+
+3. **Edge Case 3: Mixed Ecosystems File Naming Collision**
+   - **Kondisi:** Proyek menggunakan Next.js (TypeScript) di folder `/frontend` dan Laravel (PHP) di `/backend`, menyebabkan alat analisis global tersandung dengan file `.env` yang ganda.
+   - **Penanganan:** `SKILL.md` wajib menginstruksikan bahwa setiap eksekusi terminal (*run_command*) wajib diarahkan tepat ke sub-direktori spesifik menggunakan parameter `Cwd`. Agen induk dilarang keras mengeksekusi script analisis dari root directory tanpa *context isolation*.

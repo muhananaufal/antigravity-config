@@ -1,93 +1,122 @@
-# eBPF TC Network Filters
+# eBPF Traffic Control (TC) Classifier & Action via Aya
 
-## Konsep Utama
-Traffic Control (TC) adalah subsistem jaringan Linux yang berada setelah XDP. Meskipun sedikit lebih lambat dari XDP (karena beroperasi pada `sk_buff` yang sudah teralokasi), TC mendukung egress (paket keluar) di mana XDP hanya mendukung ingress. TC juga memungkinkan injeksi, modifikasi struktur paket yang kompleks (mangling), dan redireksi.
+## Konsep Utama & Arsitektur
+eBPF Traffic Control (TC) bekerja pada layer egress dan ingress dari qdisc (queueing discipline) sistem kernel Linux. Berbeda dengan XDP yang hanya bekerja pada lapisan ingress terendah (RX queue), TC memungkinkan inspeksi dan modifikasi paket baik sebelum meninggalkan host (egress) maupun setelah diproses oleh network driver namun sebelum masuk ke routing layer (ingress).
 
-## Arsitektur & Flow
+Melalui `aya-rs`, kita dapat membuat classifier/action TC di Rust untuk:
+1. **Bandwidth Shaping & QOS**: Mengklasifikasikan trafik dan mengirimkannya ke class qdisc yang tepat.
+2. **Packet Mangling**: Memodifikasi payload secara in-flight (misalnya enkapsulasi tunneling).
+3. **Pinning Maps**: Berbagi data antar eBPF programs atau bahkan saat user-space agent restart melalui `bpffs`.
+
+### Diagram Arsitektur: TC Ingress & Egress Pipeline
 ```text
-[ Local Application ]
-      | (Egress TC eBPF Hook) <-- TC_ACT_OK / TC_ACT_SHOT
-[ TCP/IP Stack ]
-      | (Ingress TC eBPF Hook) <-- TC_ACT_OK / TC_ACT_SHOT
-[ XDP Hook ] 
-      |
-[ Network Interface ]
+           (Network Stack / Sockets)
+                 |            ^
+          Egress |            | Ingress
+                 v            |
+        [TC Egress Hook] [TC Ingress Hook]
+        (Rust eBPF Prog) (Rust eBPF Prog)
+        - Modify Payload - Apply rate limits
+        - Route to qdisc - Parse Headers
+                 |            ^
+                 v            |
+            (NIC Driver TX / RX)
 ```
 
-## Production-Ready Code
-*eBPF Program (`my-tc-ebpf/src/main.rs`):*
+## Kode Produksi eBPF TC
+Kode berikut menunjukkan TC program yang memodifikasi ToS (Type of Service) byte di IPv4 header (packet mangling) untuk paket spesifik.
+
 ```rust
 #![no_std]
 #![no_main]
 
 use aya_ebpf::{
-    macros::classifier,
-    programs::TcContext,
-    bindings::TC_ACT_OK,
+    bindings::TC_ACT_PIPE,
     bindings::TC_ACT_SHOT,
+    macros::{classifier, map},
+    maps::HashMap,
+    programs::TcContext,
 };
+use core::mem;
 use network_types::{
     eth::{EthHdr, EtherType},
     ip::Ipv4Hdr,
-    tcp::TcpHdr,
 };
 
+#[map]
+static mut VIP_IPS: HashMap<u32, u8> = HashMap::<u32, u8>::with_max_entries(256, 0);
+
 #[classifier]
-pub fn tc_ingress(ctx: TcContext) -> i32 {
-    match try_tc_ingress(ctx) {
-        Ok(action) => action,
-        Err(_) => TC_ACT_SHOT, // Drop packet jika error parsing
+pub fn tc_mangle_tos(ctx: TcContext) -> i32 {
+    match try_mangle_tos(&ctx) {
+        Ok(ret) => ret,
+        Err(_) => TC_ACT_SHOT,
     }
 }
 
-fn try_tc_ingress(ctx: TcContext) -> Result<i32, ()> {
-    // TC menggunakan load_bytes karena packet bisa saja non-linear (fragmented dalam sk_buff)
-    let eth_len = core::mem::size_of::<EthHdr>();
+#[inline(always)]
+fn ptr_at<T>(ctx: &TcContext, offset: usize) -> Result<*mut T, ()> {
+    let start = ctx.data();
+    let end = ctx.data_end();
+    let len = mem::size_of::<T>();
+
+    if start + offset + len > end {
+        return Err(());
+    }
+    // Note: TC programs dapat melakukan memodifikasi packet payload (mem-mutasi)
+    Ok((start + offset) as *mut T)
+}
+
+fn try_mangle_tos(ctx: &TcContext) -> Result<i32, ()> {
+    let ethhdr: *mut EthHdr = ptr_at(ctx, 0)?;
     
-    // Baca Ethernet header
-    let eth_hdr = ctx.load::<EthHdr>(0).map_err(|_| ())?;
-    if eth_hdr.ether_type != EtherType::Ipv4 {
-        return Ok(TC_ACT_OK);
+    if unsafe { (*ethhdr).ether_type } != EtherType::Ipv4 {
+        return Ok(TC_ACT_PIPE);
     }
 
-    // Baca IPv4 header
-    let ipv4_len = core::mem::size_of::<Ipv4Hdr>();
-    let ipv4_hdr = ctx.load::<Ipv4Hdr>(eth_len).map_err(|_| ())?;
-    
-    // Pastikan ini adalah TCP
-    if ipv4_hdr.protocol != 6 { // 6 is TCP
-        return Ok(TC_ACT_OK);
+    let ipv4hdr: *mut Ipv4Hdr = ptr_at(ctx, EthHdr::LEN)?;
+    let dst_ip = u32::from_be(unsafe { (*ipv4hdr).dst_addr });
+
+    // Jika ini IP VIP, tingkatkan prioritas paket dengan memodifikasi ToS byte.
+    let is_vip = unsafe { VIP_IPS.get(&dst_ip) };
+    if is_vip.is_some() {
+        // eBPF verifier mengizinkan modifikasi direct via pointer di TC
+        unsafe {
+            // Set ToS / DSCP value ke high priority (contoh: 0x2E = Expedited Forwarding)
+            (*ipv4hdr).tos = 0x2E;
+            
+            // PENTING: Karena kita mengubah IP header, checksum IPv4 menjadi tidak valid.
+            // Dalam kode kernel produksi riil, kita HARUS meng-update checksum menggunakan
+            // helper function eBPF seperti `bpf_l3_csum_replace`.
+            // Jika ini diabaikan, paket akan di-drop di router hop berikutnya.
+        }
     }
 
-    let tcp_len = core::mem::size_of::<TcpHdr>();
-    // Menentukan IP header length yang sebenarnya dari ihl (Header length in 32-bit words)
-    let ip_hdr_size = (ipv4_hdr.ihl() * 4) as usize;
-    let tcp_offset = eth_len + ip_hdr_size;
+    Ok(TC_ACT_PIPE)
+}
 
-    // Baca TCP header
-    let tcp_hdr = ctx.load::<TcpHdr>(tcp_offset).map_err(|_| ())?;
-    
-    let dest_port = u16::from_be(tcp_hdr.dest);
-    
-    // Misalnya, drop akses ke port spesifik (misal port 22 SSH) dari host nakal
-    if dest_port == 22 {
-        return Ok(TC_ACT_SHOT);
-    }
-
-    Ok(TC_ACT_OK)
+#[cfg(not(target_os = "bpf"))]
+#[panic_handler]
+fn panic(_info: &core::panic::PanicInfo) -> ! {
+    loop {}
 }
 ```
 
 ## Anti-Patterns
 
-1. **Akses Data Secara Pointer Langsung (`ctx.data()`) pada Paket Besar**
-   - *Mengapa berbahaya:* Berbeda dengan XDP di mana seluruh frame jaringan berbentuk linear, pada hook TC struktur `sk_buff` (socket buffer) mungkin ter-fragment (paged). Mengakses langsung lewat `ptr_at` (seperti di XDP) bisa panik atau gagal diverifikasi kernel untuk payload setelah header.
-   - *Solusi:* Gunakan fungsi helper bawaan context `bpf_skb_load_bytes` (di dalam macro aya-rs diabstraksi sebagai `ctx.load::<T>(offset)`).
+### 1. Mengabaikan IP/TCP Checksum Setelah Mutasi Data
+**Penjelasan:** Ketika TC program memodifikasi packet payload atau IP header (seperti TTL atau ToS), L3 dan L4 checksum menjadi invalid.
+**Bahaya:** OS atau router tujuan akan membuang paket tersebut secara diam-diam karena corrupt. Selalu panggil BPF helpers (`bpf_l3_csum_replace`, `bpf_l4_csum_replace`) untuk menambal checksum tanpa mengkalkulasi ulang seluruh payload.
 
-2. **Lupa Memodifikasi Checksum Setelah Mangling**
-   - *Mengapa berbahaya:* Jika Anda menggunakan TC eBPF untuk mengubah isi paket (misalnya NAT / modifikasi IP atau Port), mengubah bit pada data tanpa menghitung ulang L3/L4 checksum akan menyebabkan paket didrop oleh network stack OS tujuan.
-   - *Solusi:* Gunakan fungsi `bpf_l3_csum_replace` dan `bpf_l4_csum_replace` untuk secara efisien mem-patch header checksum.
+### 2. Tidak Menggunakan BPF FS Pinning untuk Stateful Maps
+**Penjelasan:** Secara default, BPF map akan hancur dan memory di-free ketika file descriptor user-space program yang men-loadnya tertutup.
+**Bahaya:** Jika user-space control plane (Rust agent) crash atau restart, statistik trafik bandwidth di map akan hilang semua. Selalu pin map ke `/sys/fs/bpf/` sehingga map tersebut persisten meskipun user-space process mati.
 
 ## Edge Cases & Defensive Programming
-- **Header Length Berubah-ubah:** Header IPv4 memiliki opsi dinamis (variabel `ihl`). Jangan pernah berasumsi bahwa header IPv4 selalu persis 20 byte. Kalkulasikan ukuran absolut seperti `(ihl * 4)` untuk mencari offset L4 (TCP/UDP) secara presisi.
-- **Hook Direction (Ingress/Egress):** Selalu pasang program classifier Anda pada direktif qdisc yang tepat dari userspace (misal `tc qdisc add dev eth0 clsact`). Jika Anda salah memasang program Egress ke interface Ingress, logika inspeksi flow-nya akan terbalik.
+
+1. **Paket Melebihi `skb->len` vs `skb->data_end`**:
+   Di lingkungan TC (sk_buff), `data_end` hanya menunjuk ke akhir dari data linear (linear data buffer). Sebagian paket mungkin terfragmentasi dan masuk ke *paged data* di kernel (non-linear). Anda harus menggunakan helper `bpf_skb_pull_data` untuk menarik data masuk ke buffer linear sebelum mencoba membaca via pointer.
+2. **Konflik Multi-Attach pada QDisc Ingress**:
+   Banyak aplikasi sekuriti/container (Cilium, Calico, Datadog) meng-attach program TC pada qdisc `clsact`. Saat men-deploy, pastikan Anda memahami *priority* (prio) eBPF attachment agar program TC Anda tidak saling menimpa atau men-drop paket prematur sebelum service mesh memprosesnya.
+3. **Memperbesar Ukuran Paket (Mangling Encap)**:
+   Modifikasi paket yang menyisipkan header baru (misal: VXLAN tunnel) tidak bisa hanya sekadar mengubah memory. Buffer harus dialokasikan secara eksplisit dengan memanggil BPF helper seperti `bpf_skb_change_tail` atau `bpf_skb_adjust_room`. Pointer harus di-*re-validate* setelah setiap pemanggilan fungsi ini karena verifier membuang memori state pointer lama.

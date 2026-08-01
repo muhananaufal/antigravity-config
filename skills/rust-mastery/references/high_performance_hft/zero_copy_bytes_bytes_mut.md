@@ -1,58 +1,77 @@
-# Zero-Copy dengan Bytes dan BytesMut
+# Zero-Copy bytes dengan Crate `bytes`
 
-## Konsep Utama dan Penggunaan
-Dalam pemrosesan *network stack*, menyalin payload (data) dari memori kernel, lalu ke buffer I/O, dan lalu ke struktur data aplikasi sangat membebani CPU dan memori (Memory Bandwidth Bottleneck). 
+Dalam High-Performance Web Servers, HTTP Proxies, dan sistem HFT, menduplikasi (meng-clone) buffer array `u8` saat mentransfer paket dari jaringan, merender protokol (framing), hingga menyalurkan ke worker thread adalah "kematian" dari sisi performa (Memory Allocation Thrashing).
 
-Crate `bytes` menyediakan tipe `Bytes` dan `BytesMut` yang secara internal menggunakan ARC (Atomic Reference Counting) untuk *shallow clone*. Anda dapat melakukan *slicing* (mengambil potongan payload) dan mendistribusikannya ke berbagai thread/task secara **zero-copy**. Sangat penting untuk parser protokol finansial (FIX, FAST) yang menerima stream data TCP berkecepatan gigabit.
+Crate `bytes` (khususnya `Bytes` dan `BytesMut`) menyelesaikan ini lewat pendekatan **Zero-Copy Data Structures**. Alih-alih membuat malloc baru di heap untuk array data, `Bytes` mempekerjakan *atomic reference counting* secara cerdas di mana beberapa buffer/slice dapat menunjuk (point) pada serpihan (slice) dari buffer utama yang sama tanpa menyalin bit-bit data sedikit pun.
 
-## Arsitektur: Bytes ARC Representation
-```text
-[ Bytes 1 (Slice 0..5) ]      [ Bytes 2 (Slice 5..10) ]
-        \                             /
-         \     [ ARC Pointer ]       /
-          \---->[ Shared Data Heap ]<---
-                [ H, E, L, L, O, W, O, R, L, D ]
-                
-(Tidak ada duplikasi "HELLO" atau "WORLD" di heap, hanya referensi)
+## Arsitektur Reference-Counted Buffer Memory
+
+```ascii
+[ TCP Read Socket Buffer Heap - 1000 bytes ] (Atomic RefCount: 2)
+  | 0                                                999 |
+  +------------------------------------------------------+
+  | Header Data   |   Payload Packet 1   |   Packet 2    |
+  +------------------------------------------------------+
+         ^                     ^
+         |                     | (Zero-Copy Slicing)
+         |                     +-----------------------+
+   [ Bytes (Header) ]                            [ Bytes (Payload) ]
+   - ptr: 0                                      - ptr: 16
+   - len: 16                                     - len: 480
 ```
+> Baik Header maupun Payload memiliki referensi ke lokasi RAM heap yang sama!
 
-## Kode Production-Ready: Zero-Copy Network Parser
+## Produksi-Ready Code: Framer Zero-Copy Jaringan
+
 ```rust
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 
-/// Mensimulasikan parser paket finansial yang efisien
-pub struct MarketDataPacket {
-    pub symbol: Bytes, // Zero-copy referensi ke payload asli
-    pub price: u64,
+/// Decoder protokol biner sederhana yang membaca 4 byte (u32) panjang data,
+/// lalu mengekstrak frame tersebut TANPA menyalin buffer payload (Zero-Copy).
+pub struct NetworkFramer {
+    buffer: BytesMut,
 }
 
-pub fn parse_packet(mut payload: Bytes) -> Result<MarketDataPacket, &'static str> {
-    if payload.len() < 12 {
-        return Err("Packet too short");
+impl NetworkFramer {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            buffer: BytesMut::with_capacity(capacity),
+        }
     }
 
-    // Ekstraksi 4 byte untuk simbol, TIDAK ADA COPY HEAP
-    // split_to memotong referensi asli dan mereturn referensi baru
-    let symbol = payload.split_to(4);
+    /// Menambahkan data ke dalam internal buffer framer dari jaringan
+    pub fn extend_from_slice(&mut self, data: &[u8]) {
+        self.buffer.extend_from_slice(data);
+    }
 
-    // Mengambil sisa payload sebagai data integer (menggunakan trait Buf)
-    let price = payload.get_u64_le();
+    /// Memproses buffer dan mencoba mengekstrak satu paket utuh
+    /// Ini mengembalikan `Bytes` yang merupakan pointer *zero-copy* ke buffer asal.
+    pub fn decode_frame(&mut self) -> Option<Bytes> {
+        // Frame memerlukan setidaknya 4 bytes header (panjang frame)
+        if self.buffer.len() < 4 {
+            return None;
+        }
 
-    Ok(MarketDataPacket { symbol, price })
-}
+        // Lihat (peek) byte tanpa memajukan pointer
+        let mut temp_buf = &self.buffer[..4];
+        let frame_length = temp_buf.get_u32() as usize;
 
-/// Mensimulasikan pembangunan buffer dinamis (BytesMut)
-pub fn create_outgoing_message(symbol: &[u8], price: u64) -> Bytes {
-    // Alokasi awal yang mencegah re-allocations
-    let mut buf = BytesMut::with_capacity(64);
-    
-    // Menulis ke buffer menggunakan trait BufMut
-    buf.put(symbol);
-    buf.put_u64_le(price);
-    
-    // freeze() mengubah BytesMut menjadi Bytes (Read-Only) dalam O(1) time
-    // Tidak ada alokasi heap baru, hanya perubahan state internal flag.
-    buf.freeze()
+        let total_frame_size = 4 + frame_length;
+
+        // Jika keseluruhan paket belum diterima dari TCP, tunggu hingga buffer penuh.
+        if self.buffer.len() < total_frame_size {
+            return None;
+        }
+
+        // Hapus 4 bytes header. Advance memodifikasi buffer utama inplace
+        self.buffer.advance(4);
+
+        // Ekstrak (split) isi payload secara zero-copy!
+        // Split_to merobek sebagian buffer, meninggalkannya utuh untuk frame berikutnya
+        let frame = self.buffer.split_to(frame_length);
+
+        Some(frame.freeze()) // Freeze mengubah mutable buffer jadi immutable `Bytes`
+    }
 }
 
 #[cfg(test)]
@@ -60,27 +79,48 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_zero_copy_parsing() {
-        let raw_data = b"AAPL\x00\x00\x00\x00\x00\x00\x00\x01"; // "AAPL" + 1_u64
-        let bytes_data = Bytes::from_static(raw_data);
+    fn test_zero_copy_decode() {
+        let mut framer = NetworkFramer::new(1024);
         
-        let packet = parse_packet(bytes_data).unwrap();
-        assert_eq!(&packet.symbol[..], b"AAPL");
-        assert_eq!(packet.price, 72057594037927936); // Representation of bytes in LE
+        // Buat packet: Panjang 5 byte, payload "HELLO"
+        let mut mock_packet = BytesMut::new();
+        mock_packet.put_u32(5);
+        mock_packet.put_slice(b"HELLO");
+        
+        // Packet kedua yang datang sekalian: Panjang 5, payload "WORLD"
+        mock_packet.put_u32(5);
+        mock_packet.put_slice(b"WORLD");
+
+        framer.extend_from_slice(&mock_packet);
+
+        let frame1 = framer.decode_frame().unwrap();
+        assert_eq!(&frame1[..], b"HELLO");
+
+        let frame2 = framer.decode_frame().unwrap();
+        assert_eq!(&frame2[..], b"WORLD");
+
+        assert!(framer.decode_frame().is_none());
     }
 }
 ```
 
 ## Anti-Patterns
 
-1. **Iterasi Byte per Byte di Crate `bytes`**
-   - *Bahaya*: Melakukan `for byte in my_bytes.iter()` secara manual lebih lambat daripada operasi slice murni (`[..]`).
-   - *Solusi*: Casting ke slice standar via `as_ref()` (`&[u8]`) jika Anda perlu menggunakan pencocokan memori intrinsik (mis. `memchr`) atau memparsing byte-per-byte.
+1. **Mengonversi `Vec<u8>` ke `Bytes` Berkali-kali dalam Loop**
+   **Mengapa berbahaya:** Jika Anda membaca stream TCP menjadi `Vec<u8>` lalu setiap frame di `Bytes::from(vec)`, ini BUKAN zero-copy karena ia melakukan alokasi dan memindahkan data dari array Vec yang tak kompatibel.
+   **Solusi:** Gunakan `BytesMut` langsung sejak awal saat membaca socket via `tokio::io::AsyncReadExt::read_buf()`.
 
-2. **Terlalu Sering Memanggil `split` pada Partisi Kecil**
-   - *Bahaya*: Setiap kali `Bytes::split` dipanggil, tipe ini harus merawat ARC dan *pointer offsets*. Jika Anda membelah paket menjadi puluhan kepingan ukuran 1 byte menggunakan `Bytes`, biaya manajemen reference counting akan melebihi biaya memcpy array 10 byte biasa.
-   - *Solusi*: Tipe `Bytes` bersinar untuk slice besar atau *payload* yang diteruskan ke channel Toko. Untuk primitive data ringan (seperti u8, u32), cukup copy datanya (`get_u32()`).
+2. **`reserve()` yang membabi buta pada `BytesMut`**
+   **Mengapa berbahaya:** Jika `reserve()` terus dipanggil pada kapasitas penuh `BytesMut`, kompilator akan memicu re-alokasi array ke lokasi RAM yang baru, karena block sebelumnya dipin oleh atomic reference di pointer `Bytes` lainnya. Ini memicu lonjakan memori OOM (Out-of-Memory).
+   **Solusi:** Selalu kontrol ukuran split dan izinkan garbage collection (saat `Bytes` drop) me-reclaim blok memori.
 
-## Edge Cases & Defensive Engineering
-- **Capacity Reservation**: Saat mengumpulkan data dari TCP stream via `tokio::io::AsyncReadExt::read_buf`, pastikan `BytesMut` memiliki *reserve capacity*. Jika ruang habis, `BytesMut` akan diam-diam mengalokasikan heap baru yang sangat lambat.
-- **Vulnerability - Memory Leak (Ghost Retention)**: Jika Anda mengunduh paket sebesar 10MB ke dalam `Bytes`, lalu men-*slice* (split) 4 byte header untuk disimpan permanen (misal: di cache HashMap) sedangkan Anda membuang sisa data 10MB-nya... 10MB data aslinya **TIDAK AKAN** dibebaskan. Hal ini terjadi karena 4 byte slice yang tersimpan menahan seluruh ARC pointer asli! Dalam kasus ini, alih-alih `split`, salin 4 byte tersebut ke `Vec<u8>` baru agar blok 10MB bisa di-*drop*.
+## Edge Cases dan Defensive Programming
+
+1. **Memory Leak Akibat Pointer Kecil:**
+   Anggap Anda mengalokasikan TCP Buffer 8 Megabytes. Anda me-split 12 Bytes dari buffer tersebut dan memegangnya erat-erat dalam sebuah variabel di state aplikasi (Long Lived). Selama 12 Bytes itu hidup, struct `Bytes` menjaga reference count blok yang berukuran **8 MB tetap eksis**! Ini adalah leak semantik memori pasif. Jika butuh data statis jangka panjang dari payload kecil, lebih baik Clone (Copy) 12 bytes itu dan hancurkan `Bytes`-nya.
+
+2. **DDoS Attack via Incomplete Frames (Slowloris):**
+   Client TCP dapat mengirimkan Header Frame yang menjanjikan `length = 2GB`, lalu mengirim 1 byte per detik. Metode decoding akan membuat `BytesMut` bertumbuh secara gila-gilaan karena `self.buffer.len() < total_frame_size` terus dieksekusi. Pertahanan: Terapkan limit keras (hard threshold limit) maksimal payload size pada `get_u32()`.
+
+3. **Mutable Freeze/Thaw Overhead:**
+   Memanggil `freeze()` pada `BytesMut` yang belum dipisahkan dari slice lain mengharuskan promosi *inline buffer* ke heap. Gunakan `.freeze()` dengan bijak di tahap akhir pipeline, dan pastikan read-only worker yang mengkonsumsi paket tersebut.

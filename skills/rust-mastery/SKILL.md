@@ -5,77 +5,86 @@ description: Gunakan skill ini ketika merancang arsitektur, Borrow Checker memor
 
 # Rust Mastery
 
-SSOT arsitektur & rekayasa Rust systems & enterprise.
+SSOT arsitektur & rekayasa sistem Rust enterprise, systems programming, dan ultra-low latency (31 Domain, 190 File Mahakarya).
 
-## 🔁 Protocol & Routing Table
+## 🔁 Greenfield Protocol (Init Proyek dari Nol — Dynamic Swarm Scaling)
 
-**Core Protocol:**
-1. WAJIB `view_file` SELURUH file referensi di `references/<domain>/` yang relevan — DILARANG mengarang dari hafalan LLM.
-2. WAJIB sajikan minimal 2-3 opsi netral + trade-off saat Grilling — DILARANG langsung rekomendasikan 1 opsi.
+LLM secara alami akan mengambil jalan pintas (laziness) dan berisiko menghasilkan kode yang gagal compile (*Borrow Checker / Lifetime error*) atau *Undefined Behavior* di block `unsafe` jika disuruh membaca puluhan file seiring waktu. Untuk menjamin standar Top 1% diterapkan 100%, **WAJIB gunakan protokol Dynamic Swarm Subagent (Elastis)** saat inisialisasi **project baru dari nol (empty folder / new repository / cargo new)**:
 
-**Rust-Specific Quality Gate:**
-3. WAJIB `cargo test` + `cargo clippy -- -D warnings` — zero warning/error sebelum lapor selesai.
-4. WAJIB `cargo miri test` pada setiap blok `unsafe` — buktikan bebas Undefined Behavior (UB).
-5. WAJIB unit test `#[cfg(test)]` pada modul logika bisnis utama (Auth, Payment, State Machine).
-6. WAJIB Clean Architecture: **DTO → Handler → Service → Repository/Entity**. DILARANG logika bisnis di Handler.
-7. WAJIB Strongly-Typed Error: `thiserror` Custom Enum. DILARANG `map_err(|_| ...)` generik.
-8. WAJIB Graceful Shutdown: `tokio::signal::ctrl_c` + SIGTERM handler + drain DB/Redis sebelum exit.
-9. WAJIB validasi & sanitasi payload masuk sebelum menyentuh layer Service/DB (`validator` crate).
-10. WAJIB Tokio Cancellation Safety: semua branch `tokio::select!` WAJIB cancellation-safe — DILARANG mutable state melintasi `await` di branch yang bisa dibatalkan.
-11. WAJIB isolasi blocking I/O & heavy CPU dari Tokio worker thread via `tokio::task::spawn_blocking()`.
-12. WAJIB cegah Reference Cycle: gunakan `Weak<T>` untuk back-reference di data structure berarah/callback — DILARANG circular `Arc<T>`.
-13. WAJIB konfigurasi Connection Pool eksplisit (max_connections, idle_timeout, lifetime) — DILARANG default tanpa batas.
+1. **Fase Inisialisasi (DILARANG MENEBAK / HALUSINASI):** Saat user meminta inisiasi project baru, Agen Utama DILARANG langsung membuat kode atau `implementation_plan.md` tanpa konsultasi referensi.
+2. **Dynamic Swarm Summon (`pro` tier):** Agen Utama WAJIB memanggil `invoke_subagent` untuk men-spawn minimal 3 hingga >8 subagent secara paralel sesuai kompleksitas proyek (Dynamic Scaling):
+   - **3 Subagent Core Tetap (Mandatory Core Coverage):**
+     - **Subagent 1 (Memory, Traits & Unsafe Core):** Wajib `view_file` ke SEMUA file di `references/core_memory_ownership/`, `references/type_system_traits/`, `references/unsafe_ffi_internals/`, dan `references/docker_container_standards/`.
+     - **Subagent 2 (Async, Web & Reliability Core):** Wajib `view_file` ke SEMUA file di `references/async_tokio_concurrency/`, `references/web_microservices/`, `references/error_handling_resilience/`, dan `references/testing_fuzzing_benchmarking/`.
+     - **Subagent 3 (Performance, Security & Storage Core):** Wajib `view_file` ke SEMUA file di `references/high_performance_hft/`, `references/distributed_consensus_storage/`, `references/networking_protocols_grpc/`, dan `references/cybersecurity_cryptography/`.
+   - **Subagent Niche DINAMIS (1 Subagent per Domain Terdeteksi):** 
+     - Agen utama mengecek tabel **Auto-Detect Niche Domain** di bawah. Untuk **SETIAP 1 domain niche** yang cocok dengan proyek (misal: `wasm_systems/`, `blockchain_smart_contracts/`, `game_engine_bevy/`), WAJIB spawn **1 Subagent Dedikatif terpisah**. (Jika terdeteksi 3 domain niche, maka summon 3 Core + 3 Niche = **6 Subagents paralel**!).
+3. **Wait & Compile:** Agen Utama menunggu semua subagent melapor, merangkumnya, lalu membuat `implementation_plan.md` dengan opsi *Zero-Steering Grilling*.
+4. **Fase Implementasi (Coding):** Agen mematuhi standar yang sudah diekstrak subagent dan menggunakan `view_file` ke referensi spesifik HANYA jika butuh contoh kode spesifik.
 
-**API & System Design:**
-14. WAJIB prefix versi API (`/api/v1/`) + Pagination (cursor/offset) pada semua list endpoint.
-15. WAJIB Idempotency Key (Redis/DB) pada POST yang mutate state — cegah double-processing.
-16. WAJIB OpenAPI spec (`utoipa`/`swagger-ui`) sejak awal, bukan afterthought.
-17. WAJIB Correlation ID (`X-Request-ID`) propagasi ke semua downstream + `tracing::Span`.
-18. WAJIB Health Check (`/health`) + Readiness Probe (`/ready`) pada setiap service.
-19. WAJIB Backward Compatibility — breaking change harus versi baru (`v2`), bukan patch di versi yang sama.
-20. WAJIB Zero-Downtime Migration — kolom baru `nullable`, DILARANG rename/drop langsung.
+## 🏛️ Brownfield Protocol (Legacy / Refactoring / Tambah Fitur di Repo Eksisting)
 
-**Observability & Security:**
-21. WAJIB `TraceLayer::new_for_http()` + RED Metrics (Rate/Error/Duration) per service.
-22. WAJIB `tracing` structured logging — DILARANG log struct berisi token/key/PII. Gunakan `skip` directive atau custom formatter.
-23. WAJIB Circuit Breaker + timeout + retry pada semua external service calls.
-24. WAJIB Rate Limiting pada endpoint publik (auth, register, reset password).
-25. WAJIB OWASP Checklist: SQL Injection, IDOR, Mass Assignment, Broken Auth — eksplisit sebelum selesai.
-26. WAJIB audit N+1 Query di setiap loop DB — gunakan batch query atau `JOIN`.
-27. WAJIB p99 < 200ms SLA — verifikasi dengan `cargo criterion` sebelum deploy.
+Saat user meminta **penambahan fitur baru, modifikasi, optimasi, atau audit** pada **codebase yang sudah ada (Legacy/Existing Project / Repo yang sudah punya `Cargo.toml`)**, DILARANG memaksakan *Big Bang Rewrite*, penciptaan "Frankenstein Codebase", atau pemakaian daftar subagent statis yang tidak relevan. Gunakan protokol **Dynamic Reconnaissance & Partitioning**:
 
-**Docker & Container (Startup Standard):**
-28. WAJIB Multi-Stage Build: `builder` (rust:1.82-alpine / rust:1.82-slim) → `runtime` (gcr.io/distroless/cc-debian12 atau scratch) — binary Rust di-strip (`strip`/`cargo-strip`) sebelum dikopi ke stage final, image final DILARANG contain Cargo/rustc.
-29. WAJIB Non-Root User: `USER nonroot:nonroot` (distroless) atau `adduser -D appuser` (alpine) — DILARANG run sebagai root di production container.
-30. WAJIB `.dockerignore` eksplisit: exclude `.git/`, `target/`, `tests/`, `benches/`, `docs/` — `target/` terutama critical karena bisa 10GB+, DILARANG COPY tanpa filter.
-31. WAJIB Health Check di Dockerfile: `HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD ["/bin/grpc_health_probe","-addr=:50051"]` atau HTTP `wget` sesuai protokol service.
-32. WAJIB `SIGTERM` Graceful Shutdown di container: gunakan `ENTRYPOINT ["/app"]` (exec form) — Tokio harus handle `tokio::signal::unix::signal(SignalKind::terminate())` secara eksplisit.
-33. WAJIB Environment Config via `ENV` / `ARG` — DILARANG hardcode credentials/secrets di Dockerfile. Gunakan Docker Secrets atau secret manager.
-34. WAJIB Resource Limits di `docker-compose.yml` / K8s manifest: `deploy.resources.limits.memory`, `cpus` — Rust service tanpa memory limit tetap bisa OOM jika ada leak di unsafe block.
-35. WAJIB `docker-compose.yml` menyediakan `healthcheck`, `depends_on.condition: service_healthy`, dan `restart: unless-stopped` untuk semua service dependencies (DB, Redis, etc.).
+1. **Intai & Pembelahan Subagent secara 100% Dinamis (Dynamic Hybrid Swarm):**
+   Agen Utama DILARANG mematok nama atau jumlah peran subagent secara kaku. Pertama, lirik struktur direktori root, `Cargo.toml` (termasuk *workspace crates*), dan file konfigurasi lokal. Setelah itu, spawn tim Subagent ber-model `pro` (dari 3 hingga >10 secara elastis) dengan strategi pembagian yang benar-benar selaras dengan kenyataan repo asli:
+   - **Pembagian Berbasis Workspace / Crates / Modul:** Jika project user berbentuk Cargo Workspace atau dibagi menjadi beberapa modul (`/crates/api`, `/crates/domain`, `/crates/storage`), spawn **1 Subagent Auditor terpisah untuk membedah masing-masing crate/modul**.
+   - **Pembagian Berbasis Tech Stack di `Cargo.toml`:** 
+     - Jika mendeteksi `tokio`, spawn *Tokio Concurrency Auditor* (fokus mencari bahaya *Cancellation Safety* pada `tokio::select!`, kebocoran *blocking I/O* di worker thread tanpa `spawn_blocking`, dan *deadlock* pada `Mutex` melintasi titik `.await`).
+     - Jika mendeteksi `sqlx` / `sea-orm`, spawn *DB & N+1 Query Hunter* (fokus mencari N+1 loop query, unpooled DB connections, atau skema tanpa migrasi aman).
+     - Jika mendeteksi blok `unsafe` / FFI, spawn *Unsafe Provenance Auditor* (memeriksa pointer aliasing, transmute hazards, dan kepatuhan Stacked Borrows / Miri).
+     - Jika TIDAK ADA fitur blockchain atau game, DILARANG KERAS memanggil spesialis kripto/game!
+   - **Pembagian Berbasis Volume File:** Jika satu modul/crate sangat padat (>30 file), pecah audit atas crate tersebut ke beberapa subagent berdasarkan fungsionalitas (misal: Subagent A fokus API Handler & Middleware, Subagent B fokus DB Repositories & Entities).
+   - **Mastery Standard Matcher (Subagent Dedikatif):** Tugas subagent ini murni mengkonsolidasi seluruh laporan kecacatan dari para auditor di atas, lalu menarik dan membaca HANYA file di direktori `references/` kita yang **spesifik bisa menjadi obat untuk menyembuhkan celah/bug tersebut**.
+2. **Zero-Steering Grilling (Opsi Evolusi / Penambahan Fitur):**
+   Agen Utama merangkum laporan dari seluruh tim spesialis dan menyajikan ≥3 opsi netral beserta trade-off untuk user (Gasskan):
+   - **Opsi 1: Native Consistent Extension (KISS):** Tanam fitur baru dengan mematuhi pola asli arsitektur repo tersebut, NAMUN disuntikkan perlindungan standar Top 1% (wajib `thiserror`, timeout di external calls, `Arc<T>` bebas sirkulasi maut dengan `Weak<T>`, dan zero clippy warnings).
+   - **Opsi 2: Strangler Fig Pattern (Workspace / Modular Isolation):** Fitur/modul baru didirikan secara independen sebagai crate baru di Cargo Workspace atau modul terisolasi berstandar Top 1% tanpa merusak kode lama.
+   - **Opsi 3: Surgical Rewrite & Hardening:** Jika modul lama terkait sudah terlalu cacat (misal modul concurrency lawas penuh *race condition* atau bocor memori di blok `unsafe`), ajukan operasi bedah modul lama sekaligus merancang fitur barunya berpadu berstandar Top 1%.
 
-| Topik Task | Domain Referensi |
+### 🔍 Auto-Detect Niche Domain (Scan dari Task)
+
+Agent wajib mencocokkan nature of task ke domain berikut **secara proaktif**:
+
+| Jika task melibatkan... | Otomatis baca domain Niche |
 | :--- | :--- |
-| Borrow checker NLL, lifetime variance, smart pointers (Box/Rc/Arc/Weak), interior mutability (Cell/RefCell/UnsafeCell), Cow<'a,B>, LazyLock, Pin<P> + Unpin, PhantomData variance, dropck eyepatch | `references/core_memory_ownership/` |
-| Tokio runtime M:N scheduler, async channels (mpsc/oneshot/broadcast/watch), tokio::select! cancellation safety, lock-free atomics ordering, spawn_blocking, async-stream, parking_lot, graceful shutdown JoinSet | `references/async_tokio_concurrency/` |
-| dyn Trait vtable, monomorphization vs GC-shape, typestate PhantomData, orphan rules newtype, GATs HRTB for<'a>, min_specialization, derive macro internals, sealed traits, #[non_exhaustive] | `references/type_system_traits/` |
-| *const/*mut provenance model, transmute safety, C-FFI bindgen/cbindgen, MaybeUninit, Pin projection, Stacked Borrows, inline asm!, GlobalAlloc custom allocator, Miri UB detection | `references/unsafe_ffi_internals/` |
-| Axum Router::with_state, custom FromRequest extractor, Tower Service/Layer middleware, SQLx compile-time query, SeaORM ActiveModel, JWT Tower middleware, tonic gRPC streaming, governor rate limit, OpenTelemetry | `references/web_microservices/` |
-| Zero-cost abstractions, SIMD std::simd + portable-simd, jemalloc/mimalloc, #![no_std] bare-metal, CachePadded false sharing, branch prediction, const generics, Profile-Guided Optimization | `references/high_performance_hft/` |
-| wasm-bindgen JS interop, WASI serverless, aya-rs eBPF (XDP/TC/kprobe), WASM SIMD128, shared memory multithreading, wasmtime runtime embedding | `references/wasm_systems/` |
-| Result/Option monadic chaining, thiserror vs anyhow, panic recovery (std::panic::catch_unwind), backtrace symbolication, error context propagation | `references/error_handling_resilience/` |
-| mockall, cargo-fuzz corpus management, proptest shrinking, criterion statistical benchmarks, insta snapshot testing, cargo-nextest | `references/testing_fuzzing_benchmarking/` |
-| RocksDB/Sled/Pebble embedded, hashicorp/raft port, WAL CRC32 + fsync, LSM MemTable/SSTable, vector clocks CRDT, consistent hashing | `references/distributed_consensus_storage/` |
-| tonic server/client streaming, s2n-quic QUIC transport, tokio-util FramedCodec, tokio-tungstenite WebSocket, NATS async-nats, Protocol Buffers prost | `references/networking_protocols_grpc/` |
-| ring/aws-lc-rs AEAD, zk-SNARKs arkworks, SGX/Nitro secure enclave, rustls TLS 1.3, constant-time subtle crate, age encryption | `references/cybersecurity_cryptography/` |
-| Polars DataFrame lazy API, DataFusion SQL query engine, Apache Arrow IPC, HNSW vector search, Parquet columnar reader, DuckDB FFI | `references/data_engineering_polars/` |
-| clap derive CLI, ratatui TUI, tracing subscriber + fmt layers, indicatif progress bar, crossterm raw mode event loop | `references/cli_tooling_clap/` |
-| Tauri v2 commands + IPC, egui immediate mode, wgpu cross-platform GPU, Tauri plugin system, mobile (iOS/Android) target | `references/gui_desktop_tauri/` |
-| Bevy ECS App/World/System, multi-threaded scheduler par_iter, async asset loading, Bevy state machine, observer pattern | `references/game_engine_bevy/` |
-| Anchor smart contracts, Substrate FRAME pallets, CosmWasm, REVM EVM simulator, Merkle Patricia Trie, Borsh serialization, MEV searcher | `references/blockchain_smart_contracts/` |
-| LLVM IR passes via inkwell, struct alignment #[repr(C/packed/align)], LTO thin/fat, cargo-asm disassembly, vtable layout, dropck internals | `references/compiler_llvm_internals/` |
-| Custom Future + RawWaker, epoll reactor (mio), Chase-Lev work-stealing deque, task-local storage, io_uring via tokio-uring | `references/async_executor_internals/` |
-| Treiber lock-free stack, Michael-Scott queue, crossbeam epoch-based reclamation, SeqLock, AtomicCell, hazard pointers | `references/lockfree_atomic_structures/` |
-| Bump allocator #![no_std], slab allocator fixed-size, typed-arena, GlobalAlloc trait impl, tracking allocator for leak detection | `references/custom_allocators_internals/` |
-| syn VisitMut AST traversal, quote_spanned! error diagnostics, proc-macro attribute + derive, TokenStream manipulation, macro hygiene | `references/advanced_procmacro_engineering/` |
-| Multi-stage Dockerfile (builder→distroless/cc-debian12/scratch), binary strip, non-root user, .dockerignore (target/ exclude), HEALTHCHECK, SIGTERM Tokio signal handler, docker-compose healthcheck + depends_on, resource limits, K8s-ready probe | `references/docker_container_standards/` |
+| WebAssembly (WASM), WASI serverless, eBPF XDP/TC, JS interop (`wasm-bindgen`) | `references/wasm_systems/` |
+| Blockchain, smart contracts, Solana Anchor, Substrate pallets, EVM simulators, Merkle trie | `references/blockchain_smart_contracts/` |
+| Game server/client, Bevy ECS App/World/System, Tick-loops, real-time physics simulation | `references/game_engine_bevy/` |
+| GUI Desktop, Tauri v2 IPC, egui immediate mode, wgpu cross-platform GPU, Mobile (iOS/Android) | `references/gui_desktop_tauri/` |
+| Compiler design, LLVM IR via Inkwell, AST transformations, LTO optimization, struct alignment | `references/compiler_llvm_internals/` |
+| Custom memory allocators, bump allocation, slab pools, `GlobalAlloc` implementations, arena tracing | `references/custom_allocators_internals/` |
+| Lock-free atomic structures, epoch-based memory reclamation (Crossbeam), MPMC wait-free queues | `references/lockfree_atomic_structures/` |
+| Big Data Analytics, Polars DataFrames, Apache Arrow IPC, DuckDB FFI, Parquet reader, Vector HNSW | `references/data_engineering_polars/` |
+| CLI / TUI tooling, Clap derive, Ratatui dashboards, Crossterm event loops, structured progress bars | `references/cli_tooling_clap/` |
+| Custom async executors, raw Wakers, epoll mio reactors, Chase-Lev work stealing deques, io_uring | `references/async_executor_internals/` |
+| Advanced procedural macros, custom Derive / Attribute macros, AST manipulation via `syn` & `quote` | `references/advanced_procmacro_engineering/` |
+| Kubernetes CRDs, kube-rs reconcilers, Admission Webhook validators, Helm Deployment RBAC | `references/cloud_native_k8s_operators/` |
+| AWS SDK for Rust (`aws-sdk-s3`/`sqs`/`sns`/`secretsmanager`), Cargo Lambda serverless <10ms cold start | `references/cloud_provider_sdk_serverless/` |
+| moka L1 RAM cache, fred/redis Valkey cluster, Singleflight stampede locks, ETag CDN edge headers | `references/caching_strategy_cdn/` |
+| Governor GCRA API rate limiting, casbin RBAC/ABAC policy, OIDC JWT token vaults, SOC2 HMAC audit ledger | `references/zero_trust_enterprise_security/` |
+| Apalis background queue workers, Transactional Outbox pattern, Distributed Saga compensating rollback, DLQ | `references/background_jobs_saga/` |
+| SIMD fast image resizing, Apache Parquet/CSV 10M streaming, ffmpeg-next video HLS, headless_chrome PDF | `references/media_asset_pipeline/` |
+| CI/CD acceleration via cargo-nextest, sccache AWS S3 cloud cache, cargo-zigbuild cross compile, cargo-deny SBOM | `references/ci_cd_pipeline_cargo/` |
+| Unicode ICU4X zero-alloc engine, Mozilla Project Fluent localization, Axum locale routing, zero-copy formatting | `references/i18n_localization_icu/` |
+
+## 🛠️ Automated Quality Gate & Verification Commands
+
+Sebelum melaporkan tugas selesai, WAJIB jalankan perintah verifikasi ketat berikut di terminal:
+
+```bash
+# 1. Code Formatting Check
+cargo fmt -- --check
+
+# 2. Strict Linter Zero-Tolerance Warning
+cargo clippy --all-targets --all-features -- -D warnings
+
+# 3. Comprehensive Test Suite Execution
+cargo test --all-targets --all-features
+
+# 4. Undefined Behavior (UB) & Memory Safety Audit (Khusus jika menyentuh blok `unsafe`)
+cargo miri test
+
+# 5. Dependency Vulnerability Audit
+cargo audit
+```

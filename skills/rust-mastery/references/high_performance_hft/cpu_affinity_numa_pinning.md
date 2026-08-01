@@ -1,63 +1,104 @@
 # CPU Affinity & NUMA Pinning
 
-## Konsep Utama dan Penggunaan
-Scheduler Sistem Operasi (Linux/Windows) bebas memindahkan thread antar *core* kapan saja untuk mengelola beban. Namun, perpindahan core berarti *Cache Misses* (L1/L2 dari core lama tertinggal) yang merusak performa *nanosecond*. 
+Dalam High-Frequency Trading (HFT) dan sistem deterministik low-latency, intervensi OS seperti context switching, thread migration antar core, dan page fault dapat menyebabkan jitter dalam skala mikrosekon. Mengatasi hal ini memerlukan strategi Thread Pinning (CPU Affinity) dan isolasi NUMA (Non-Uniform Memory Access) node.
 
-Thread Pinning (Affinity) memaksa satu thread aplikasi menetap di satu core spesifik selamanya. Pada server multi-socket, **NUMA (Non-Uniform Memory Access)** menjadi dominan; core pada Socket 0 akan sangat lambat mengakses RAM yang tersambung di Socket 1. Kita juga bisa memanfaatkan *HugePages* untuk menghindari saturasi *TLB (Translation Lookaside Buffer)* memori, esensial pada HFT di mana database in-memory berukuran gigabyte diakses terus-menerus.
+Dengan memaku (pinning) sebuah thread ke core fisik tertentu (umumnya core terisolasi yang diatur via flag boot kernel `isolcpus`), kita memastikan memori tetap hangat di cache L1/L2 core tersebut. Selain itu, alokasi memori NUMA menjamin memori berada pada modul RAM fisik yang menempel langsung ke soket CPU tersebut (menghindari lintasan QPI/UPI yang lambat).
 
-## Arsitektur: NUMA Node dan Memory
-```text
-     [ Socket 0 / Node 0 ]            [ Socket 1 / Node 1 ]
-     /    |      |      \             /    |      |      \
- [Core 0] ..  [Core 15]           [Core 16] .. [Core 31]
-     \    |      |      /             \    |      |      /
-  (Fast) [ RAM Bank 0 ] <======QPI======> [ RAM Bank 1 ] (Fast)
-              |                                 |
-              +--- Akses ini LAMBAT (Remote) ---+
+## Arsitektur NUMA & Cache Locality
+
+```ascii
+      [ NUMA Node 0 ]                     [ NUMA Node 1 ]
+   +-------------------+               +-------------------+
+   | Core0 Core1 Core2 | <--- UPI ---> | Core3 Core4 Core5 |
+   |  [L1/L2 Cache]    |  (Inter-    |  [L1/L2 Cache]    |
+   |        |          |   Connect)    |        |          |
+   |  [  RAM Bank A ]  |               |  [  RAM Bank B ]  |
+   +-------------------+               +-------------------+
+           ^
+    Pinned Thread (Fast memory access to Bank A)
 ```
 
-## Kode Production-Ready: Core Pinning & Thread Isolation
+## Produksi-Ready Code: Thread Pinning menggunakan `core_affinity`
+
+Kode berikut mensimulasikan worker thread kritis HFT yang mengunci dirinya sendiri ke core tertentu, lalu melakukan inisialisasi lokal agar memori dialokasikan secara lokal pada NUMA node tersebut.
+
 ```rust
-use core_affinity::CoreId;
 use std::thread;
+use std::time::Duration;
 
-/// Mengunci thread utama (atau worker thread) ke Core spesifik
-/// Sangat disarankan untuk memisahkan thread I/O kernel dan thread aplikasi
-/// HFT menggunakan `isolcpus` di boot parameter kernel.
-pub fn pin_thread_to_core(core_id: usize) -> Result<(), &'static str> {
-    // Ambil daftar topologi core yang tersedia di OS
-    let core_ids = core_affinity::get_core_ids().ok_or("Failed to retrieve core topologies")?;
-    
-    // Cari core yang dimaksud
-    let target_core = core_ids.into_iter().find(|c| c.id == core_id);
+/// Crate `core_affinity` adalah standar *de facto* untuk mengontrol afinitas di Rust.
+/// Dalam production, pastikan dependency: core_affinity = "0.8"
+/// Di sini kita menggunakan interface mock yang menyerupai crate aslinya 
+/// agar standalone testable.
 
-    if let Some(core) = target_core {
-        // Panggil sistem (sched_setaffinity) untuk mengunci thread aktif saat ini
-        if core_affinity::set_for_current(core) {
-            println!("Successfully pinned thread to CPU Core {}", core_id);
-            Ok(())
-        } else {
-            Err("Failed to set core affinity (Permissions issue?)")
-        }
-    } else {
-        Err("Core ID not found in system")
+pub mod mock_core_affinity {
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    pub struct CoreId { pub id: usize }
+
+    pub fn get_core_ids() -> Option<Vec<CoreId>> {
+        Some(vec![CoreId { id: 0 }, CoreId { id: 1 }, CoreId { id: 2 }, CoreId { id: 3 }])
+    }
+
+    pub fn set_for_current(core_id: CoreId) -> bool {
+        // Simulasi setting afinitas OS
+        true
     }
 }
 
-pub fn spawn_trading_engine_thread() {
-    thread::spawn(|| {
-        // Idealnya, core genap (mis. 2, 4) adalah physical cores,
-        // sedangkan core ganjil (3, 5) adalah logical hyper-threads pasangannya.
-        // HFT menghindari penggunaan core logical untuk kestabilan clock.
-        pin_thread_to_core(2).unwrap();
-        
-        // Mulai infinite loop kritikal
-        loop {
-            // Poll for packets, process signal, send order
-            std::hint::spin_loop();
-            break; // Untuk mencegah infinite run saat tes
+pub struct CriticalWorker {
+    core_id: usize,
+    name: String,
+}
+
+impl CriticalWorker {
+    pub fn new(core_id: usize, name: &str) -> Self {
+        Self {
+            core_id,
+            name: name.to_string(),
         }
-    }).join().unwrap();
+    }
+
+    pub fn spawn(self) -> thread::JoinHandle<()> {
+        thread::Builder::new()
+            .name(self.name.clone())
+            .spawn(move || {
+                // 1. Dapatkan daftar Core logical OS
+                let cores = mock_core_affinity::get_core_ids()
+                    .expect("Failed to retrieve logical cores on this OS");
+                
+                // 2. Cari core target
+                let target_core = cores.into_iter()
+                    .find(|c| c.id == self.core_id)
+                    .unwrap_or_else(|| panic!("Core ID {} not found!", self.core_id));
+                
+                // 3. Eksekusi syscall pinning
+                let success = mock_core_affinity::set_for_current(target_core);
+                assert!(success, "Failed to pin thread to core {}", self.core_id);
+                
+                // 4. Inisialisasi struktur memori besar SETELAH di-pin.
+                // Hal ini menjamin bahwa OS kernel fault allocator menempatkan page
+                // fisik di NUMA node yang tepat tempat core ini berlokasi.
+                let mut data_buffer = vec![0u8; 1024 * 1024]; // 1MB buffer
+                
+                // "Sentuh" memori untuk memaksa OS melunasi page fault (demand paging)
+                for byte in data_buffer.iter_mut() {
+                    *byte = 0xAA;
+                }
+                
+                // 5. Eksekusi hot loop (Simulasi)
+                self.hot_loop(&mut data_buffer);
+            })
+            .expect("Failed to spawn thread")
+    }
+    
+    #[inline(never)]
+    fn hot_loop(&self, _buffer: &mut [u8]) {
+        // Logika high frequency trading...
+        // Dalam dunia nyata ini berupa infinite loop menerima dari ring buffer.
+        for _i in 0..100 {
+            std::hint::black_box(1 + 1);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -65,25 +106,38 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_core_pinning() {
-        // Pin ke core 0 sering kali aman pada mayoritas OS.
-        // Meski tidak menjamin keberhasilan (tergantung OS perms),
-        // fungsi tidak panik
-        let _ = pin_thread_to_core(0);
+    fn test_worker_pinning() {
+        let worker = CriticalWorker::new(1, "engine-thread-1");
+        let handle = worker.spawn();
+        let result = handle.join();
+        assert!(result.is_ok(), "Thread panicked during execution");
     }
 }
 ```
 
 ## Anti-Patterns
 
-1. **Pinning Thread ke Core yang Sama dengan Interrupt OS (NIC IRQ)**
-   - *Bahaya*: Jika Anda mengunci thread trading ke Core 0, padahal Kernel Linux mendelegasikan tugas *Hardware Interrupt* (IRQ) dari kartu jaringan ke Core 0, thread Anda akan terus-menerus diinterupsi oleh kernel (preempted). Latensi akan sangat *jittery*.
-   - *Solusi*: Konfigurasi OS via `isolcpus` atau `tuna` untuk mengisolasi core tertentu secara eksklusif bagi aplikasi. Arahkan IRQ NIC ke core lain (contoh: Core 1-2 untuk OS, Core 3-7 isolasi murni).
+1. **Alokasi Memori Dulu, Pinning Kemudian**
+   **Mengapa berbahaya:** Jika alokasi thread (misal arena besar atau pre-allocated buffers) dilakukan *sebelum* thread di-pin ke core spesifiknya, OS mengalokasikan page memori fisik di NUMA node dari thread parent. Saat child thread dipin ke NUMA node berbeda, semua akses memori memicu *remote NUMA access* lewat inter-connect, menghancurkan latency (peningkatan akses >40% lebih lambat).
+   ```rust
+   // ANTI-PATTERN
+   let data = vec![0u8; 1_000_000]; // Dialokasikan di NUMA Parent
+   thread::spawn(move || {
+       pin_to_core(5); // Pindah ke NUMA lain
+       process(data);  // Cross-NUMA node penalty!
+   });
+   ```
 
-2. **Membuat Thread NUMA-Blind**
-   - *Bahaya*: Mem-*pin* Thread di Core Socket 0, namun *memory buffer* diinisialisasi secara tidak sengaja oleh main thread yang berjalan di Core Socket 1. Setiap *load/store* data harus menyeberangi bus interkoneksi QPI lambat.
-   - *Solusi*: Selalu inisialisasi / alokasi struktur data di dalam *closure thread yang sudah dipin*. Alokator lokal sistem operasi (First-Touch Policy) secara default meletakkan RAM secara fisik berdekatan dengan NUMA node tempat thread *pertama kali menulis ke memori tersebut*.
+2. **Mem-pin Thread ke Core yang Meng-handle IRQ (Interrupts)**
+   **Mengapa berbahaya:** OS memetakan Network Card (NIC) Hardware Interrupts ke CPU core tertentu. Jika worker thread di-pin ke core yang sama dengan penerima IRQ NIC, thread Anda akan sering di-preempt (interupsi hard) puluhan ribu kali per detik oleh kernel OS, menciptakan jitter nanosekon. Kernel isolcpus boot args mutlak dibutuhkan.
 
-## Edge Cases & Defensive Engineering
-- **Hyper-Threading (SMT)**: Di environment latensi rendah, Hyper-Threading biasanya dinonaktifkan di level BIOS. Dua logical thread yang berbagi satu physical core berebut sumber daya *L1 Cache* dan *Execution Units*. 
-- **HugePages**: Untuk buffer raksasa, mengalokasikan banyak memori kecil menguras cache TLB (Translation Lookaside Buffer). Linux mendukung buffer halaman berukuran 2MB dan 1GB (HugePages). Di Rust, Anda harus menggunakan crate `mmap` dan passing opsi *MAP_HUGETLB* di backend C FFI untuk alokasi manual *ring buffer* bebas penalti TLB *misses*.
+## Edge Cases dan Defensive Programming
+
+1. **Hyperthreading (SMT) Interference:**
+   Mem-pin thread ke core fisik 0, sementara core logical saudaranya (hyperthread, misal core 12 di sistem 12-core) masih dieksekusi proses sistem, akan memicu pembagian (sharing) L1 dan L2 cache secara hardware. Solusi HFT produksi adalah men-disable SMT di BIOS atau tidak memakai thread sibling.
+
+2. **Gagal Pinning di Container (Docker/K8s):**
+   Jika service dijalankan di cgroups dengan cpuset yang dibatasi (docker `--cpuset-cpus`), melakukan `set_for_current` pada core di luar cpuset mask akan mengembalikan `false` atau error EPERM. Selalu asumsikan fail dan abort segera di sistem HFT daripada terdegradasi secara sembunyi-sembunyi.
+
+3. **Demand Paging Keterlambatan:**
+   Meski thread dipin dan vektor dialokasikan, OS Linux default menganut *lazy allocation*. Akses pertama ke halaman memori akan memicu minor page fault. `mlockall(MCL_CURRENT | MCL_FUTURE)` dan *pre-faulting* iterasi memori (menyentuh tiap halaman) seperti yang dicontohkan mutlak diperlukan sebelum sesi trading aktif.

@@ -1,97 +1,138 @@
 # Typed Arena Allocator
 
-Arena alokator (atau region-based allocator) mengalokasikan sekumpulan objek dari tipe yang sama atau berbeda (tergantung implementasi) di blok memori berukuran besar, dan yang krusial, *mendealokasi* semuanya secara bersamaan saat arena dijatuhkan (`drop`). Konsep ini dikelola di Rust menggunakan *lifetime* `'arena`. Crate `typed-arena` secara spesifik mengamankan arena untuk satu tipe tunggal `T`.
+Dalam manipulasi graf data yang intensif seperti Abstract Syntax Tree (AST) Compiler atau Tree DOM HTML, Rust's ownership system konvensional (`Box`, `Rc`, `RefCell`) mengenalkan masalah masif berupa **overhead siklus referensi (Reference Cycles)** dan cost dari pointer atomic yang memperlambat traversasi hierarkis node (misalnya `Rc` cache-line bouncing).
 
-Pola ini lazim pada Compiler (AST generation) dan Game Engine (per-frame allocation) di mana objek tidak perlu berumur lebih panjang dari sebuah _phase_ atau _frame_.
+Sistem **Typed Arena Allocator** (via crate seperti `typed-arena` atau implementasi kustom) menyingkirkan siklus alokasi individu dengan cara menampung koleksi node di blok besar terpusat (Bump Pointer). Karena semua elemen *dialokasikan di arena, dan dihapus ketika arena mati secara bersamaan (Zero-Deallocation overhead)*, ini memungkinkan perujukan referensi konvensional (cycles) lewat reference lifetime biasa tanpa memerlukan `Rc` atau `RefCell`.
 
-## Arsitektur & Alur Kerja
+## Arsitektur Typed Arena & Graph Referencing
 
-```text
-       Typed Arena <T>
-       |-- Chunk 1 (T, T, T, T) -> Full
-       |-- Chunk 2 (T, T, _, _) -> Active
+```ascii
+[ Standard Rc/RefCell Graph ]
+    (Node 1) <----(Rc)----> (Node 2)
+       ^                       | (Memory Leak Risk / Cycle)
+       +---------(Rc)----------+
+
+[ Arena Graph dengan Referensi Native `&` ]
+   +---------------------------------------------+
+   |  Arena Allocator (Lifetime 'a)              |
+   |                                             |
+   |  (Node 1) <----(&'a)----> (Node 2)          |
+   |     ^                        | (No cycle    |
+   |     +-----------(&'a)--------+  leak risk!) |
+   |                                             |
+   +---------------------------------------------+
+    (Arena Drop -> Seluruh node dihapus seketika)
 ```
-*Ketika `alloc(T)` dipanggil, ia mengembalikan `&'arena mut T`. Arena mengambil kepemilikan struktur data (drop akan dipanggil di akhir) tetapi meminjamkan pointer mutable.*
 
-## Implementasi Production-Ready
+## Produksi-Ready Code: Graph Terarah menggunakan Typed Arena
+
+Kode ini menunjukkan struktur Directed Graph (Graph Berarah) yang memungkinkan referensi cyclic dengan cara elegan (menggunakan `Cell` interior mutability) dalam ekosistem arena-allocated, sangat cepat dan 100% aman memori (safe).
 
 ```rust
-use std::cell::UnsafeCell;
-use std::ptr::NonNull;
+use std::cell::Cell;
+// Kita meng-mock typed_arena untuk keperluan standar produksi referensi
+// Pada Production Cargo.toml: `typed-arena = "2.0"`
+pub mod mock_typed_arena {
+    use std::cell::RefCell;
+    pub struct Arena<T> {
+        // Implementasi sederhana untuk simulasi
+        chunks: RefCell<Vec<Box<T>>>,
+    }
+    impl<T> Arena<T> {
+        pub fn new() -> Self {
+            Self { chunks: RefCell::new(Vec::new()) }
+        }
+        // Fungsi kunci Typed Arena:
+        // Menerima nilai, mengembalikan referensi dengan lifetime yang terikat ke Arena.
+        pub fn alloc(&self, value: T) -> &mut T {
+            let mut boxed = Box::new(value);
+            // SAFETY: Konversi pointer ke mut ref, aman karena nilai dijamin eksis
+            // sepanjang Arena eksis dan tidak di-reallokasi.
+            let ptr: *mut T = &mut *boxed;
+            self.chunks.borrow_mut().push(boxed);
+            unsafe { &mut *ptr }
+        }
+    }
+}
+use mock_typed_arena::Arena;
 
-/// Arena sangat sederhana untuk tipe T (ilustrasi internal)
-pub struct SimpleTypedArena<T> {
-    // Menyimpan list of chunks
-    chunks: UnsafeCell<Vec<Vec<T>>>,
+/// Node dalam graph kita
+pub struct Node<'a> {
+    pub name: &'static str,
+    // Kita gunakan rentetan referensi lifetime 'a yang terhubung kembali ke parent atau anak
+    pub children: Cell<Vec<&'a Node<'a>>>,
+    pub parent: Cell<Option<&'a Node<'a>>>,
 }
 
-impl<T> SimpleTypedArena<T> {
-    pub fn new() -> Self {
+impl<'a> Node<'a> {
+    pub fn new(name: &'static str) -> Self {
         Self {
-            chunks: UnsafeCell::new(vec![Vec::with_capacity(64)]),
+            name,
+            children: Cell::new(Vec::new()),
+            parent: Cell::new(None),
         }
     }
 
-    /// Mengalokasikan nilai T dan mengembalikan referensi dengan
-    /// lifetime yang terikat pada eksistensi arena ini.
-    pub fn alloc(&self, value: T) -> &mut T {
-        unsafe {
-            let chunks = &mut *self.chunks.get();
-            let mut last = chunks.last_mut().unwrap();
-            
-            if last.len() == last.capacity() {
-                chunks.push(Vec::with_capacity(last.capacity() * 2));
-                last = chunks.last_mut().unwrap();
-            }
-            
-            last.push(value);
-            // Mengambil elemen terakhir sebagai referensi.
-            // AMAN KARENA: Elemen dalam Vec yang tidak pernah me-reallocate (kita kontrol)
-            // tidak akan berpindah di memori. (CATATAN: vec bisa realloc! Itulah mengapa 
-            // typed-arena sejati menggunakan struktur yang lebih rumit/custom block atau 
-            // menjamin elemen tidak pindah dengan membatasi mutasi Vec).
-            
-            // Implementasi di sini adalah pendekatan naif yang AMAN asalkan 
-            // realloc pada capacity == len dilakukan dengan PUSH KE VEC BARU.
-            // Karena chunk lama (Vec) tidak lagi disentuh panjangnya, 
-            // pointernya tetap stabil sampai arena didrop.
-            let ptr = last.as_mut_ptr().add(last.len() - 1);
-            &mut *ptr
-        }
+    pub fn add_child(&'a self, child: &'a Node<'a>) {
+        let mut kids = self.children.take();
+        kids.push(child);
+        self.children.set(kids);
+        child.parent.set(Some(self));
     }
+}
+
+/// Mensimulasikan pipeline pembangunan Graph dalam Arena
+pub fn build_cyclic_graph() {
+    // 1. Inisiasi arena memory pool
+    let arena = Arena::new();
+
+    // 2. Alokasikan node-node (semua dikembalikan sebagai &'a Node)
+    let root = arena.alloc(Node::new("Root"));
+    let child1 = arena.alloc(Node::new("Child_1"));
+    let child2 = arena.alloc(Node::new("Child_2"));
+
+    // 3. Bangun graph
+    root.add_child(child1);
+    root.add_child(child2);
+
+    // Bikin referensi cyclic: child2 adalah anak dari child1 (misal Tree graph ruwet)
+    child1.add_child(child2); 
+    
+    assert_eq!(root.name, "Root");
+    let c1_kids = child1.children.take();
+    assert_eq!(c1_kids[0].name, "Child_2");
+    
+    // Semua memory clean up otomatis, tidak ada leak, tidak ada drop iteratif lambat
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[derive(Debug, PartialEq)]
-    struct AstNode<'a> {
-        val: i32,
-        next: Option<&'a AstNode<'a>>,
-    }
-
     #[test]
-    fn test_arena_ast_creation() {
-        let arena = SimpleTypedArena::new();
-        
-        let node1 = arena.alloc(AstNode { val: 1, next: None });
-        let node2 = arena.alloc(AstNode { val: 2, next: Some(node1) });
-        
-        assert_eq!(node2.val, 2);
-        assert_eq!(node2.next.unwrap().val, 1);
-    } // Di sini memori seluruh arena didealokasi O(1).
+    fn test_graph_arena_building() {
+        build_cyclic_graph();
+    }
 }
 ```
 
-## Anti-Pattern Terlarang
+## Anti-Patterns
 
-1. **Lifetime Elision yang Menipu pada Arena:**
-   *Mengapa berbahaya:* Mencoba menyimpan pointer/reference `&'a T` dari arena ke dalam struktur data berumur statik (global). Rust borrow checker akan memblokir ini. Jangan gunakan `transmute` untuk memperpanjang `'arena` menjadi `'static`, itu jaminan *Use-After-Free* (UAF) ketika arena di-drop.
-2. **Reallocation Memori di Internal Storage:**
-   *Mengapa berbahaya:* Menyimpan objek di dalam `Vec` dan membiarkan `Vec` itu melakukan "grow" (realloc). Realloc akan memindahkan memori ke alamat baru, membuat semua reference `&mut T` yang pernah dikeluarkan arena menjadi dangling. *Selalu alokasikan chunk baru alih-alih me-resize chunk lama.*
+1. **Mencampur Memory Types dalam Arena (Struct Arena Polymorphic/Dynamic)**
+   **Mengapa berbahaya:** Jika Anda menggunakan tipe `Arena<Box<dyn Trait>>` atau mencoba mengalokasikan tipe `String` ukuran acak dalam `typed-arena` statis, allocator ini akan mengalokasikan pointer-nya di Arena (super cepat), namun nilai dinamis *sebenarnya* tetap di global heap via `malloc` (lambat). Ini *false sense of security*, dan saat Arena drop, kompilator tetap harus memanggil puluhan ribu destruktor `Drop::drop` pada `String`, menghilangkan utilitas nol-deallokasi dari arena.
+   **Solusi:** Gunakan string statis `&str` (seperti contoh `&'static str` atau Bumpalo string allocator).
 
-## Edge Cases & Defensive Programming
+2. **Memaksakan `RefCell` pada Node Arena**
+   **Mengapa berbahaya:** Banyak developer menggunakan pola `RefCell<ArenaNode>` di dalam Arena. Namun, `RefCell` menambah overhead *runtime borrow checking* integer per node. Di graph jutaan node, iterasi DFS/BFS akan melambat 30-40% karena branch prediction CPU hancur akibat pengecekan runtime RefCell.
+   **Solusi:** Gunakan `Cell` untuk memodifikasi field-field simpel interior tanpa cost (zero-cost abstraction di CPU), seperti pointer atau boolean flags, sehingga traversal murni baca.
 
-- **Drop Semantics (`Drop` trait pada `T`):** Arena harus memanggil method `.drop()` dari semua elemen `T` di dalamnya jika `T` mengimplementasikan `Drop` (misal `T` memiliki `String` di dalamnya). Jika tidak, memory leak (atau resource leak) pada *nested allocations* akan terjadi.
-- **Cycles in Graphs:** Referensi antar node di arena sering kali membuat *cycle* (misal Graph berarah bolak-balik). Jika Anda menggunakan `RefCell` dan arena, cycle tidak membocorkan memori selama arena itu sendiri didrop di akhir. Arena menyelamatkan Anda dari cycle berbasis `Rc`/`Arc`.
+## Edge Cases dan Defensive Programming
+
+1. **Miskalkulasi Drop dan Lifetime Mismatch:**
+   Typed-arena menjamin referensi Anda (`&'a T`) valid selama struct Arena eksis. Namun jika instance Arena dan Graph (yang menyimpan referensi `&'a`) diletakkan berbarengan dalam struct yang *sama* tanpa berhati-hati dengan drop order Rust, kompilator akan membentak Anda: *Cannot borrow self.arena while it is owned*. Anda harus mendefinisikan *self-referencing struct* yang butuh trik Unsafe atau macro Ouroboros.
+
+2. **Panik saat Iterator `take()` Interior Mutability:**
+   Dalam contoh di atas `Cell<Vec<&'a Node>>`, metode `.take()` memindahkan (move) data keluar dari `Cell`, meninggalkan state "kosong" sementara. Jika saat data tersebut diproses terjadi kepanikan (Panic/Unwind) atau error awal return, modifikasi iteratif gagal di-set kembali ke node. Node itu menjadi korup di graph logic.
+
+3. **Memory Pegging karena Ketiadaan Deallokasi:**
+   Arena allocator **TIDAK PERNAH** membebaskan memori sebelum Arena-nya di-drop. Jika Anda memiliki web socket connection yang berjalan 7 hari, dan mere-parsing pesan masuk serta menaruhnya di dalam satu *Long-Lived Arena*, proses Anda akan OOM dalam satu malam. Gunakan arena secara generasional (buat arena baru per request atau per frame batching), dan hancurkan sesegera mungkin.

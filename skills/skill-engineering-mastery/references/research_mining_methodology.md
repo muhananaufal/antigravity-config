@@ -1,135 +1,170 @@
-# Research & Knowledge Mining Methodology
+# Research & Mining Methodology: Eksplorasi Pengetahuan Kelas Principal (Top 1%)
 
-Dokumen ini menjelaskan proses sistematis untuk menggali, memverifikasi, dan mengekstrak pengetahuan berkualitas tinggi (*Principal/Staff Engineer grade*) yang akan menjadi isi file referensi di folder `references/`.
+Dokumen ini mendefinisikan standar absolut (Zero-Tolerance) bagi AI Agent dalam menambang pengetahuan, membedah basis kode, dan melakukan riset domain. Sebagai AI dengan tingkat keahlian Principal Engineer, dilarang keras mengandalkan hafalan LLM yang rentan basi (halusinasi) atau langsung melakukan pencarian web sebelum menguras habis seluruh sumber daya yang tersedia secara lokal. Pengetahuan lokal adalah *Single Source of Truth* (SSOT).
 
----
+## 1. Hirarki Penambangan Pengetahuan
 
-## 1. Prinsip Dasar: Kenapa Proses Research Ini Krusial
+Protokol penambangan informasi wajib mengikuti urutan prioritas yang kaku dan tidak dapat ditawar:
+1. **Lokal Pertama (Local-First):** Menggunakan tool `list_dir`, `view_file`, dan `grep_search` pada folder proyek lokal, folder `references`, dan dokumentasi `.md` yang terlampir.
+2. **Repositori Kode & Dependensi:** Membedah folder `vendor`, `node_modules`, atau direktori cache dependensi untuk melihat implementasi nyata *source code* (menggali *internals*).
+3. **Pencarian Web (Fallback Terakhir):** Hanya diizinkan jika dua langkah pertama telah terbukti gagal menghasilkan informasi yang relevan dan terkini. Harus difilter untuk hindari tutorial "Hello World" yang dangkal.
 
-LLM memiliki pengetahuan bawaan (*parametric knowledge*) yang luas namun:
-- **Bisa Usang**: Informasi training data mungkin sudah ketinggalan versi (misal: Go 1.18 vs Go 1.23 punya fitur berbeda).
-- **Bisa Dangkal**: LLM cenderung memberikan jawaban "tutorial blog level" jika tidak dipaksa mendalami.
-- **Bisa Halusinasi**: LLM bisa menghasilkan API/fungsi/pattern yang tidak pernah ada.
+### Diagram: Alur Ekstraksi Referensi Principal Engineer
 
-**Solusi**: Setiap kali menulis konten file referensi, Agent WAJIB mengikuti hierarki fallback berikut **secara berurutan**:
-1. **Skill-First**: Baca SELURUH file referensi di skill bundle yang relevan (`references/<domain>/*.md`) terlebih dahulu. Jika informasi sudah ditemukan di sana → gunakan, tidak perlu lanjut ke langkah berikutnya.
-2. **Search-Web**: HANYA jalankan `search_web` jika sudah benar-benar yakin bahwa informasi yang dibutuhkan tidak ada di skill bundle manapun.
-
-> **⏱️ Waktu Bukan Constraint — Kualitas Adalah Satu-Satunya Metric:**
-> Task generasi skill bundle boleh memakan waktu 1 jam, 1 hari, atau lebih. DILARANG mempercepat proses dengan mengorbankan kedalaman research, kelengkapan kode, atau kualitas edge-cases. Setiap domain harus diselesaikan dengan standar yang **identik** dengan domain pertama — tidak ada penurunan kualitas yang dapat diterima di domain ke-N hanya karena task sudah berjalan lama.
-
----
-
-## 2. Hirarki Sumber Pengetahuan (Wajib Diikuti Berurutan)
-
-Saat mencari materi untuk 1 file referensi, ikuti urutan prioritas ini:
-
-### Prioritas 1 — Official Specification & Source Code (SSOT Mutlak)
-- **Apa**: Dokumentasi resmi bahasa/framework, RFC specs, dan source code runtime/compiler.
-- **Contoh Query `search_web`**:
-  - `"golang.org spec memory model"` ← untuk Go memory model.
-  - `"laravel framework source code Illuminate Database Query Builder"` ← untuk internal Laravel query builder.
-  - `"RFC 7807 Problem Details for HTTP APIs"` ← untuk standar error format API.
-  - `"Go runtime source malloc.go mheap"` ← untuk Go memory allocator internals.
-- **Cara Ekstraksi**: Baca halaman dokumentasi resmi via `read_url_content`, lalu rangkum poin-poin kritis.
-
-### Prioritas 2 — Industry Style Guides & Engineering Standards
-- **Apa**: Panduan gaya kode dan arsitektur dari perusahaan besar yang sudah teruji di skala produksi.
-- **Contoh Query `search_web`**:
-  - `"Uber Go style guide best practices"` ← standar kode Go Uber.
-  - `"Google Go code review guidelines"` ← standar code review Google.
-  - `"HashiCorp Terraform plugin architecture go-plugin"` ← arsitektur plugin HashiCorp.
-  - `"CockroachDB engineering blog raft consensus Go"` ← implementasi Raft di Go.
-  - `"Cloudflare engineering blog Go concurrency patterns"` ← pola concurrency Cloudflare.
-- **Cara Ekstraksi**: Identifikasi aturan/pattern yang konsisten di >2 perusahaan besar → jadikan standar di file referensi kita.
-
-### Prioritas 3 — Engineering Blogs & Conference Talks
-- **Apa**: Blog teknis dari perusahaan besar, presentasi GopherCon/KubeCon, dan paper akademis.
-- **Contoh Query `search_web`**:
-  - `"GopherCon talk advanced concurrency patterns slides"`.
-  - `"Stripe engineering blog idempotency key design"`.
-  - `"Shopify engineering blog flash sale race condition prevention"`.
-- **Cara Ekstraksi**: Cross-reference klaim di blog dengan dokumentasi resmi. Jika cocok, adopsi. Jika kontradiksi, prioritaskan dokumentasi resmi.
-
-### Prioritas 4 — Verified Community Knowledge (Fallback Terakhir)
-- **Apa**: Artikel komunitas, Stack Overflow answers, tutorial yang sudah diverifikasi.
-- **Aturan Ketat**: HANYA gunakan jika Prioritas 1-3 tidak memiliki informasi yang dibutuhkan.
-- **Cara Verifikasi**: Pastikan informasi dari sumber komunitas dikonfirmasi oleh minimal 1 sumber dari Prioritas 1 atau 2.
-
----
-
-## 3. Workflow Research Sistematis per File Referensi
-
-Untuk setiap file referensi yang akan ditulis, ikuti workflow ini:
-
-### Tahap 3.1 — Identifikasi Sub-Topik & Kata Kunci
-```
-Input: Nama file referensi (misal: "goroutine_lifecycle_leaks.md")
-   ↓
-Output: Daftar kata kunci research
-   ├── "Go goroutine lifecycle management"
-   ├── "Go goroutine leak detection goleak"
-   ├── "Go goroutine leak pprof diagnosis"
-   ├── "Go context cancellation goroutine cleanup"
-   └── "Uber Go goroutine leak prevention best practices"
+```ascii
++-------------------------------------------------------------+
+|               START: Request Membutuhkan Konteks            |
++-------------------------------------------------------------+
+                              |
+                              v
++-------------------------------------------------------------+
+|  Fase 1: Audit Referensi Lokal (Zero-Tolerance Bypass)      |
+|  - list_dir: Pemetaan struktur folder proyek & referensi    |
+|  - grep_search: Mencari pola kunci, arsitektur, config      |
+|  - view_file: Ekstraksi penuh file dokumentasi & kode       |
++-------------------------------------------------------------+
+                              |
+                 Apakah Konteks Cukup & Kuat?
+                 /                          \
+             [YA]                          [TIDAK]
+              |                               |
+              v                               v
++-----------------------------+ +-----------------------------+
+| Fase 2A: Analisis Internals | | Fase 2B: Pembedahan Library |
+| - Baca src internal         | | - Cari dependencies asli    |
+| - Ekstrak best practices    | | - Hindari reinvent wheel    |
++-----------------------------+ +-----------------------------+
+              |                               |
+        Apakah Menemukan Standard Industri Top 1%?
+                 /                          \
+             [YA]                          [TIDAK]
+              |                               |
+              v                               v
++-----------------------------+ +-----------------------------+
+| Fase 3A: Implementasi Kode  | | Fase 3B: Web Search (Akhir) |
+| - Tulis dengan presisi      | | - Tanpa tutorial dangkal    |
+| - Tanpa TODO/Placeholder    | | - Cari repositori resmi     |
++-----------------------------+ +-----------------------------+
+                              |
+                              v
++-------------------------------------------------------------+
+|            END: Eksekusi Kode Production-Ready              |
++-------------------------------------------------------------+
 ```
 
-### Tahap 3.2 — Eksekusi Research (search_web + read_url_content)
-```
-Untuk setiap kata kunci:
-   ├── Jalankan search_web("{kata kunci}")
-   ├── Dari hasil search, pilih 2-3 URL paling relevan (prioritaskan docs resmi & engineering blogs)
-   ├── Jalankan read_url_content("{url}") untuk mengekstrak konten
-   └── Catat poin-poin kritis dalam format bullet points
-```
+## 2. Eksploitasi Tool Navigasi Presisi (Critical Instruction 1)
 
-### Tahap 3.3 — Cross-Reference & Verifikasi
-```
-Untuk setiap klaim/pattern yang akan ditulis:
-   ├── Apakah klaim ini didukung oleh dokumentasi resmi? → ✅ Tulis
-   ├── Apakah klaim ini hanya dari 1 blog tanpa konfirmasi? → ⚠️ Verifikasi ulang
-   └── Apakah klaim ini kontradiksi dengan docs resmi? → ❌ Buang
-```
+AI dilarang keras memicu eksekusi Bash/PowerShell yang primitif (seperti `cat`, `ls`, `grep`) apabila *native tools* agen tersedia. Hal ini untuk meminimalisir overhead dan menjaga integritas output JSON dari native tools.
 
-### Tahap 3.4 — Penulisan Konten Final
-```
-Setelah research & verifikasi selesai:
-   ├── Tulis konten mengikuti standar di reference_file_standards.md
-   ├── Sertakan contoh kode production-ready
-   ├── Sertakan anti-pattern (pola yang SALAH)
-   └── Sertakan edge-case handling
-```
+*   **`list_dir`**: Gunakan untuk pemetaan awal secara rekursif (terbatas) untuk memahami topologi repositori tanpa mengeksekusi shell `ls -R` yang tidak stabil formatnya.
+*   **`grep_search`**: Eksekusi penambangan selektif yang mendukung regex `isRegex: true`. Wajib dimanfaatkan saat mencari deklarasi tipe, fungsi *deprecated*, atau kebocoran kredensial hardcoded. Pengganti absolut untuk shell `grep`.
+*   **`view_file`**: Ekstraksi konten *byte-for-byte*. Bila file berukuran raksasa, manfaatkan paginasi (start line, end line, byte offset) daripada sekadar mencetak semuanya via `cat` yang merusak konteks buffer.
 
----
+## 3. Strategi Regex Advanced dengan `grep_search`
 
-## 4. Teknik Query search_web yang Efektif
+Agar tidak tenggelam dalam lautan kode saat membedah arsitektur asing, gunakan pola eksekusi regex teruji berikut saat memanggil `grep_search`:
 
-### 4.1. Formula Query Optimal
-```
-"{bahasa/framework} {topik spesifik} {konteks industri/best practice}"
-```
+| Target Investigasi | Pola Regex (`Query`) | `IsRegex` | Tujuan Audit & Penambangan |
+| :--- | :--- | :---: | :--- |
+| **Pemburu N+1 Query** | `(Range\|for).*(\.Query\|\.Find\|\.Select)` | `true` | Menemukan panggilan DB yang terjebak di dalam loop interasi. |
+| **Hardcoded Secrets** | `(?i)(password\|secret\|api_key)\s*[:=]\s*["'][^"']+["']`| `true` | Mengaudit string statis yang menyimpan kredensial di kode aplikasi. |
+| **Untyped Bypass** | `(interface\{\}\|any\|Dict\[Any\])` | `true` | Melacak penggunaan tipe data rapuh yang mengancam type-safety. |
+| **Goroutine Leak** | `go\s+func\(.*\{` | `true` | Memastikan pemanggilan thread asinkron dilengkapi channel cancellation. |
+| **Route Definitions** | `(r|router|app)\.(GET|POST|PUT|DELETE|Any)\(` | `true` | Memetakan seluruh antarmuka endpoint REST di backend Go/Node. |
 
-### 4.2. Contoh Query BAIK vs BURUK
+## 4. Pembedahan Kode Kualitas Open-Source
 
-| ❌ Query Buruk (Terlalu Umum) | ✅ Query Baik (Spesifik & Terarah) |
-| :--- | :--- |
-| `"golang concurrency"` | `"Go goroutine leak detection uber goleak pprof"` |
-| `"laravel database"` | `"Laravel Eloquent N+1 query prevention eager loading best practices"` |
-| `"rust memory"` | `"Rust ownership borrow checker lifetime annotation patterns"` |
-| `"API error handling"` | `"RFC 7807 Problem Details HTTP API error format implementation"` |
+Daripada membaca panduan tutorial abal-abal, Principal Engineer Top 1% menganalisis *source code* secara langsung. 
+Jika kita membutuhkan implementasi *Retry Mechanism*, jangan tanya web; baca implementasi di `net/http` atau library tangguh (misal: *Polly* di C# atau *hashicorp/go-retryablehttp* di Go).
 
-### 4.3. Query untuk Menemukan Anti-Patterns
-Tambahkan kata kunci negatif untuk menemukan kesalahan umum:
-```
-"{bahasa} {topik} common mistakes pitfalls anti-pattern"
-"{bahasa} {topik} what NOT to do production"
+### Aturan Ekosistem Library
+Dilarang menciptakan roda berulang kali (*reinventing the wheel*). 
+*   **Wajib:** Periksa `go.mod`, `package.json`, atau `Cargo.toml`.
+*   **Wajib:** Prioritaskan standard library, lalu library tier-1 ekosistem yang teruji pertempuran (battle-tested).
+*   **Haram:** Menggunakan library antah berantah yang tidak pernah di-maintain, dengan sedikit *stars* Github, hanya demi efisiensi satu baris yang berujung *security vulnerability*.
+
+## 5. Anti-Patterns Kritis
+
+### ❌ Anti-Pattern 1: Web Search Bypass (Kemalasan Fatal)
+AI langsung menggunakan alat pencarian web atau hafalan internal sebelum menyentuh file lokal yang kaya informasi.
+
+```json
+// CONTOH SALAH (Mengabaikan referensi lokal, langsung web search):
+{
+  "toolName": "search_web",
+  "arguments": {
+    "query": "How to configure standard database connection in this project"
+  }
+}
 ```
 
----
+```json
+// CONTOH BENAR (Audit Lokal Mendalam via native tooling):
+{
+  "step 1": {
+    "toolName": "list_dir",
+    "arguments": { "DirectoryPath": "C:/project/config" }
+  },
+  "step 2": {
+    "toolName": "grep_search",
+    "arguments": { "SearchPath": "C:/project/config", "Query": "database", "IsRegex": false }
+  }
+}
+```
 
-## 5. Batasan & Aturan Etika Research
+### ❌ Anti-Pattern 2: Pelanggaran Terminal Primitive
+AI menggunakan tool eksekusi command shell alih-alih tool native agen yang direkomendasikan sistem, melanggar *Critical Instruction 1*.
 
-1. **DILARANG** menulis konten berdasarkan asumsi atau "tebakan terdidik" LLM tanpa verifikasi.
-2. **DILARANG** meng-copy-paste konten panjang dari sumber tanpa reformulasi dan adaptasi ke format standar kita.
-3. **WAJIB** menyesuaikan semua contoh kode agar memenuhi standar Zero-Placeholder & Production-Ready.
-4. **WAJIB** menggunakan versi terbaru dari bahasa/framework (misal: Go 1.23+, Laravel 11+, Rust 2024 edition) kecuali ada alasan teknis untuk backward compatibility.
+```json
+// CONTOH SALAH (Menggunakan bash/powershell command tool untuk inspeksi file dasar):
+{
+  "toolName": "run_command",
+  "arguments": {
+    "CommandLine": "cat /references/guidelines.md | grep 'security'",
+    "Cwd": "C:/"
+  }
+}
+```
+
+```json
+// CONTOH BENAR (Menggunakan native AI grep_search tool yang terstruktur & steril):
+{
+  "toolName": "grep_search",
+  "arguments": {
+    "SearchPath": "C:/references/guidelines.md",
+    "Query": "security",
+    "IsRegex": false
+  }
+}
+```
+
+## 6. Production Edge Cases
+
+### Edge Case 1: Dokumentasi Online Mismatch dengan Kode Disk Lokal
+**Skenario:** Versi library yang diinstal secara lokal (misal v1.2) memiliki signature fungsi yang berbeda dengan dokumentasi web terbaru (v2.0). 
+**Resolusi:** *Lokal adalah SSOT.* Wajib melakukan `grep_search` pada folder dependensi instalasi lokal (`node_modules/library-x` atau `vendor/`) untuk memastikan signature fungsi dan *deprecated flags* sesuai dengan kenyataan yang akan di-*compile* atau di-jalankan, bukan berhalusinasi dari dokumentasi internet terbaru.
+
+### Edge Case 2: Keterbatasan Perizinan Saat Inspeksi
+**Skenario:** Agen mencoba melakukan `list_dir` atau `view_file` pada direktori sensitif (`.git`, sertifikat SSL server lokal) atau file terkunci oleh *process* lain.
+**Resolusi:** Tangkap error secara cerdas tanpa panik. Analisis apakah file tersebut mutlak diperlukan. Jika iya, gunakan tool `ask_permission` dengan cakupan *directory* seminimal mungkin (*narrowest scope*), atau laporkan kepada pengguna bahwa file *lock* menghalangi inspeksi. Jangan pernah meminta *root/admin* secara membabi buta.
+
+### Edge Case 3: Berhadapan dengan Monolith File Raksasa (Mega-Files)
+**Skenario:** `view_file` pada `legacy_god_object.cs` yang memiliki 80.000 baris, memicu pemotongan konteks (truncation) dan kehilangan token secara drastis.
+**Resolusi:** Jangan panik dan mengeksekusi paginasi buta yang memakan waktu. Segera beralih ke `grep_search` dengan fitur `MatchPerLine: true` menggunakan ekspresi reguler untuk menemukan batas blok kode spesifik (seperti definisi fungsi awal), lalu gunakan `view_file` dengan argumen `StartLine` dan `EndLine` untuk merangkum scope eksak, tanpa membaca ribuan baris sampah yang tidak diperlukan.
+
+## 7. Analisis Trade-Off: Local-First Research vs Live Web Search
+
+Mengapa kita bersikeras memilih riset lokal (Local-First) dibandingkan langsung mencarinya di mesin penelusuran internet? Berikut adalah analisis objektifnya:
+
+**Kelebihan (Local-First Research):**
+1. **Konteks Eksak & Nyata:** Kode lokal adalah apa yang akan di-build oleh compiler saat ini. Tidak peduli apa kata internet, jika file lokal mengatakan `v1.4.2`, itulah kebenaran mutlaknya.
+2. **Kecepatan dan Latensi Nol:** Memanggil `grep_search` di disk membutuhkan milidetik, sedangkan penelusuran web membutuhkan koneksi HTTP, parsing halaman HTML, dan ekstraksi teks yang membuang kuota token.
+3. **Privasi & Keamanan (Zero Leak):** Kode milik perusahaan atau pengguna tidak akan pernah dikirimkan sebagai *query string* ke mesin pencari eksternal (OWASP Data Leakage Prevention).
+
+**Kekurangan / Kelemahan (Local-First Research):**
+1. **Keterbatasan Cakupan:** Jika dokumentasi lokal tidak lengkap atau pengembang asli tidak pernah menulis komentar, agen tidak akan mendapatkan jawaban mutlak dari disk.
+2. **Risiko Echo-Chamber:** Jika kode base asli sudah buruk (mengandung bug atau anti-pattern kuno), riset murni dari disk lokal bisa membuat agen meniru pola salah tersebut berulang kali tanpa tahu standar industri terbaru yang jauh lebih baik di internet.
+3. **Overhead Pemindaian Disk:** Pada proyek super monolit (berukuran >10 GB), melakukan pencarian regex liar dapat menyebabkan beban I/O tinggi pada mesin pengguna.
+
+## Kesimpulan Operasional
+Hukum ini bersifat absolut. Penjelajahan harus berbasis fakta lokal, referensi kode sejati (*internals*), dan penghindaran *wheel-reinventing*. Eksekusi alat native harus lebih dulu mendominasi atas eksekusi shell mentah, memastikan setiap langkah yang diambil adalah langkah Principal Engineer Top 1%.

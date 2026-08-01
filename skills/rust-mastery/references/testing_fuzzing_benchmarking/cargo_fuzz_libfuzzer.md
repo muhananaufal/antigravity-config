@@ -1,77 +1,125 @@
-# Fuzzing dengan `cargo-fuzz` (libFuzzer)
+# Cargo Fuzz & libFuzzer: Automasi Deteksi Kelemahan Memori
 
-## 1. Konsep Utama & Kapan Digunakan
-Fuzzing adalah teknik testing otomatis dengan mengirimkan input data random (yang perlahan dimutasi/dievolusikan oleh algoritma genetic berbasis code-coverage) ke suatu fungsi untuk memicu *crash*, panic, atau *memory error*. `cargo-fuzz` mengintegrasikan LLVM `libFuzzer` ke dalam ekosistem Rust.
+## Deskripsi dan Konsep Utama
+Fuzzing adalah teknik *automated software testing* yang menyediakan data *random* (namun ber-evolusi) yang tidak terduga ke fungsi sistem target (SUT). Rust `cargo-fuzz` menggunakan kapabilitas sanitisasi LLVM (`libFuzzer`) berbasis *Coverage-Guided Fuzzing*. Daripada mengandalkan insting developer untuk menulis edge-cases, fuzzer membaca *code branches* yang dieksekusi, lalu memutasi input (*genetic algorithm*) demi mencari branch tersembunyi yang berisiko memicu `panic!`, *out-of-bounds index*, OOM, atau bahkan *memory leak*.
 
-Gunakan `cargo-fuzz` ketika:
-- Menulis parser untuk format data yang kompleks (JSON, gambar, protokol network, custom DSL).
-- Menulis kode kriptografi atau sistem manipulasi memori tingkat rendah.
-- Setiap kode yang memproses input eksternal "tidak terpercaya" (untrusted user input).
-
-## 2. Arsitektur / Flow
-
-```ascii
-[ LLVM libFuzzer Engine ] ---(Generates mutated bytes)---> [ Fuzz Target (Rust) ]
-        ^                                                         |
-        | (Coverage Feedback: "Ah, new code path hit!")           |
-        +---------------------------------------------------------+
-        
-If Panic / OOM / Hang occurs -> (Crash Saved to `fuzz/artifacts`)
+## Arsitektur & Flow (ASCII Diagram)
+```text
+ [Corpus Directory (Seed Inputs)]
+           |     ^
+           v     | (New coverage found: save input)
+   +-------------------+
+   |   LLVM libFuzzer  | <--- Mutates raw bytes (Bit-flips, splicing)
+   +-------------------+
+           |
+    [fuzz_target!(|data: &[u8]|)]
+           |
+           v
+ [Target Rust Function (Parser/Codec)]
+           |
+       [Crash / Panic?]
+          /       \
+      [YES]       [NO]
+        |           |
+ [Save artifact] [Loop]
 ```
 
-## 3. Kode Rust Production-Ready
-
-Struktur folder hasil menjalankan `cargo fuzz init`:
-
+## Implementasi Produksi (Rust)
 ```rust
-// File: fuzz/fuzz_targets/parse_url.rs
+// File ini diasumsikan berada di bawah direktori `fuzz/fuzz_targets/` (e.g. parse_packet.rs)
+// Untuk referensi code: tidak ada #[cfg(test)] karena fuzz target dikompilasi terpisah.
+// Namun kita sediakan mock environment untuk kompatibilitas.
+
 #![no_main]
+
+// Simulasikan macro cargo-fuzz agar lolos compiler lokal
+#[cfg(not(fuzzing))]
+macro_rules! fuzz_target {
+    (|$name:ident: $ty:ty| $body:block) => {
+        pub fn run_fuzz($name: $ty) {
+            $body
+        }
+    };
+}
+
+#[cfg(fuzzing)]
 use libfuzzer_sys::fuzz_target;
 
-// Anda perlu trait Arbitrary jika fuzzer membangkitkan Struct terstruktur alih-alih [u8]
 use arbitrary::Arbitrary;
 
+// Grammar-aware fuzzing: daripada menggunakan bytes mentah &[u8],
+// kita meminta Arbitrary trait dari libfuzzer untuk membangkitkan struktur yang valid secara parsial.
 #[derive(Arbitrary, Debug)]
-struct FuzzInput {
-    url_str: String,
-    port_override: Option<u16>,
+pub struct NetworkPacket {
+    pub magic: u16,
+    pub version: u8,
+    pub payload: Vec<u8>,
 }
 
-// Target yang akan dibombardir ribuan kali per detik
-fuzz_target!(|data: FuzzInput| {
-    // Panggil target fungsi dari crate utama Anda
-    // Asumsi: my_crate::UrlParser
-    
-    // Fuzzer bertugas MENEMUKAN PANIC. 
-    // Oleh karena itu, panic yang wajar karena input "benar-benar ngaco" harus 
-    // ditangani agar tidak dilaporkan sebagai bug. (Namun dalam Rust yang aman, parse tak boleh panic).
-    
-    // Jika parse() me-return Result (Ok atau Err), itu valid, program tidak crash.
-    // Jika ada panic internal di dalam parse(), fuzzer akan menangkapnya.
-    let _ = parse_custom_url_logic(&data.url_str, data.port_override);
+// Target Fungsi yang rapuh
+pub fn decode_custom_protocol(packet: &NetworkPacket) {
+    if packet.magic == 0xBEEF {
+        if packet.version > 2 {
+            // Potensi panic: membaca indeks yang tidak aman dari payload tanpa validasi panjang
+            if packet.payload.len() >= 4 {
+                let critical_data = packet.payload[3];
+                // Lakukan sesuatu...
+                if critical_data == 0xAA {
+                    // Logic flaw (hanya dapat dideteksi dengan assertion kustom)
+                    assert!(packet.payload.len() < 1000, "Payload too large for AA code");
+                }
+            }
+        }
+    }
+}
+
+// Entrypoint fuzzer
+fuzz_target!(|packet: NetworkPacket| {
+    // Jalankan fungsi
+    decode_custom_protocol(&packet);
 });
 
-// Implementasi dummy di crate utama yang sengaja punya bug panics!
-fn parse_custom_url_logic(url: &str, _port: Option<u16>) -> Result<(), ()> {
-    // Bug 1: Panic jika user input format aneh tertentu
-    if url.starts_with("http") && url.contains("^^") {
-        panic!("Unreachable state, URL parser logic failed!"); 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_safe_packet() {
+        let p = NetworkPacket {
+            magic: 0x0000,
+            version: 1,
+            payload: vec![1, 2, 3],
+        };
+        decode_custom_protocol(&p);
     }
-    
-    Ok(())
+
+    #[test]
+    #[should_panic(expected = "Payload too large")]
+    fn test_panic_condition_discovered_by_fuzzer() {
+        let p = NetworkPacket {
+            magic: 0xBEEF,
+            version: 3,
+            payload: vec![0, 0, 0, 0xAA, 0, 0], // panjang baru 6, masih di bawah 1000? Oh, wait, padding
+        };
+        // Setup payload length to be >= 1000 to trigger the panic
+        let mut p_large = p;
+        p_large.payload = vec![0; 1000];
+        p_large.payload[3] = 0xAA;
+        
+        decode_custom_protocol(&p_large);
+    }
 }
 ```
 
-Cara eksekusi: `cargo +nightly fuzz run parse_url`
+## Anti-Patterns
 
-## 4. Anti-Pattern Spesifik
-1. **Melewatkan limitasi input (seperti max length).**
-   - *Bahaya*: Fuzzer dapat mengirim data sebesar 2GB, memicu Out of Memory (OOM) yang merupakan behavior standar sistem operasi, tetapi membingungkan hasil fuzzing karena OOM dicatat sebagai "crash".
-   - *Solusi*: Batasi ukuran input awal di fuzzer target. Cek `if data.len() > 1_000_000 { return; }`.
-2. **Tidak mensuplai `corpus` awal.**
-   - *Bahaya*: libFuzzer harus menebak struktur data valid dari nol array `[]`. Ini memakan jutaan iterasi hanya untuk menembus filter sederhana.
-   - *Solusi*: Isi folder `fuzz/corpus/parse_url` dengan 5-10 contoh file input yang valid/normal. Fuzzer akan memutasikannya, meningkatkan coverage seketika.
+1. **Fuzzing Stateful Systems tanpa Reset**: Melakukan fuzzing terhadap suatu *global static state* atau koneksi database tanpa melakukan *reset/cleanup* di akhir tiap siklus eksekusi `fuzz_target!`.
+   *Mengapa berbahaya*: Fuzzer akan menemukan *false positive* crash karena sistem kehabisan memori (*memory leak* fiktif) atau statenya menjadi rusak oleh input sebelumnya, membuat replikasi (reproducibility) bug dari *artifact* mustahil dilakukan.
+2. **Raw Byte Parsing untuk Format Kompleks (Tanpa Arbitrary)**: Membuang waktu CPU memfuzzing `&[u8]` secara *random* ke *parser* JSON atau SQL tanpa mendefinisikan *grammar-aware fuzzer* (seperti `arbitrary`).
+   *Mengapa berbahaya*: 99.9% komputasi fuzzing akan terbuang hanya untuk mendapatkan *syntax error* di fase awal (awal parser). Libfuzzer tidak bisa menembus *deep code branches* yang memerlukan valid format.
 
-## 5. Edge Cases & Defensive Programming
-- **Sanitizers**: Jalankan fuzzer dengan Address Sanitizer (ASan) untuk menangkap memory leak / unsafe Rust violations: `RUSTFLAGS="-Z sanitizer=address" cargo +nightly fuzz run ...`
-- **Fuzzing Logic Berurutan (Stateful)**: Fuzzing API yang stateful (misal Database: Insert -> Update -> Delete) cukup sulit. Ubah target fuzz menerima `enum Action { Insert(String), Update(u32), ... }` sebagai `Arbitrary` lalu iterasi enum tersebut secara stateful di loop fuzzer.
+## Edge Cases & Defensive Programming
+
+1. **Corpus Explosion (Corpus Minimization)**: Corpus input yang disimpan libfuzzer membengkak dari 1MB ke 100GB karena terlalu banyak rute unik minor. Solusinya, rutin lakukan `cargo fuzz cmin` (Corpus Minimization) yang mereduksi input yang memiliki *coverage overlap* sehingga fuzzer iterasi lebih agresif dan ringan.
+2. **Infinite Loops / Timeout**: Input acak menghasilkan kondisi di mana `while count > 0` berjalan tanpa henti karena `count` secara logis termutasi aneh dan berputar-putar. *Timeout* akan ditangkap fuzzer sebagai crash. Selalu amankan loop dengan iterasi absolut maksimum (`MAX_ITER`).
+3. **OOM akibat Alokasi Fiktif**: Fuzzer sering membuat input: `[LENGTH=0xFFFF_FFFF_FFFF, DATA...]`. Kalau parser Rust melakukan `Vec::with_capacity(length)` secara langsung, sistem akan langsung OOM Panic dan fuzzer mati. Batasi `capacity` maksimum pada data eksternal, atau gunakan fallible allocation (`try_reserve`).

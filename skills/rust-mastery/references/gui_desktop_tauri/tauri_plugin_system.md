@@ -1,78 +1,149 @@
-# Tauri Plugin System
+# Sistem Plugin Tauri v2 & Ekstensibilitas Arsitektur
 
-## Konsep Utama
-Pada Tauri v2, hampir seluruh fungsionalitas inti (seperti file system, dialog, store) diekstraksi menjadi sistem **Plugin**. Arsitektur ini mengurangi binary size secara signifikan dan memungkinkan third-party developer mengekspos library Rust/native mobile khusus (seperti akses bluetooth atau kamera Android) ke API frontend, sembari mengontrol akses via izin kapabilitas (Capability Permissions).
+## Konsep Utama & Arsitektur
+Tauri v2 dirancang sebagai inti (core) yang sangat modular. Alih-alih membengkakkan biner utama dengan fitur-fitur seperti File System (fs), Global Shortcut, atau SQL Database, Tauri mendelegasikannya melalui Sistem Plugin. 
 
-## Arsitektur & Flow
-```ascii
-[ Plugin JS NPM Package ]
-          |
- (Tauri IPC `plugin:nama|command`)
-          |
-[ App Capability Router (ACL) ]
-          |
-[ Rust Plugin (tauri::plugin::Builder) ] -> [ Android/iOS SDK Layer via JNI/ObjC ]
-          |
-[ OS Native Action (Bluetooth, FS) ]
+Keunggulan Sistem Plugin:
+1. **Modularitas (Opt-in Security)**: Aplikasi hanya mengompilasi dan memberikan izin OS untuk modul yang dibutuhkan (mengurangi attack surface).
+2. **Lifecycle Hooks**: Plugin dapat menginjeksi logika asinkron pada siklus hidup aplikasi (seperti saat `setup`, `on_page_load`, atau `on_drop`).
+3. **Cross-Language Bindings**: Memungkinkan pembuatan perintah kustom yang terikat langsung ke objek JavaScript global (`window.__TAURI__.myPlugin`).
+
+### Diagram Arsitektur: Aliran Data Plugin Tauri
+```text
+[ Webview (JS/TS) ] 
+       | invoke('plugin:my_sql|execute_query')
+       v
++-------------------------------------------------+
+|               [ Tauri Core IPC ]                |
++-------------------------------------------------+
+       | Rute berdasarkan prefix 'plugin:nama_plugin'
+       v
+[ Tauri Plugin 'my_sql' ]
+  - setup(): Inisialisasi koneksi DB (saat App mulai)
+  - commands: {
+       execute_query() -> Akses DB Pool
+  }
+  - on_page_load(): Injeksi script pelacak (opsional)
 ```
 
-## Production-Ready Code
+## Kode Produksi Tauri v2 Plugin (Rust)
+Kode ini adalah implementasi plugin otentikasi biometrik kustom yang berbagi state (Arc Mutex) secara aman.
+
 ```rust
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use tauri::{
     plugin::{Builder, TauriPlugin},
-    Runtime,
-    Manager,
+    AppHandle, Manager, Runtime, State,
 };
+use serde::{Deserialize, Serialize};
 
-#[derive(Default)]
-struct PingCounter {
-    count: std::sync::Mutex<u32>,
+// 1. Definisikan Error Custom untuk Plugin
+#[derive(Debug, thiserror::Error)]
+pub enum BiometricError {
+    #[error("Hardware unavailable: {0}")]
+    HardwareError(String),
+    #[error("User canceled authentication")]
+    Canceled,
 }
 
+impl serde::Serialize for BiometricError {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(self.to_string().as_ref())
+    }
+}
+
+// 2. Struct State Internal Plugin
+struct BiometricState {
+    pub is_locked: Mutex<bool>,
+    pub hardware_id: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct AuthResponse {
+    success: bool,
+    token: Option<String>,
+}
+
+// 3. Deklarasikan Commands (Prefix otomatis di-handle oleh Tauri IPC)
 #[tauri::command]
-async fn ping<R: Runtime>(
-    app: tauri::AppHandle<R>,
-    state: tauri::State<'_, PingCounter>,
-) -> Result<String, String> {
-    let mut count = state.count.lock().map_err(|e| e.to_string())?;
-    *count += 1;
-    Ok(format!("Pong! Total pings: {}", *count))
+async fn authenticate_user<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, Arc<BiometricState>>,
+) -> Result<AuthResponse, BiometricError> {
+    
+    let mut locked = state.is_locked.lock().await;
+    if !*locked {
+        return Ok(AuthResponse { success: true, token: Some("ALREADY_AUTH".into()) });
+    }
+
+    // Simulasi pemanggilan OS API Biometrik (C FFI / WinRT)
+    // let result = hardware_biometric_scan(&state.hardware_id).await?;
+    
+    *locked = false; // Buka kunci
+    
+    // Broadcast event ke semua webview
+    let _ = app.emit("biometric-unlocked", ());
+
+    Ok(AuthResponse { success: true, token: Some("NEW_TOKEN_XYZ".into()) })
 }
 
+// 4. Builder Plugin
 pub fn init<R: Runtime>() -> TauriPlugin<R> {
-    Builder::new("my-custom-plugin")
-        .invoke_handler(tauri::generate_handler![ping])
-        .setup(|app_handle, _api| {
-            // Setup plugin specific state, databases, etc.
-            app_handle.manage(PingCounter::default());
-            println!("Plugin 'my-custom-plugin' initialized");
+    Builder::new("biometrics")
+        .setup(|app, _api| {
+            // Lifecycle: Dijalankan saat aplikasi mulai, sebelum webview muncul.
+            let state = Arc::new(BiometricState {
+                is_locked: Mutex::new(true),
+                hardware_id: "HW_FINGERPRINT_01".to_string(),
+            });
+            
+            // Manage state KHUSUS untuk plugin ini (terisolasi)
+            app.manage(state);
             Ok(())
         })
-        .on_drop(|_app| {
-            // Clean up resources, threads, etc.
-            println!("Plugin dropped, cleaning up resources");
+        .on_page_load(|window, _payload| {
+            // Lifecycle: Otomatis inject script ke window baru
+            let _ = window.eval("console.log('Biometric plugin loaded');");
         })
+        .invoke_handler(tauri::generate_handler![authenticate_user])
         .build()
 }
+
+// Cara Integrasi di `main.rs`:
+// tauri::Builder::default().plugin(my_plugin::init())
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_plugin_builder() {
-        // Build the plugin to ensure the API matches
-        let _plugin: TauriPlugin<tauri::Wry> = init();
+    fn test_biometric_error_serialization() {
+        let err = BiometricError::HardwareError("Disconnected".to_string());
+        let json = serde_json::to_string(&err).unwrap();
+        assert_eq!(json, "\"Hardware unavailable: Disconnected\"");
     }
 }
 ```
 
 ## Anti-Patterns
-1. **Mengakses State Utama (App State) dari dalam Plugin**: 
-   *Mengapa Berbahaya:* Plugin harus bersifat modular. Menggunakan tipe struktural spesifik (seperti state milik aplikasi utama) akan menciptakan tight coupling. Plugin harus mendefinisikan dan mengelola statenya sendiri (di-inject lewat closure `setup`).
-2. **Tidak Melakukan Cleanup di `on_drop`**:
-   *Mengapa Berbahaya:* Tauri memungkinkan reload event dari webview. Jika plugin meluncurkan background thread loop dan tidak menghentikannya saat `on_drop`, thread baru akan di-spawn setiap reload, menyebabkan memory/CPU leak parah (Zombies threads).
+
+### 1. Hardcoding Izin (Permissions) Tanpa Validasi Context
+**Penjelasan:** Di dalam command `authenticate_user`, Anda tidak mengecek apakah URL Webview yang memanggil berasal dari local origin (`tauri://localhost`) atau dari website eksternal via iframe.
+**Bahaya:** Jika iframe pihak ketiga disisipkan ke aplikasi Anda (misal via XSS), iframe tersebut bisa dengan mudah memanggil `invoke('plugin:biometrics|authenticate_user')` dan mencuri token. Manfaatkan sistem Capabilities Tauri v2 dan selalu verifikasi `Window::url()` pada operasi sensitif.
+
+### 2. State Mutex Blocking di `on_page_load`
+**Penjelasan:** Menggunakan `std::sync::Mutex` (sinkron) lalu melakukan `.lock().unwrap()` di dalam hook sinkronus seperti `on_page_load` atau `on_drop` saat menunggu operasi I/O jaringan lambat.
+**Bahaya:** Ini akan membuat thread OS mandek. Hook lifecycle GUI Tauri berjalan di thread utama/UI. Jika terblokir, OS akan menganggap aplikasi crash/hang ("Application is not responding"). Selalu spawn thread terpisah atau gunakan tokio task untuk logika berat di dalam lifecycle hooks sinkron.
 
 ## Edge Cases & Defensive Programming
-- **Mobile Target Conditional Compile**: Gunakan `#[cfg(target_os = "android")]` untuk API yang native spesifik. Saat mem-build plugin lintas platform, hindari error saat proses linking C-libraries dengan mengeksklusi modul di iOS/Desktop.
-- **V2 ACL Scope**: Panggil izin untuk IPC lewat `.json` manifest plugin. Frontend JS akan selalu mendapat error permission denied jika command tidak di-white-list di internal capability router.
+
+1. **State Overwriting (Manage State Collision)**:
+   Aplikasi Tauri memiliki satu global registry untuk `State`. Jika Plugin Anda memanggil `app.manage(Arc<Mutex<String>>)` dan Plugin lain juga mem-manage tipe yang eksak sama (`Arc<Mutex<String>>`), state plugin pertama akan TERTIMPA. Ini bug silent yang mengerikan. Selalu bungkus state plugin Anda di dalam *Custom Newtype Struct* (seperti `BiometricState` di atas) agar tipe datanya unik secara global.
+2. **Webview HMR (Hot Module Replacement)**:
+   Selama development React/Vite, hook `on_page_load` akan dipicu ratusan kali saat developer men-save file JS (karena halaman reload otomatis). Jika plugin Anda melakukan alokasi hardware/socket pada hook ini tanpa debouncing atau pengecekan state "already_initialized", aplikasi akan crash karena port/hardware contention (Address already in use).
+3. **Plugin Drop Hook Panic**:
+   Saat aplikasi dimatikan (graceful shutdown), jika Anda melakukan clean-up logic di trait `Drop` pada state, perhatikan bahwa Anda tidak boleh mengasumsi `tokio::Runtime` masih aktif sepenuhnya. Melakukan `tokio::spawn` pada saat aplikasi exit akan memicu panic (Runtime is dropping). Gunakan OS-level thread native jika Anda benar-benar perlu flush data darurat sebelum proses mati.
