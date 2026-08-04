@@ -71,6 +71,10 @@ Domain yang hampir selalu relevan untuk Go service manapun:
 | Insiden produksi, postmortem, severity, MTTD/MTTM, on-call | `references/engineering_practice/incident_postmortem.md` |
 | Melakukan code review, menyusun standar review, linter kustom tim | `references/engineering_practice/code_review_go.md` |
 | Menulis design doc / RFC fitur besar sebelum implementasi | `references/engineering_practice/technical_design_doc.md` |
+| Test konkurensi rapuh, `time.Sleep` di test, deadlock menggantung di CI | `references/testing_quality/synctest_deterministic_concurrency.md` |
+| Streaming data besar tanpa materialisasi, iterator kustom, `iter.Seq` | `references/runtime_internals/iterators_range_over_func.md` |
+| Perbaikan performa dari profil produksi tanpa mengubah kode | `references/runtime_internals/pgo_profile_guided_optimization.md` |
+| Menghapus berkas `utils`, interning string, cache yang tidak menahan memori | `references/runtime_internals/stdlib_modern_slices_maps_sync.md` |
 | Runtime internals, GC tuning, CGO, PGO, goroutine stack | `references/runtime_internals/` |
 | Distributed transactions, saga, outbox, CQRS, feature flags, multi-tenancy | `references/distributed_patterns_resilience/` |
 | Raft, etcd, LSM, WAL, gossip, vector clock, BadgerDB | `references/distributed_consensus_storage/` |
