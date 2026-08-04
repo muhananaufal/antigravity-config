@@ -8,6 +8,12 @@
 
 $ErrorActionPreference = 'Continue'
 
+# --- PENANDA PASIF ---
+# Menjawab satu pertanyaan tanpa perlu tes khusus: apakah Antigravity BENAR-BENAR
+# memanggil skrip ini? Kalau berkas penanda ini muncul, hook dieksekusi tapi
+# keluarannya diabaikan. Kalau tidak pernah muncul, hooks.json memang mati total.
+try { "$(Get-Date -Format o)" | Out-File -FilePath "$env:TEMP\agy_stop_hook_marker.txt" -Append -Encoding ascii } catch { }
+
 # Setel $false untuk mematikan Gate 4 (blokir saat kode berubah tapi test tak pernah jalan).
 # Placeholder & secret tetap ditegakkan apa pun nilainya.
 $ENFORCE_TESTS = $true
