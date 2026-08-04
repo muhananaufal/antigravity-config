@@ -76,12 +76,48 @@ function Get-TargetFiles([string]$root, [bool]$deep) {
 
 $targets = @(Get-TargetFiles $Path ([bool]$Full))
 
+# --- RATCHET: baris mana yang BARU di sesi ini? ---
+# Gate yang memblokir utang lama di berkas yang tidak disentuh membuat setiap repo
+# legacy mustahil dikerjakan, DAN bertabrakan dengan AGENTS.md section 4 yang
+# melarang memperbaiki temuan di luar scope. Jadi:
+#   pelanggaran di baris BARU  -> BLOKIR
+#   pelanggaran yang sudah ada -> laporkan sebagai Side Note, jangan blokir
+$addedLines = @{}   # path -> hashtable nomor baris yang ditambahkan
+$isRatchet = $false
+Push-Location $Path
+try {
+    $null = git rev-parse --is-inside-work-tree 2>$null
+    if ($LASTEXITCODE -eq 0) {
+        $isRatchet = $true
+        $diff = git diff --unified=0 HEAD 2>$null
+        $cur = $null; $ln = 0
+        foreach ($line in $diff) {
+            if ($line -match '^\+\+\+ b/(.+)$') { $cur = (Join-Path $Path ($Matches[1] -replace '/','\')); $addedLines[$cur] = @{} }
+            elseif ($line -match '^@@ -\d+(?:,\d+)? \+(\d+)') { $ln = [int]$Matches[1] }
+            elseif ($line -match '^\+' -and $line -notmatch '^\+\+\+') { if ($cur) { $addedLines[$cur][$ln] = $true }; $ln++ }
+        }
+        # Berkas untracked seluruhnya baru
+        foreach ($u in (git ls-files --others --exclude-standard 2>$null)) {
+            if ($u) { $addedLines[(Join-Path $Path ($u -replace '/','\'))] = 'ALL' }
+        }
+    }
+} catch { } finally { Pop-Location }
+
+function Test-IsNew([string]$file, [int]$lineNo) {
+    if (-not $isRatchet) { return $true }
+    if (-not $addedLines.ContainsKey($file)) { return $false }
+    if ($addedLines[$file] -eq 'ALL') { return $true }
+    return $addedLines[$file].ContainsKey($lineNo)
+}
+$preexisting = New-Object System.Collections.Generic.List[string]
+
 # --- Gate 1: placeholder / kode setengah matang ---
 $PLACEHOLDER = '(//|#|/\*|<!--)\s*(TODO|FIXME|XXX|TBD|HACK)\b|omitted for brevity|implement (this )?later|your code here'
 foreach ($f in $targets) {
     $hits = Select-String -LiteralPath $f.FullName -Pattern $PLACEHOLDER -AllMatches -ErrorAction SilentlyContinue
     foreach ($h in $hits) {
-        $violations.Add("PLACEHOLDER  $($f.FullName):$($h.LineNumber)  $($h.Line.Trim())")
+        $msg = "PLACEHOLDER  $($f.FullName):$($h.LineNumber)  $($h.Line.Trim())"
+        if (Test-IsNew $f.FullName $h.LineNumber) { $violations.Add($msg) } else { $preexisting.Add($msg) }
     }
 }
 
@@ -102,7 +138,8 @@ foreach ($f in $targets) {
         # kredensial asli tetap dilaporkan walau ditulis di baris berlabel contoh,
         # karena kunci sungguhan yang bocor tidak jadi aman karena diberi komentar.
         if (-not $isValueHit -and $line -match '(?i)example|contoh|anti-?pattern|salah|placeholder|xxxx|your[_-]?|<[a-z_]+>|\.\.\.') { continue }
-        $violations.Add("SECRET       $($f.FullName):$($h.LineNumber)  $($line.Trim())")
+        $msg = "SECRET       $($f.FullName):$($h.LineNumber)  $($line.Trim())"
+        if (Test-IsNew $f.FullName $h.LineNumber) { $violations.Add($msg) } else { $preexisting.Add($msg) }
     }
 }
 
@@ -165,11 +202,19 @@ if ($Full) {
 
 # --- Laporan ---
 Write-Output ""
-Write-Output "QUALITY GATE  mode=$(if($Full){'FULL'}else{'FAST'})  berkas_dipindai=$($targets.Count)  perintah_dijalankan=$($ranCommands.Count)"
+Write-Output "QUALITY GATE  mode=$(if($Full){'FULL'}else{'FAST'})  ratchet=$(if($isRatchet){'ON'}else{'OFF'})  berkas_dipindai=$($targets.Count)  perintah_dijalankan=$($ranCommands.Count)"
+
+# Utang lama: dilaporkan supaya bisa jadi Side Note, TAPI tidak memblokir.
+# Memaksa agent membereskannya justru melanggar section 4 AGENTS.md.
+if ($preexisting.Count -gt 0) {
+    Write-Output "PRAADA - $($preexisting.Count) pelanggaran lama di baris yang TIDAK diubah sesi ini (tidak memblokir, tulis sebagai Side Note):"
+    foreach ($v in $preexisting) { Write-Output "  ~ $v" }
+}
+
 if ($violations.Count -eq 0) {
-    Write-Output "LULUS - nol pelanggaran."
+    Write-Output "LULUS - nol pelanggaran baru."
     exit 0
 }
-Write-Output "GAGAL - $($violations.Count) pelanggaran:"
+Write-Output "GAGAL - $($violations.Count) pelanggaran BARU:"
 foreach ($v in $violations) { Write-Output "  $v" }
 exit 1

@@ -140,10 +140,11 @@ DILARANG flattery. Evaluasi dingin dan faktual.
 
 DILARANG mengubah status task jadi `[x]` sebelum SEMUA butir ini lulus.
 
-> **Gate otomatis.** Placeholder & credential hardcode ditegakkan mesin, bukan ingatan:
-> `~/.gemini/config/scripts/quality_gate.ps1` berjalan otomatis lewat Stop hook di kedua tool
-> dan MENOLAK menghentikan agent selama masih ada pelanggaran. Jalankan manual dengan
-> `-Full` untuk sekalian menjalankan linter + test suite sesuai stack.
+> **Gate otomatis (ratchet).** `~/.gemini/config/scripts/quality_gate.ps1` berjalan lewat Stop hook.
+> Pelanggaran **baru** (baris yang Anda tambah/ubah) MEMBLOKIR sampai dibereskan.
+> Pelanggaran **lama** di baris yang tidak Anda sentuh muncul berlabel `~ PRAADA` — DILARANG
+> memperbaikinya, tulis sebagai Side Note (§4). Gate hanya jalan di repo git. Pakai `-Full`
+> untuk sekalian linter + test suite.
 
 - **Test & lint:** `go test -race` / `cargo test` / `composer test` / `pnpm test` sesuai stack, plus linter. Harness belum ada → WAJIB rekomendasikan.
 - **Type-safety:** nol untyped bypass (lihat §0.4).

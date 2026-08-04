@@ -8,6 +8,11 @@
 
 $ErrorActionPreference = 'Continue'
 
+# --- PENANDA PASIF ---
+# Menjawab tanpa tes khusus: apakah Claude Code BENAR-BENAR memanggil skrip ini?
+# Berkas penanda muncul = hook dieksekusi. Tidak pernah muncul = hook tak terpasang.
+try { "$(Get-Date -Format o)  cwd-hook" | Out-File -FilePath "$env:TEMP\cc_stop_hook_marker.txt" -Append -Encoding ascii } catch { }
+
 # Setel $false untuk mematikan Gate 4 (blokir saat kode berubah tapi test tak pernah jalan).
 # Placeholder & secret tetap ditegakkan apa pun nilainya.
 $ENFORCE_TESTS = $true
