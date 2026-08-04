@@ -7,43 +7,16 @@ description: Gunakan skill ini ketika merancang arsitektur, konkurensi, DB/SQLC,
 
 SSOT arsitektur & rekayasa sistem Golang enterprise & high-throughput (28 Domain, 198 File Mahakarya).
 
-## 🔁 Greenfield Protocol (Init Proyek dari Nol — Dynamic Swarm Scaling)
+## 🚦 Protokol Eksekusi (WAJIB dibaca sesuai situasi)
 
-LLM secara alami akan mengambil jalan pintas (laziness) jika disuruh membaca puluhan file. Untuk menjamin standar Top 1% diterapkan 100% tanpa halusinasi, **WAJIB gunakan protokol Dynamic Swarm Subagent (Elastis)** saat inisialisasi **project baru dari nol (empty folder / new repository)**:
+| Situasi | WAJIB baca dulu sebelum menulis apa pun |
+| :--- | :--- |
+| Inisiasi project baru dari nol (empty folder / new repository) | `references/_protocol/greenfield.md` |
+| Tambah fitur / modifikasi / optimasi / audit di repo eksisting | `references/_protocol/brownfield.md` |
 
-1. **Fase Inisialisasi (DILARANG MENEBAK):** Saat user meminta inisiasi project baru, Agen Utama DILARANG membuat `implementation_plan.md` langsung.
-2. **Dynamic Swarm Summon (`pro` tier):** Agen Utama WAJIB memanggil `invoke_subagent` untuk men-spawn minimal 4 hingga >8 subagent secara paralel sesuai kompleksitas proyek (Dynamic Scaling):
-   - **3 Subagent Core Tetap (Mandatory Core Coverage):**
-     - **Subagent 1 (Infra & Data Core):** Wajib `view_file` ke SEMUA file di `arch_patterns/`, `db_sqlc/`, dan `devops_control_planes/`.
-     - **Subagent 2 (API & Logic Core):** Wajib `view_file` ke SEMUA file di `microservices_grpc/`, `testing_quality/`, dan `concurrency/`.
-     - **Subagent 3 (Security & Resilience Core):** Wajib `view_file` ke SEMUA file di `security_owasp/`, `observability_resilience/`, `distributed_patterns_resilience/`, dan `caching_strategy/`.
-   - **Subagent Niche DINAMIS (1 Subagent per Domain Terdeteksi):** 
-     - Agen utama mengecek tabel **Auto-Detect** di bawah. Untuk **SETIAP 1 domain niche** yang cocok dengan proyek (misal: `fintech_reliability/`, `hft_zero_alloc/`, `realtime_networking/`), Wajib spawn **1 Subagent Dedikatif terpisah**. (Jika terdeteksi 4 domain niche, maka summon 3 Core + 4 Niche = **7 Subagents paralel**!).
-3. **Wait & Compile:** Agen Utama menunggu semua subagent melapor, merangkumnya, lalu membuat `implementation_plan.md` dengan opsi *Zero-Steering Grilling*.
-5. **Day-0 Greenfield Production-Ready Quintet (Hukum Wajib Inisiasi Proyek Baru):** Setiap inisialisasi proyek baru (Greenfield) di Golang WAJIB secara default menghasilkan 5 pilar fondasi Day-0 berikut di root proyek:
-   - **Pilar 1: Modular 3-Tier Container Topology:** Tier 1 Core (`docker-compose.yml` DB PostgreSQL/Valkey), Tier 2 Telemetry (`profiles: [telemetry]` OTel Collector, Prometheus, Grafana, Loki), Tier 3 Stress Harness (`profiles: [stress]` `grafana/k6`). *(Dilarang auto-run `docker build`/`up` tanpa izin user).*
-   - **Pilar 2: Fail-Fast Type-Safe Configuration:** `.env.example` bersih + validasi `envconfig`/`caarlos0/env` saat boot (wajib panic/log.Fatal sebelum `net.Listen` atau `sql.Open` jika env invalid).
-   - **Pilar 3: Graceful Shutdown Protocol:** `signal.NotifyContext` menangkap `SIGINT`/`SIGTERM`, server `Shutdown(ctx)` dengan timeout 5-15s, `db.Close()`, serta OTel `tp.Shutdown(ctx)` dan logger sync.
-   - **Pilar 4: Migration & Idempotent Seeder Baseline:** Folder `migrations/` (`golang-migrate`/`goose`) + `seed.sql` data inisial.
-   - **Pilar 5: Unified Task Runner (`Makefile`):** Perintah baku `make dev` (air hot-reload), `make infra-up`/`down`, `make telemetry-up`, `make migrate`, `make seed`, `make test`, `make stress`.
+DILARANG membuat `implementation_plan.md` atau menulis kode sebelum protokol yang relevan dibaca tuntas.
 
-## 🏛️ Brownfield Protocol (Legacy / Refactoring / Tambah Fitur di Repo Eksisting)
-
-Saat user meminta **penambahan fitur baru, modifikasi, optimasi, atau audit** pada **codebase yang sudah ada (Legacy/Existing Project)**, DILARANG memaksakan *Big Bang Rewrite*, penciptaan "Frankenstein Codebase", atau pemakaian daftar subagent statis yang tidak relevan. Gunakan protokol **Dynamic Reconnaissance & Partitioning**:
-
-1. **Intai & Pembelahan Subagent secara 100% Dinamis (Dynamic Hybrid Swarm):**
-   Agen Utama DILARANG mematok nama atau jumlah peran subagent secara kaku. Pertama, lirik struktur direktori root dan dependency (`go.mod`/config) dari repository user. Setelah itu, spawn tim Subagent ber-model `pro` (dari 3 hingga >10 secara elastis) dengan strategi pembagian yang benar-benar selaras dengan kenyataan repo asli:
-   - **Pembagian Berbasis Modul / Folder:** Jika project user dibagi menjadi beberapa modul/domain (misal: `/order`, `/user`, `/catalog`, `/payment`), spawn **1 Subagent Auditor terpisah untuk membedah masing-masing folder/modul**.
-   - **Pembagian Berbasis Tech Stack di `go.mod`:** Jika mendeteksi library tertentu di `go.mod` (misal `gorm.io/gorm`, `kafka-go`, atau `graphql`), spawn subagent auditor dengan misi spesifik memburu kerentanan library tersebut (misal N+1 GORM Hunter, atau Kafka DLQ Auditor). Jika TIDAK ADA fitur finansial/uang, DILARANG memanggil spesialis fintech/moneter!
-   - **Pembagian Berbasis Volume File:** Jika satu folder/package sangat padat (>30 file), pecah audit atas folder tersebut ke beberapa subagent berdasarkan sub-package atau fungsi eksekusi (misal: Subagent A fokus layer Handler/API, Subagent B fokus layer Query/Repository).
-   - **Mastery Standard Matcher (Subagent Dedikatif):** Tugas subagent ini murni mengkonsolidasi seluruh laporan kecacatan dari para auditor di atas, lalu menarik dan membaca HANYA file di direktori `references/` kita yang **spesifik bisa menjadi obat pencerah untuk menyembuhkan temuan tersebut** (wajib membedah `zero_downtime_migrations.md` jika audit menemukan skema DB lama yang harus diubah).
-2. **Zero-Steering Grilling (Opsi Evolusi / Penambahan Fitur):**
-   Agen Utama merangkum laporan dari seluruh tim spesialis dan menyajikan ≥3 opsi netral beserta trade-off untuk user (Gasskan):
-   - **Opsi 1: Native Consistent Extension (KISS):** Tanam fitur baru dengan mematuhi pola asli/ekspresi arsitektur repo tersebut (agar tim developer lama tidak bingung), NAMUN disuntikkan perlindungan standar Top 1% (wajib timeout, parameterized queries, RED metrics, dan index DB). Cepat dan konsisten.
-   - **Opsi 2: Strangler Fig Pattern (Modular Isolation):** Fitur/modul baru didirikan secara independen menggunakan arsitektur modern kita (`internal/` Modular Monolith/Clean/SQLC) tanpa merusak kode lama. Terhubung ke legacy hanya melalui interface facade/proxy.
-   - **Opsi 3: Surgical Rewrite & Expansion:** Jika modul lama terkait sudah terlalu cacat (misal fitur baru bergantung pada modul pembayaran jadul yang fatal/rentan race condition), ajukan operasi bedah modul lama sekaligus merancang fitur barunya berpadu berstandar Top 1%.
-
-### 🔍 Auto-Detect Context Domain (Scan dari Task)
+## 🔍 Auto-Detect Context Domain (Scan dari Task)
 
 Agent wajib mencocokkan nature of task ke domain berikut **secara proaktif**:
 
@@ -69,8 +42,6 @@ Agent wajib mencocokkan nature of task ke domain berikut **secara proaktif**:
 | QUIC, WireGuard, DNS, MQTT, raw TCP protocol | `advanced_networking_protocols/` |
 | Streaming Excel 1 Juta baris (`excelize`), govips JIT image, FFmpeg video HLS, chromedp PDF | `media_asset_pipeline/` |
 | Katalog dinamis `x/text`, format uang/mata uang ICU, propagasi zona waktu Context, multi-region router | `i18n_localization/` |
-
-
 
 ## 📦 Core References (Wajib Baca Setiap Project)
 

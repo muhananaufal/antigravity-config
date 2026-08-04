@@ -16,12 +16,15 @@ Selamat datang di mahakarya abadi **`nestjs-mastery`**, sebuah mesin pendorong k
 3. **Strict Type-Safety & Zero `any` Bypass:** TypeScript tidak berhak disalahgunakan sebagai JavaScript berbaju modern. Penggunaan `any`, `Object`, atau `unknown` tanpa pengecekan tipe refleksi eksternal yang ketat (*Zod*, *Ajv*, *TypeBox*, atau *class-validator* berlambang `whitelist: true`) adalah **DOSA BESAR**.
 4. **Resilience & Non-Blocking Event Loop:** Node.js / Bun bekerja di atas V8 Single-Threaded Event Loop. Komputasi CPU-bound masif (seperti hashing, kriptografi, atau pemrosesan Excel gb-scale) **WAJIB DIASTRAKSI KELUAR DARI MAIN EVENT LOOP** ke kumpulan benang eksekusi (*Worker Threads pool via Piscina* atau *Rust N-API Addon via napi-rs*).
 5. **Zero-Trust & OWASP API Security:** Tidak ada paket request yang dianggap aman secara default. Enkripsi otentikasi menggunakan JWKS asimetris / OIDC di HTTP-Only Secure Cookies, otentikasi metadata RBAC/ABAC murni via `Reflector`, dan mitigasi pembantaian DDOS dari pintu masuk dengan Redis Valkey Throttling.
-6. **HUKUM MUTLAK DAY-0 GREENFIELD BOOTSTRAP (5 PILAR PRODUCTION-READY):** Setiap inisiasi proyek baru (Greenfield) di NestJS WAJIB secara default meracik 5 pilar fondasi Day-0 berikut di root proyek:
-   - **Pilar 1: Modular 3-Tier Container Topology:** Tier 1 Core (`docker-compose.yml` Postgres & Redis Valkey), Tier 2 Telemetry (`profiles: [telemetry]` OTel Collector, Prometheus RED, Grafana, Loki), Tier 3 Stress Harness (`profiles: [stress]` `grafana/k6`). *(Dilarang auto-run `docker build`/`up` tanpa izin user).*
-   - **Pilar 2: Fail-Fast Type-Safe Configuration:** `.env.example` bersih + `ConfigModule` berpagar `validationSchema` (Zod/Joi/class-validator) saat bootstrap (wajib *crash on boot* jika env hilang sebelum listen port HTTP).
-   - **Pilar 3: Graceful Shutdown & Lifecycle Hooks:** Wajib mengaktifkan `app.enableShutdownHooks()` untuk menangkap `SIGINT`/`SIGTERM`, mendrain koneksi Fastify, menutup Prisma/Drizzle pool, dan mem-flush OTel Tracing SDK.
-   - **Pilar 4: Database Migration & Idempotent Seeder Baseline:** Direktori `prisma/migrations` / `drizzle` + skrip `prisma/seed.ts` atau database seeder untuk inisiasi akun admin awal.
-   - **Pilar 5: Unified Task Runner (`Makefile` / `package.json` scripts):** Perintah baku `make dev` (Nest Fastify hot-reload), `make infra-up`/`down`, `make telemetry-up`, `make migrate`, `make seed`, `make test` (Jest), `make stress` (k6).
+
+## 🚦 Protokol Eksekusi (WAJIB dibaca sesuai situasi)
+
+| Situasi | WAJIB baca dulu sebelum menulis apa pun |
+| :--- | :--- |
+| Inisiasi project baru dari nol, atau operasi >3 berkas / >3 domain | `references/_protocol/greenfield.md` |
+| Keputusan arsitektur / menantang pilihan stack (Challenger Mode) | `references/_protocol/tradeoff.md` |
+
+DILARANG membuat `implementation_plan.md` atau menulis kode sebelum protokol yang relevan dibaca tuntas.
 
 ---
 
@@ -82,16 +85,6 @@ Ketika Anda dihadapkan pada tugas pengembangan, optimasi, atau perombakan sistem
 
 ---
 
-## 🤖 Protokol Swarm Paralel & Cara Pengambilan Ilmu
-
-Sebagai AI dengan keunggulan penalaran kelas Principal, **DILARANG KERAS MENGAWANG ATAU MENGARANG DARI HAFALAN LLM MENTAH** saat menghadapi kasus kompleks. Pastikan Anda mengaktifkan **Swarm Research Protocol**:
-
-1. **Pemeta Rujukan lokal Pertama (Local-First):** Jika Anda berhadapan dengan masalah optimasi GraphQL, panggil tool `list_dir` untuk mengecek direktori `references/api_graphql_federation/`, lalu gunakan `view_file` atau `grep_search` untuk menanamkan isi rujukan ke dalam penalaran Anda.
-2. **Spawne Armada Subagent Secara Paralel:** Untuk operasi besar yang melibatkan >3 file atau >3 domain sekaligus, jangan ragu untuk memantulkan spesifikasi JSON deklaratif tool `invoke_subagent` dengan array armada spesialis (menggunakan Workspace Mode `share` dan Model Tier `pro`).
-3. **Ketaatan Tanpa Sisa:** Kode yang Anda atau Subagent ciptakan berdasarkan ilmu dari rujukan ekosistem ini wajib mencerminkan standar yang sama: 100% type-safe, kompilabel, lulus uji unit tes (Jest/SWC/Fastify Inject), dan menakdirkan keandalan militer!
-
----
-
 ## 🛡️ Penegakan Mutu & Quality Gates (Zero-Tolerance)
 
 Sebelum Anda melaporkan sebuah tugas perbaikan, migrasi, ataupun pembatalan fitur selesai (`[x]` pada Kanban Tracker), Anda **WAJIB** mengeksekusi instrumen penegak hukum yang bersemadi di direktori `scripts/`:
@@ -114,20 +107,6 @@ Skrip penegakan di atas akan langsung membantai dan memblokir eksekusi Anda apab
 4. Kebocoran kredensial statis (`password: "..."`, `api_key: "..."`, atau rahasia yang tidak di-parse dari `.env`).
 
 ---
-
-## ⚡ Analisis Trade-Off: Kapan MENGGUNAKAN dan KAPAN MENGHINATARI NestJS?
-
-Sebagai perwira bersponsor *Critical Challenger Mode*, kita wajib menakar kelemahan sistem secara jujur dan transparan:
-
-### Keunggulan Ekstrem NestJS (Why We Champion It):
-1. **Kedisiplinan Enterprise Mutlak di Dunia Node.js:** Menembak mati kekacauan arsitektur *spaghetti code* khas JavaScript tradisional dengan pola rancang bangun berskill murni ala Spring Boot (DI, Interceptors, Guards, dan Decorator modular).
-2. **Kekuatan I/O Throughput Tinggi bermodorkan Fastify & Bun:** Mengemas skalabilitas jaringan asinkronus tercepat dunia berbantuan Fastify engine dan kompatibilitas Bun Runtime, mencetak rekor jutaan RPS untuk API monosit maupun microservices.
-3. **Isomorfisme Fullstack:** Memungkinkan tim engineering memakai satu bahasa statikal murni (TypeScript) bersandar pembagian kontrak DTO Zod / OpenAPI yang sinkron sejati dari antarmuka frontend (Next.js) hingga mikroservice terbawah!
-
-### Kelemahan & Batasan (When to Challenge and Pivot):
-1. **Bottleneck Single-Threaded pada Komputasi Berat (CPU-Bound):** Jika sistem diproyeksikan 80% pekerjaannya adalah komputasi matematika berat, enkode video murni di proses lokal, atau kriptografi jutaan loop, **TANTANG USER ATAS RESIKO BOTTLENECK INTEL!** Sarankan untuk memutar proses tersebut di **Rust / Golang**, atau pasangkan bridge biner via `napi-rs` / `Piscina Worker Threads`.
-2. **Overhead Memori Heap & Cold Start pada Serverless:** Ukuran jejak memori V8 Heap awal dan waktu muat reflection (*Metadata Reflection Engine*) NestJS tergolong cukup besar untuk platform Function-as-a-Service (FaaS / AWS Lambda) berfrekuensi panggil jarang. Tanpa kompilasi *SWC/esbuild micro bundle* dan teknik *provisioned concurrency warm-up*, latensi *Cold Start* bisa menyiksa pengguna!
-3. **Kutukan Ilusi Runtime TypeScript (Type Erasure):** INGAT BAHWA SECRETO TIPE DATA TYPESCRIPT MUSNAH DI COMPILER! Di runtime, V8 mengeksekusi JavaScript mentah. Jika developer luput memasang pipa validasi skema eksternal (*Zod/TypeBox*), muatan JSON jahat berpotensi merusakkan alur database tanpa diantisipasi tipe compile-time!
 
 ---
 *Manifes `nestjs-mastery` ini adalah Single Source of Truth (SSOT). Jadikan hukum kepatuhannya sebagai jembatan melompati kemegahan arsitektur dunia nyata!*
