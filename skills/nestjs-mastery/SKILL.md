@@ -21,7 +21,9 @@ SSOT arsitektur backend TypeScript enterprise (36 Domain, 138 Berkas). Zero-Tole
 
 | Situasi | WAJIB baca dulu sebelum menulis apa pun |
 | :--- | :--- |
-| Inisiasi project baru dari nol, atau operasi >3 berkas / >3 domain | `references/_protocol/greenfield.md` |
+| Inisiasi project baru dari nol | `references/_protocol/greenfield.md` |
+| Tambah fitur / refactor / optimasi / audit di repo eksisting | `references/_protocol/brownfield.md` |
+| Operasi menyentuh >3 berkas atau >3 domain | `references/_protocol/greenfield.md` bagian **Swarm Research Protocol** |
 | Keputusan arsitektur / menantang pilihan stack (Challenger Mode) | `references/_protocol/tradeoff.md` |
 
 DILARANG membuat `implementation_plan.md` atau menulis kode sebelum protokol yang relevan dibaca tuntas.

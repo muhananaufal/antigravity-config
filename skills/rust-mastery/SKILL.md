@@ -16,6 +16,30 @@ SSOT arsitektur & rekayasa sistem Rust enterprise, systems programming, dan ultr
 
 DILARANG membuat `implementation_plan.md` atau menulis kode sebelum protokol yang relevan dibaca tuntas.
 
+## 📦 Core References (WAJIB Baca Setiap Project Rust)
+
+Domain fondasi yang hampir selalu relevan, apa pun bentuk tasknya:
+
+| Domain | Referensi | Cakupan |
+| :--- | :--- | :--- |
+| **Memory & Ownership** | `references/core_memory_ownership/` | Borrow checker, lifetime, `Arc`/`Rc`/`Weak`, interior mutability, pemutus siklus |
+| **Type System & Traits** | `references/type_system_traits/` | Generics, trait object vs static dispatch, GAT, blanket impl, newtype |
+| **Error Handling** | `references/error_handling_resilience/` | `thiserror`/`anyhow`, error boundary, retry & backoff, graceful degradation |
+| **Testing & Fuzzing** | `references/testing_fuzzing_benchmarking/` | Unit/integration, `proptest`, `cargo fuzz`, `criterion` benchmark |
+| **Docker & Container** | `references/docker_container_standards/` | Multi-stage, distroless, non-root, SIGTERM, `modular_3tier_container_topology.md` |
+
+## 🎯 Context References (Baca Sesuai Kebutuhan)
+
+| Konteks / Keyword | Baca Referensi |
+| :--- | :--- |
+| `async`/`await`, Tokio runtime, `select!`, cancellation safety, `spawn_blocking` | `references/async_tokio_concurrency/` |
+| Axum/Actix handler, middleware, extractor, REST API, state sharing | `references/web_microservices/` |
+| gRPC/tonic, protobuf, QUIC, WebSocket, protokol biner kustom | `references/networking_protocols_grpc/` |
+| Latensi mikrodetik, zero-alloc, SIMD, cache line, order book, HFT | `references/high_performance_hft/` |
+| Raft, etcd, LSM tree, WAL, sled/RocksDB, replikasi & konsensus | `references/distributed_consensus_storage/` |
+| Kriptografi, hashing password, TLS/mTLS, signing, secret management | `references/cybersecurity_cryptography/` |
+| Blok `unsafe`, FFI/C ABI, pointer provenance, `transmute`, Miri | `references/unsafe_ffi_internals/` |
+
 ## 🔍 Auto-Detect Niche Domain (Scan dari Task)
 
 Agent WAJIB mencocokkan nature of task ke domain berikut **secara proaktif**:

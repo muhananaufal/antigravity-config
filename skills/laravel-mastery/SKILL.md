@@ -16,6 +16,25 @@ SSOT arsitektur & rekayasa Laravel enterprise, SaaS high-throughput, dan resilie
 
 DILARANG membuat `implementation_plan.md` atau menulis kode sebelum protokol yang relevan dibaca tuntas.
 
+## 📦 Core References (WAJIB Baca Setiap Project Laravel)
+
+Domain fondasi yang hampir selalu relevan, apa pun bentuk tasknya:
+
+| Domain | Referensi | Cakupan |
+| :--- | :--- | :--- |
+| **Code Quality & Governance** | `references/code_quality_governance/` | Pint, PHPStan level 9, arsitektur berlapis, konvensi tim |
+| **Testing Otomatis** | `references/testing_automated/` | Pest v3, feature/unit/arch test, factory & seeder, mocking |
+| **DevOps & Deployment** | `references/devops_deployment/` | Docker Octane/FrankenPHP, CI/CD, zero-downtime deploy, health probe |
+
+## 🎯 Context References (Baca Sesuai Kebutuhan)
+
+| Konteks / Keyword | Baca Referensi |
+| :--- | :--- |
+| Queue worker, Horizon, race condition, atomic lock, concurrency | `references/concurrency/` |
+| Octane state leak, opcache/JIT, memory footprint, internals PHP 8 | `references/php_runtime_internals/` |
+| Repo lawas, migrasi bertahap, strangler fig, skema DB warisan | `references/legacy_refactoring/` |
+| Service mesh, komunikasi antar-service, gRPC/HTTP internal, sidecar | `references/microservices_mesh/` |
+
 ## 🔍 Auto-Detect Niche Domain (Scan dari Task)
 
 Agent WAJIB mencocokkan nature of task ke domain berikut **secara proaktif**:
