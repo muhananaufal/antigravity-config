@@ -15,6 +15,10 @@
 
 Alasan: akun shared, kuota token dijaga ketat. Jejak `Read` juga bisa Anda audit baris demi baris, sedangkan ringkasan subagent tidak.
 
+**Urutan sama persis dengan Antigravity:** Gerbang Klarifikasi (§2 `AGENTS.md`) berjalan **SEBELUM** riset. DILARANG membaca referensi atau spawn subagent sebelum pertanyaan arsitektural terjawab — riset di atas asumsi yang salah tetap sia-sia berapa pun banyaknya.
+
+Beda kemampuan dari Antigravity: maksimal **3** subagent paralel (batas harness), tipe `Explore` / `general-purpose` / `Plan`, dan **tidak ada** tier model `pro`/`flash`.
+
 ## CC-2. Penerjemah Istilah
 
 Berlaku untuk `AGENTS.md` §7–§8 maupun kelima `SKILL.md` mastery beserta `_protocol/`-nya.
@@ -39,7 +43,7 @@ Isi teknis referensi mastery tetap berlaku 100%. Yang diterjemahkan HANYA nama t
 - **Bahasa & panjang jawaban:** ikut §8 `AGENTS.md` tanpa perubahan.
 - **Edit presisi:** `Edit` untuk perubahan parsial. `Write` HANYA untuk berkas baru atau rewrite total.
 - **Context hygiene:** sesi >30 menit atau berpindah fitur → sarankan `/compact` atau `/clear`. Akun shared, kuota dijaga.
-- **DILARANG mengedit `~/.claude/CLAUDE.md`.** Berkas itu cuma penunjuk. Aturan diedit di `~/.gemini/config/AGENTS.md`. Perubahan di stub akan jadi drift yang tidak terlihat Antigravity.
+- **DILARANG menulis aturan di `~/.claude/CLAUDE.md`.** Berkas itu cuma penunjuk; aturan diedit di `~/.gemini/config/AGENTS.md`, kalau tidak akan jadi drift yang tidak terlihat Antigravity. Yang BOLEH diubah di sana hanya dua: baris `@import` (bila lokasi SSOT pindah) dan komentar penjelas struktur.
 
 ## CC-4. Command Macro
 

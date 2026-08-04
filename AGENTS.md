@@ -33,19 +33,37 @@ Tentukan baris yang cocok LEBIH DULU, baru bertindak.
 
 | JIKA task-nya… | MAKA WAJIB… |
 | :--- | :--- |
-| Proyek baru dari nol (folder kosong / repo baru) | Baca `_protocol/greenfield.md` skill terkait → riset (§7) → `implementation_plan.md` → BERHENTI, tunggu "Gasskan" |
-| Tambah fitur / refactor / optimasi / audit di repo eksisting | Baca `_protocol/brownfield.md` skill terkait → audit → sajikan ≥3 opsi → BERHENTI, tunggu "Gasskan" |
+| Proyek baru dari nol (folder kosong / repo baru) | **Gerbang Klarifikasi** → baca `_protocol/greenfield.md` skill terkait → riset (§7) → `implementation_plan.md` → BERHENTI, tunggu "Gasskan" |
+| Tambah fitur / refactor / optimasi / audit di repo eksisting | Baseline regresi (§3.3) → baca `_protocol/brownfield.md` skill terkait → audit → sajikan ≥3 opsi → BERHENTI, tunggu "Gasskan" |
 | Edit ≤3 berkas, bugfix, refactor minor, investigasi | Langsung eksekusi. DILARANG bikin RFC. |
-| Edit >3 berkas, ubah DB Schema/Migration, atau Breaking API | `implementation_plan.md` → BERHENTI, tunggu "Gasskan" |
-| User bertanya / berdiskusi tanpa minta kode | Jawab saja. DILARANG menulis atau mengubah kode. |
+| Edit >3 berkas, ubah DB Schema/Migration, atau Breaking API | **Gerbang Klarifikasi** → `implementation_plan.md` → BERHENTI, tunggu "Gasskan" |
+| User bertanya / berdiskusi soal teknis tanpa minta kode | Jawab saja. DILARANG menulis atau mengubah kode. |
+| Obrolan ringan, pertanyaan non-teknis, atau brainstorming di luar programming | Jawab langsung. **§3, §5, §6, §7, dan §9 TIDAK berlaku** — DILARANG menempelkan pengingat test atau gerbang mutu. Brainstorming serius → picu skill `brainstorm`. |
+
+### Gerbang Klarifikasi
+
+Brief minim = risiko merencanakan sistem yang salah dengan rapi. Sebelum menulis `implementation_plan.md`, WAJIB ajukan **maksimal 5** pertanyaan, dan HANYA yang jawabannya mengubah arsitektur.
+
+| Layak ditanya | DILARANG ditanya |
+| :--- | :--- |
+| Skala & beban (jumlah pengguna, RPS, ukuran data) | Apa pun yang bisa dilihat sendiri dari repo |
+| Model bisnis (B2C / B2B / internal, multi-tenant?) | Nama variabel, gaya kode, preferensi kosmetik |
+| Integrasi wajib (payment, SSO, ERP, notifikasi) | Detail yang sudah tertulis di brief |
+| Target deploy (VPS / k8s / serverless / on-prem) | Hal yang aman diasumsikan dan murah diubah nanti |
+| Batasan keras (deadline, ukuran tim, budget, regulasi) | Pertanyaan yang tidak mengubah satu keputusan pun |
+
+- LEWATI gerbang ini bila brief sudah menjawab semuanya. DILARANG bertanya demi formalitas.
+- User menjawab "terserah" / "asumsikan saja" → WAJIB tulis asumsinya eksplisit di bagian **Konteks** `implementation_plan.md`. DILARANG menebak diam-diam.
+- Gerbang ini berjalan **SEBELUM** riset referensi (§7), supaya subagent menyasar domain yang sudah pasti dan tidak membakar token untuk domain yang ternyata tidak relevan.
 
 ## 3. Sebelum Menyentuh Kode
 
 1. WAJIB cek `AGENTS.md`, `CLAUDE.md`, `system_map.md`, `CHANGELOG.md`, `task.md` di root proyek.
 2. Ada `system_map.md` / `task.md` → WAJIB *staleness check*.
-3. Task menyentuh domain bermastery (Go / Rust / Laravel / NestJS) → WAJIB baca SELURUH referensi domain terkait di `references/<domain>/` sampai tuntas. Mekanisme riset ada di §7.
-4. Referensi mastery berada di `~/.gemini/config/skills/<stack>-mastery/references/`.
-5. Pencarian web DILARANG sebelum referensi lokal habis dibedah.
+3. **Baseline regresi** — repo eksisting: WAJIB jalankan test suite yang ada **SEBELUM** mengubah apa pun, lalu catat hasilnya. Tanpa baseline, DILARANG mengklaim "test lulus" setelah perubahan karena tidak ada pembandingnya. Sudah ada yang merah sejak awal → sebutkan, dan DILARANG dihitung sebagai kerusakan Anda. Repo tanpa test sama sekali → katakan apa adanya + rekomendasikan harness.
+4. Task menyentuh domain bermastery (Go / Rust / Laravel / NestJS) → WAJIB baca SELURUH referensi domain terkait di `references/<domain>/` sampai tuntas. Mekanisme riset ada di §7.
+5. Referensi mastery berada di `~/.gemini/config/skills/<stack>-mastery/references/`.
+6. Pencarian web DILARANG sebelum referensi lokal habis dibedah.
 
 ## 4. Challenger Procedure (Anti-Yes-Man)
 
@@ -140,7 +158,7 @@ DILARANG mengubah status task jadi `[x]` sebelum SEMUA butir ini lulus.
 - **Panjang jawaban:** padat untuk tugas rutin. Mendalam HANYA saat *Mentor Mode*.
 - **Edit presisi:** `replace_file_content` / `multi_replace_file_content` + `grep_search`. DILARANG rewrite berkas utuh untuk perubahan kecil.
 - **Baca berkas:** `view_file`.
-- **Pencarian web:** `search_web`, hanya setelah §3.5 terpenuhi.
+- **Pencarian web:** `search_web`, hanya setelah §3.6 terpenuhi.
 - **Kanban `task.md`:** `[ ]` → `[/]` → `[x]`. Maksimal 2 task WIP bersamaan.
 
 ## 9. PENGINGAT PENUTUP
