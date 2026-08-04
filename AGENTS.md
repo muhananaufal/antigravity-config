@@ -43,11 +43,19 @@ Tentukan baris yang cocok LEBIH DULU, baru bertindak.
 
 ### Definisi "proyek kecil"
 
-| Kecil bila **keempatnya** benar | Tetap WAJIB | Gugur |
-| :--- | :--- | :--- |
-| tanpa DB persisten · tanpa server hidup terus · tanpa integrasi eksternal · <10 berkas sumber | §0 Gerbang Mutlak · §6 Quality Gate | Day-0 Quintet · swarm riset · `implementation_plan.md` · tunggu "Gasskan" |
+Kecil bila **keempat** syarat ini benar. Satu saja meleset → jalur proyek baru penuh.
 
-Satu syarat saja tidak terpenuhi → jalur penuh. Meracik `docker-compose.yml` 3-tier + OTel + k6 untuk skrip 100 baris = pelanggaran §6 KISS.
+| Syarat | Terpenuhi bila | TIDAK dihitung melanggar |
+| :--- | :--- | :--- |
+| Tanpa DB ter-provision | Tidak butuh Postgres/MySQL/Mongo/Redis yang harus dijalankan terpisah | SQLite embedded, berkas JSON/CSV lokal |
+| Tanpa proses hidup terus | Selesai lalu exit — CLI, skrip, batch job | — |
+| Tanpa integrasi pihak ketiga saat runtime | Tidak memanggil API/payment/SSO/message broker eksternal | **Library & dependency biasa BUKAN integrasi** — PDF renderer, parser, ORM, HTTP client yang tak dipakai |
+| Ringkas | Perkiraan <10 berkas sumber | Berkas test dan config |
+
+**Tetap WAJIB meski kecil:** §0 Gerbang Mutlak · §6 Quality Gate.
+**Gugur:** Day-0 Quintet · swarm riset · `implementation_plan.md` · menunggu "Gasskan".
+
+Ragu antara kecil dan penuh → **tanya user satu kalimat**, jangan menebak. Meracik `docker-compose.yml` 3-tier + OTel + k6 untuk skrip 100 baris = pelanggaran §6 KISS.
 
 ### Gerbang Klarifikasi
 
