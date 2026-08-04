@@ -86,14 +86,22 @@ foreach ($f in $targets) {
 }
 
 # --- Gate 2: credential hardcode ---
-$SECRET = '(password|passwd|api[_-]?key|secret|token|access[_-]?key|private[_-]?key)\s*[:=]\s*["''][^"'']{8,}["'']'
+# Dua jalur deteksi. Jalur NAMA saja tidak cukup: mengganti nama variabel dari
+# apiKey jadi legacyKey langsung membutakannya. Jalur BENTUK NILAI menangkap
+# kredensial sungguhan tanpa peduli nama variabelnya.
+$SECRET_NAME  = '(password|passwd|api[_-]?key|secret|token|access[_-]?key|private[_-]?key|auth|credential|conn(ection)?[_-]?str)\s*[:=]\s*["''][^"'']{8,}["'']'
+$SECRET_VALUE = 'sk_(live|test)_[A-Za-z0-9]{10,}|pk_live_[A-Za-z0-9]{10,}|AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|glpat-[A-Za-z0-9_-]{15,}|AIza[0-9A-Za-z_-]{30,}|SG\.[A-Za-z0-9_-]{15,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|eyJ[A-Za-z0-9_-]{15,}\.[A-Za-z0-9_-]{15,}\.|mongodb(\+srv)?://[^:\s]+:[^@\s]+@|postgres(ql)?://[^:\s]+:[^@\s]+@|mysql://[^:\s]+:[^@\s]+@'
 foreach ($f in $targets) {
-    $hits = Select-String -LiteralPath $f.FullName -Pattern $SECRET -AllMatches -ErrorAction SilentlyContinue
+    $hits = Select-String -LiteralPath $f.FullName -Pattern "$SECRET_NAME|$SECRET_VALUE" -AllMatches -ErrorAction SilentlyContinue
     foreach ($h in $hits) {
         $line = $h.Line
-        # Abaikan yang jelas-jelas ambil dari env / contoh / placeholder
+        $isValueHit = $line -match $SECRET_VALUE
+        # Abaikan yang jelas-jelas ambil dari env. Berlaku untuk KEDUA jalur.
         if ($line -match 'process\.env|os\.Getenv|env\(|getenv|ENV\[|\$_ENV|std::env|Deno\.env') { continue }
-        if ($line -match '(?i)example|contoh|anti-?pattern|salah|placeholder|xxxx|your[_-]?|<[a-z_]+>|\.\.\.') { continue }
+        # Penyaring contoh/anti-pattern HANYA untuk jalur nama. Nilai berbentuk
+        # kredensial asli tetap dilaporkan walau ditulis di baris berlabel contoh,
+        # karena kunci sungguhan yang bocor tidak jadi aman karena diberi komentar.
+        if (-not $isValueHit -and $line -match '(?i)example|contoh|anti-?pattern|salah|placeholder|xxxx|your[_-]?|<[a-z_]+>|\.\.\.') { continue }
         $violations.Add("SECRET       $($f.FullName):$($h.LineNumber)  $($line.Trim())")
     }
 }
