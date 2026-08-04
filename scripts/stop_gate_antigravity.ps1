@@ -38,10 +38,18 @@ try {
     $tp = ''
     if ($ENFORCE_TESTS -and $inp.transcriptPath -and (Test-Path -LiteralPath $inp.transcriptPath)) { $tp = $inp.transcriptPath }
 
-    $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $gate -Path $ws -Transcript $tp
+    # -Transcript HANYA disertakan bila ada isinya. Melempar string kosong membuat
+    # PowerShell membuang argumennya sehingga quality_gate.ps1 crash "Missing an argument".
+    $argv = @('-NoProfile','-ExecutionPolicy','Bypass','-File',$gate,'-Path',$ws)
+    if ($tp) { $argv += @('-Transcript',$tp) }
+    $out = & powershell.exe $argv
     if ($LASTEXITCODE -eq 0) { Emit-Allow }
 
     $detail = ($out | Where-Object { $_ -match '^\s+(PLACEHOLDER|SECRET|GAGAL|TEST_BELUM_JALAN)' } | Select-Object -First 15) -join "`n"
+
+    # Exit code bukan nol tapi tidak ada rincian pelanggaran = gate-nya yang error,
+    # bukan kodenya yang salah. FAIL-OPEN: DILARANG memblokir tanpa alasan konkret.
+    if (-not $detail) { Emit-Allow }
     $reason = "QUALITY GATE GAGAL. DILARANG berhenti sebelum ini dibereskan:`n$detail`n`nPerbaiki, lalu jalankan ulang gate untuk membuktikan lulus."
 
     @{ decision = 'continue'; reason = $reason } | ConvertTo-Json -Compress

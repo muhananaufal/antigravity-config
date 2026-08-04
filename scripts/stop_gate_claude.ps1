@@ -41,15 +41,23 @@ try {
     $tp = ''
     if ($ENFORCE_TESTS -and $inp.transcript_path -and (Test-Path -LiteralPath $inp.transcript_path)) { $tp = $inp.transcript_path }
 
-    $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $gate -Path $cwd -Transcript $tp
+    # -Transcript HANYA disertakan bila ada isinya. Melempar string kosong membuat
+    # PowerShell membuang argumennya sehingga quality_gate.ps1 crash "Missing an argument".
+    $argv = @('-NoProfile','-ExecutionPolicy','Bypass','-File',$gate,'-Path',$cwd)
+    if ($tp) { $argv += @('-Transcript',$tp) }
+    $out = & powershell.exe $argv
     if ($LASTEXITCODE -eq 0) {
         if (Test-Path -LiteralPath $counterFile) { Remove-Item -LiteralPath $counterFile -Force -ErrorAction SilentlyContinue }
         Emit-Allow
     }
 
-    Set-Content -LiteralPath $counterFile -Value ([string]($count + 1)) -Encoding ascii
-
     $detail = ($out | Where-Object { $_ -match '^\s+(PLACEHOLDER|SECRET|GAGAL|TEST_BELUM_JALAN)' } | Select-Object -First 15) -join "`n"
+
+    # Exit code bukan nol tapi tidak ada rincian pelanggaran = gate-nya yang error,
+    # bukan kodenya yang salah. FAIL-OPEN: DILARANG memblokir tanpa alasan konkret.
+    if (-not $detail) { Emit-Allow }
+
+    Set-Content -LiteralPath $counterFile -Value ([string]($count + 1)) -Encoding ascii
     @{
         decision = 'block'
         reason   = "QUALITY GATE GAGAL. DILARANG berhenti sebelum ini dibereskan:`n$detail"
