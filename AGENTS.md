@@ -33,12 +33,21 @@ Tentukan baris yang cocok LEBIH DULU, baru bertindak.
 
 | JIKA task-nya… | MAKA WAJIB… |
 | :--- | :--- |
+| Proyek baru **kecil** (definisi di bawah) | Langsung eksekusi. Day-0 Quintet, swarm riset, dan `implementation_plan.md` DILARANG dipaksakan. |
 | Proyek baru dari nol (folder kosong / repo baru) | **Gerbang Klarifikasi** → baca `_protocol/greenfield.md` skill terkait → riset (§7) → `implementation_plan.md` → BERHENTI, tunggu "Gasskan" |
 | Tambah fitur / refactor / optimasi / audit di repo eksisting | Baseline regresi (§3.3) → baca `_protocol/brownfield.md` skill terkait → audit → sajikan ≥3 opsi → BERHENTI, tunggu "Gasskan" |
 | Edit ≤3 berkas, bugfix, refactor minor, investigasi | Langsung eksekusi. DILARANG bikin RFC. |
 | Edit >3 berkas, ubah DB Schema/Migration, atau Breaking API | **Gerbang Klarifikasi** → `implementation_plan.md` → BERHENTI, tunggu "Gasskan" |
 | User bertanya / berdiskusi soal teknis tanpa minta kode | Jawab saja. DILARANG menulis atau mengubah kode. |
 | Obrolan ringan, pertanyaan non-teknis, atau brainstorming di luar programming | Jawab langsung. **§3, §5, §6, §7, dan §9 TIDAK berlaku** — DILARANG menempelkan pengingat test atau gerbang mutu. Brainstorming serius → picu skill `brainstorm`. |
+
+### Definisi "proyek kecil"
+
+| Kecil bila **keempatnya** benar | Tetap WAJIB | Gugur |
+| :--- | :--- | :--- |
+| tanpa DB persisten · tanpa server hidup terus · tanpa integrasi eksternal · <10 berkas sumber | §0 Gerbang Mutlak · §6 Quality Gate | Day-0 Quintet · swarm riset · `implementation_plan.md` · tunggu "Gasskan" |
+
+Satu syarat saja tidak terpenuhi → jalur penuh. Meracik `docker-compose.yml` 3-tier + OTel + k6 untuk skrip 100 baris = pelanggaran §6 KISS.
 
 ### Gerbang Klarifikasi
 
@@ -60,7 +69,10 @@ Brief minim = risiko merencanakan sistem yang salah dengan rapi. Sebelum menulis
 
 1. WAJIB cek `AGENTS.md`, `CLAUDE.md`, `system_map.md`, `CHANGELOG.md`, `task.md` di root proyek.
 2. Ada `system_map.md` / `task.md` → WAJIB *staleness check*.
-3. **Baseline regresi** — repo eksisting: WAJIB jalankan test suite yang ada **SEBELUM** mengubah apa pun, lalu catat hasilnya. Tanpa baseline, DILARANG mengklaim "test lulus" setelah perubahan karena tidak ada pembandingnya. Sudah ada yang merah sejak awal → sebutkan, dan DILARANG dihitung sebagai kerusakan Anda. Repo tanpa test sama sekali → katakan apa adanya + rekomendasikan harness.
+3. **Baseline regresi** (repo eksisting) — WAJIB jalankan test suite yang ada **SEBELUM** mengubah apa pun, lalu catat hasilnya.
+   - Tanpa pembanding, klaim "test lulus" setelah perubahan tidak bermakna.
+   - Sudah merah sejak awal → sebutkan; DILARANG dihitung sebagai kerusakan Anda.
+   - Tidak ada test sama sekali → katakan apa adanya + rekomendasikan harness.
 4. Task menyentuh domain bermastery (Go / Rust / Laravel / NestJS) → WAJIB baca SELURUH referensi domain terkait di `references/<domain>/` sampai tuntas. Mekanisme riset ada di §7.
 5. Referensi mastery berada di `~/.gemini/config/skills/<stack>-mastery/references/`.
 6. Pencarian web DILARANG sebelum referensi lokal habis dibedah.
@@ -163,4 +175,8 @@ DILARANG mengubah status task jadi `[x]` sebelum SEMUA butir ini lulus.
 
 ## 9. PENGINGAT PENUTUP
 
-Sebelum mengirim respon, cek ulang: referensi lokal sudah dibaca? Test sudah dijalankan dan hasilnya dilaporkan apa adanya? Nol TODO dan nol credential hardcode? Kalau RFC-Path — sudah BERHENTI menunggu "Gasskan"?
+Sebelum mengirim respon, cek ulang:
+- Referensi lokal sudah dibaca?
+- Test sudah dijalankan, hasilnya dilaporkan apa adanya?
+- Nol `// TODO`, nol credential hardcode?
+- RFC-Path → sudah BERHENTI menunggu "Gasskan"?

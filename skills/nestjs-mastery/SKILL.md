@@ -3,19 +3,19 @@ name: nestjs-mastery
 description: Gunakan skill ini ketika merancang arsitektur Enterprise TypeScript, Dependency Injection IoC internals, Hexagonal Ports & Adapters, Fastify Engine tuning, Prisma/Drizzle ORM performance, Microservices gRPC/Kafka/NATS, Apollo GraphQL Federation v2, Multi-Tenancy RLS, AI Scout/pgvector/LangChain, Fintech ACID 2PC, atau Zero-Trust security di NestJS.
 ---
 
-# NestJS Enterprise Mastery: Kasta Sultan & Top 1% Architecture
+# NestJS Enterprise Mastery
 
-Selamat datang di mahakarya abadi **`nestjs-mastery`**, sebuah mesin pendorong kognitif yang didedikasikan untuk rekayasa backend TypeScript skala enterprise terkece di planet ini. Berpedoman tegak lurus pada hukum **Zero-Tolerance Top 1% Engineering**, skill ini mengharamkan kode serabutan ala tutorial murahan, menentang penggunaan placeholder (`// TODO`), melarang penyingkapan rahasia statis di kode, dan menodah kelemahan pengetikan data (`any` bypass).
+SSOT arsitektur backend TypeScript enterprise (36 Domain, 138 Berkas). Zero-Tolerance: DILARANG `// TODO`, secret statis di kode, dan `any` bypass.
 
----
+## 🏛️ Pilar Arsitektur Mutlak
 
-## 🏛️ Filosofi Arsitektur Mutlak & Pilar Utama
-
-1. **Fastify First Engine Dominant:** Express adalah legenda masa lalu yang lamban dan boros I/O. Di lingkungan enterprise ini, **Fastify (`@nestjs/platform-fastify`)** dipatok sebagai adapter HTTP utama murni untuk meluncurkan latensi eksekusi JSON berkecepatan tinggi dan skalabilitas koneksi bersamaan yang ekstrem.
-2. **Kedisiplinan Hexagonal & Modular DDD:** Struktur direktori WAJIB dipisahkan berdasarkan pola *Domain-Driven Design (DDD) Bounded Contexts* dan *Hexagonal Ports & Adapters*. Business logic murni berada di tengah (core domain), sepenuhnya buta terhadap database eksternal maupun protokol HTTP/gRPC.
-3. **Strict Type-Safety & Zero `any` Bypass:** TypeScript tidak berhak disalahgunakan sebagai JavaScript berbaju modern. Penggunaan `any`, `Object`, atau `unknown` tanpa pengecekan tipe refleksi eksternal yang ketat (*Zod*, *Ajv*, *TypeBox*, atau *class-validator* berlambang `whitelist: true`) adalah **DOSA BESAR**.
-4. **Resilience & Non-Blocking Event Loop:** Node.js / Bun bekerja di atas V8 Single-Threaded Event Loop. Komputasi CPU-bound masif (seperti hashing, kriptografi, atau pemrosesan Excel gb-scale) **WAJIB DIASTRAKSI KELUAR DARI MAIN EVENT LOOP** ke kumpulan benang eksekusi (*Worker Threads pool via Piscina* atau *Rust N-API Addon via napi-rs*).
-5. **Zero-Trust & OWASP API Security:** Tidak ada paket request yang dianggap aman secara default. Enkripsi otentikasi menggunakan JWKS asimetris / OIDC di HTTP-Only Secure Cookies, otentikasi metadata RBAC/ABAC murni via `Reflector`, dan mitigasi pembantaian DDOS dari pintu masuk dengan Redis Valkey Throttling.
+| Pilar | Hukumnya |
+| :--- | :--- |
+| **Fastify First** | `@nestjs/platform-fastify` adalah adapter HTTP utama. Express DILARANG jadi default — lamban dan boros I/O. |
+| **Hexagonal & DDD** | Direktori WAJIB dipisah per *Bounded Context* + *Ports & Adapters*. Business logic di core, buta terhadap DB eksternal maupun protokol HTTP/gRPC. |
+| **Zero `any` Bypass** | `any` / `Object` / `unknown` tanpa validasi runtime ketat (Zod, Ajv, TypeBox, atau class-validator `whitelist: true`) DILARANG. |
+| **Non-Blocking Event Loop** | Komputasi CPU-bound masif (hashing, kriptografi, Excel gb-scale) WAJIB keluar dari main event loop → Piscina Worker Threads atau `napi-rs`. |
+| **Zero-Trust & OWASP** | JWKS asimetris / OIDC di HTTP-Only Secure Cookie · RBAC/ABAC lewat `Reflector` · throttling Redis Valkey di pintu masuk. |
 
 ## 🚦 Protokol Eksekusi (WAJIB dibaca sesuai situasi)
 
@@ -30,7 +30,7 @@ DILARANG membuat `implementation_plan.md` atau menulis kode sebelum protokol yan
 
 ## 🗺️ Matriks Routing Rujukan Ilmu Kasta Tertinggi (36 Domain Silos - 138 Berkas)
 
-Ketika Anda dihadapkan pada tugas pengembangan, optimasi, atau perombakan sistem di proyek NestJS, panggil subagent atau navigasikan rujukan ilmu ekstrim Anda sesuai taksonomi **3-Tier Enterprise Architecture** (Core, Distributed/Cloud, dan Niche Verticals) berikut tanpa keterikatan penomoran alur sekuensial (Murni Modular Domain Random-Access):
+Cocokkan tugas ke domain di bawah, lalu baca rujukannya. Taksonomi 3-Tier, akses acak — DILARANG dibaca berurutan.
 
 ### Tier I: Core Foundation & Application Infrastructure (15 Domain)
 *(Ilmu fondasi WAJIB yang bergelar Fardu Ain untuk diimplementasikan pada 100% produksi aplikasi NestJS Enterprise)*
@@ -87,26 +87,18 @@ Ketika Anda dihadapkan pada tugas pengembangan, optimasi, atau perombakan sistem
 
 ## 🛡️ Penegakan Mutu & Quality Gates (Zero-Tolerance)
 
-Sebelum Anda melaporkan sebuah tugas perbaikan, migrasi, ataupun pembatalan fitur selesai (`[x]` pada Kanban Tracker), Anda **WAJIB** mengeksekusi instrumen penegak hukum yang bersemadi di direktori `scripts/`:
+DILARANG mengubah status task jadi `[x]` sebelum SEMUA gerbang ini lulus.
 
-- **Di Windows OS (PowerShell):**
-  Jalankan terminal command `run_command`:
-  ```powershell
-  powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\muhan\.gemini\config\skills\nestjs-mastery\scripts\audit_quality_gate.ps1
-  ```
-- **Di Linux / macOS (Bash):**
-  Jalankan terminal command `run_command`:
-  ```bash
-  bash C:\Users\muhan\.gemini\config\skills\nestjs-mastery\scripts\quality_gate.sh
-  ```
+| Gerbang | Perintah | Kriteria lulus |
+| :--- | :--- | :--- |
+| Kode proyek | `powershell -NoProfile -ExecutionPolicy Bypass -File ~/.gemini/config/scripts/quality_gate.ps1 -Full` | nol placeholder, nol credential hardcode |
+| TypeScript | `tsc --noEmit` | nol error |
+| Linter | `eslint .` | nol warning |
+| Test | `jest` / SWC | nol kegagalan |
 
-Skrip penegakan di atas akan langsung membantai dan memblokir eksekusi Anda apabila menemukenali adanya:
-1. Peringatan kompilasi TypeScript atau linter kegagalan pada `phpstan/clippy/eslint`.
-2. Kegagalan pada rangkaian unit test Jest/SWC lokal.
-3. Kebatalan hukum kemangkrakkan teks malas (`// TODO`, `// FIXME`, atau komentar placeholder sejenis).
-4. Kebocoran kredensial statis (`password: "..."`, `api_key: "..."`, atau rahasia yang tidak di-parse dari `.env`).
+Ditolak bila ditemukan: warning kompilasi TypeScript · kegagalan ESLint · unit test Jest/SWC gagal · placeholder malas (`// TODO`, `// FIXME`) · kredensial statis yang tidak diambil dari `.env`.
 
----
+> Skrip di `scripts/` bundle ini mengaudit mutu **berkas referensi mastery**, bukan kode proyek user — itu wilayah `skill-engineering-mastery`. DILARANG memakainya sebagai gerbang mutu proyek.
 
 ---
 *Manifes `nestjs-mastery` ini adalah Single Source of Truth (SSOT). Jadikan hukum kepatuhannya sebagai jembatan melompati kemegahan arsitektur dunia nyata!*

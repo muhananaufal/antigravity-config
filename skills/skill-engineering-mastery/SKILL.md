@@ -5,15 +5,15 @@ description: Gunakan skill ini ketika membuat, merancang, mengaudit, atau merest
 
 # Skill Engineering Mastery (Meta-Mastery Engine 2.0)
 
-SSOT arsitektur, standar penulisan mahakarya, protokol *Dynamic Swarm Subagent*, dan sistem pengawasan tata kelola kualitas (*Automated Quality Governance*) untuk seluruh perancangan dan evolusi Skill Bundles di ekosistem Antigravity. Jantung mutlak rekayasa AI berspesifikasi Top 1% Global Engineer.
+SSOT perancangan & evolusi Skill Bundle: standar penulisan, protokol swarm, dan tata kelola kualitas otomatis.
 
----
+## 💎 1. Filosofi Inti & Challenger Mode
 
-## 💎 1. Filosofi Inti & Challenger Mode (Anti-Yes-Man & Proactive Auditor)
-Setiap penciptaan atau modifikasi skill bundle WAJIB ditaruh di bawah hukum penegakan kasta tertinggi:
-1. **Critical Challenger POV:** DILARANG BERSICHER YES-MAN! Jangan pernah tunduk pada godaan shortcut AI (laziness), perlakuan bertele-tele (fluffy narrative), atau persetujuan buta atas instruksi berisiko. Jika rancangan atau skop skill tidak rasional, tantang secara profesional dengan menyodorkan ≥3 opsi standar industri abadi.
-2. **Zero-Steering Grilling:** Dalam penyajian opsi arsitektur atau pembagian domain, WAJIB sajikan minimal 3 opsi teknis netral lengkap dengan trade-off absolut (≥3 kelebihan & ≥3 kekurangan). DILARANG menuliskan label "(Recommended)" secara sepihak; biarkan fakta teknis dan diskusi bersama user yang menentukan jalan eksekusi ("Gasskan").
-3. **Swarm Reference Loading (Anti-Halusinasi):** DILARANG KERAS merancang, mengarang kode, atau menjawab instruksi pemrograman hanya mengandalkan ingatan hafalan LLM atau langsung memanggil `search_web` sebelum seluruh referensi lokal yang ada dibedah tuntas.
+| Hukum | Isinya |
+| :--- | :--- |
+| **Critical Challenger POV** | DILARANG yes-man, DILARANG shortcut (laziness), DILARANG narasi bertele-tele. Rancangan atau skop skill tidak rasional → tantang profesional dengan ≥3 opsi standar industri. |
+| **Zero-Steering Grilling** | Saat menyajikan opsi arsitektur atau pembagian domain: WAJIB ≥3 opsi netral, tiap opsi ≥3 kelebihan & ≥3 kekurangan. DILARANG label "(Recommended)" sepihak — biarkan fakta teknis dan diskusi user yang memutuskan ("Gasskan"). |
+| **Swarm Reference Loading** | DILARANG merancang, menulis kode, atau menjawab dari hafalan LLM. DILARANG `search_web` sebelum SELURUH referensi lokal dibedah tuntas. |
 
 ---
 
@@ -48,11 +48,15 @@ Struktur direktori sebuah skill bundle diatur dalam tata susunan modular bermutu
     └── ...
 ```
 
-### Panduan Jumlah Domain & File (Standar Kasta Sultan):
-*   **Skill Bahasa Backend Utama (ekosistem kelas berat seperti Golang, Rust, Laravel, Python, Java, C++):** WAJIB menargetkan **26–31 Domain** dengan **4–10 file per domain (total ~130–200 file mahakarya, 1.5 - 2.5 MB Murni)**. 
-    *   *Domain WAJIB Terpeta:* Concurrency/Async, Persistence & SQL, Clean Architecture, Security OWASP, Testing & Fuzzing, Cloud-Native K8s Operators, Cloud Provider Serverless SDK, Multilevel Caching RAM/Redis/CDN, Distributed Jobs & Saga Rollbacks, Zero-Trust Enterprise Security, Media Asset Pipeline (SIMD/Streaming), CI/CD Pipeline & SBOM Supply Chain Defense, serta Internasionalisasi i18n/ICU Intl.
-*   **Skill Framework Frontend / Tooling Khusus (React, Vue, Docker, Tailwind, Terraform):** 10–15 Domain, 4–8 file per domain → total ~40–100 file mahakarya.
-*   **Skill Niche / Library Ekstra (Pinia, Axios, Redis Client, Zustand):** 5–8 Domain, 4–6 file per domain → total ~25–50 file.
+### Panduan Jumlah Domain & Berkas
+
+| Kelas skill | Domain | Berkas/domain | Total |
+| :--- | :--- | :--- | :--- |
+| Bahasa backend utama (Go, Rust, Laravel, Python, Java, C++) | 26–31 | 4–10 | ~130–200 berkas · 1,5–2,5 MB |
+| Framework frontend / tooling (React, Vue, Docker, Tailwind, Terraform) | 10–15 | 4–8 | ~40–100 berkas |
+| Niche / library (Pinia, Axios, Redis Client, Zustand) | 5–8 | 4–6 | ~25–50 berkas |
+
+**Domain WAJIB terpeta pada skill bahasa backend utama:** Concurrency/Async · Persistence & SQL · Clean Architecture · Security OWASP · Testing & Fuzzing · Cloud-Native K8s Operators · Cloud Provider Serverless SDK · Multilevel Caching RAM/Redis/CDN · Distributed Jobs & Saga Rollback · Zero-Trust Enterprise Security · Media Asset Pipeline (SIMD/Streaming) · CI/CD & SBOM Supply Chain Defense · i18n/ICU Intl.
 
 ---
 

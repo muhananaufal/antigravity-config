@@ -1,18 +1,26 @@
-# Greenfield Protocol — Inisiasi Proyek dari Nol (Dynamic Swarm Scaling)
+# Greenfield — Protokol Init Proyek dari Nol
 
-> Dipicu dari `SKILL.md` saat membuat project baru dari nol.
+> Dipicu dari `SKILL.md` saat membuat proyek baru dari nol. **Gerbang Klarifikasi (§2 `AGENTS.md`) WAJIB tuntas lebih dulu.**
 
-LLM secara biologis akan mengambil jalan pintas jika dihadapi pada bacaan ratusan file referensi. Untuk menjamin standar Top 1% diterjemahkan 100% saat **membuat project baru dari nol**, WAJIB menerapkan protokol **Dynamic Swarm Scaling**:
+## 1. Riset — sebar subagent tier `pro`
 
-1. **Fase Inisialisasi (DILARANG MENEBAK / HALUSINASI):** Agen Utama DILARANG KERAS menulis kode atau langsung menerbitkan `implementation_plan.md` tanpa memobilisasi tim Subagent Swarm untuk meresap referensi yang relevan.
-2. **Dynamic Swarm Summon (WAJIB model tier `pro`):** Agen Utama WAJIB menggunakan tool `invoke_subagent` untuk men-spawn minimal 3 hingga >8 subagent secara paralel sesuai kompleksitas proyek (Dynamic Scaling):
-   *   **3 Subagent Core Tetap (Mandatory Core Coverage):** Ditugaskan membaca seluruh file di domain fundamental (Arsitektur, Database/Storage, Keamanan OWASP, Konkurensi, dan DevOps/Container).
-   *   **Subagent Niche Dinamis (Elastis 1 Subagent per Domain Terdeteksi):** Agen memantau tabel *Auto-Detect Niche* pada skill terkait. Untuk setiap topik spesifik yang cocok dengan tuntutan tugas (misal K8s Operators, HFT zero-alloc, Fintech ledgers, atau AI Scout), panggil **1 Subagent Dedikatif terpisah**.
-3. **Konsolidasian & Grilling:** Agen Utama merangkum temuan para subagent dan menghadirkan dokumen `implementation_plan.md` dengan opsi teknis netral untuk disetujui user ("Gasskan").
-4. **Fase Implementasi:** Eksekusi kode dengan kepatuhan penuh pada standar mahardika yang telah diekstrak.
-5. **Day-0 Greenfield Production-Ready Quintet (Hukum WAJIB Inisiasi Proyek Baru):** Saat menginisialisasi proyek baru dari nol (Greenfield), WAJIB secara default menghasilkan 5 pilar fondasi Day-0 berikut di root proyek tanpa perlu diperingatkan ulang:
-   - **Pilar 1: Modular 3-Tier Container Topology:** Tier 1 Core (`docker-compose.yml` untuk DB & Cache), Tier 2 Telemetry (`profiles: [telemetry]` untuk OTel Collector, Prometheus RED, Grafana, Loki), dan Tier 3 Stress Harness (`profiles: [stress]` dengan `grafana/k6`). *(DILARANG auto-run `docker build`/`up` tanpa izin user demi menjaga efisiensi RAM/CPU).*
-   - **Pilar 2: Fail-Fast Type-Safe Configuration:** Berkas `.env.example` bersih tanpa secret asli + validasi skema env ketat saat startup (WAJIB *crash on boot* jika env hilang/invalid sebelum membuka port HTTP atau koneksi database pool).
-   - **Pilar 3: Graceful Shutdown & Signal Trapping:** Handler `SIGINT` & `SIGTERM` terpusat (tolak koneksi baru, beri grace period 5–15 detik untuk in-flight requests, tutup DB/Redis pool, dan flush buffer log/OTel traces sebelum exit code 0).
-   - **Pilar 4: Database Migration & Idempotent Seeder Baseline:** Direktori `migrations/` up/down perdana + skrip seeder idempotent (`seed.sql` / framework seeder) untuk inisiasi akun/data master tanpa duplikasi error.
-   - **Pilar 5: Unified Task Runner (`Makefile` / `Taskfile.yml`):** Standarisasi perintah harian developer (`make dev`, `make infra-up`/`down`, `make telemetry-up`, `make migrate`, `make seed`, `make test`, `make stress`).
+| Subagent | Cakupan bacaan |
+| :--- | :--- |
+| 3 core tetap | Arsitektur · Database/Storage · Keamanan OWASP · Konkurensi · DevOps/Container |
+| +1 per domain niche | sesuai tabel Auto-Detect pada skill stack terkait (K8s Operator, HFT zero-alloc, Fintech ledger, AI Scout, dll) |
+
+DILARANG menulis kode atau menerbitkan `implementation_plan.md` sebelum seluruh subagent melapor.
+
+## 2. Day-0 Quintet — WAJIB ada di root
+
+| Pilar | Isi wajib |
+| :--- | :--- |
+| Container 3-tier | `docker-compose.yml` DB & cache · profile `telemetry` OTel+Prometheus RED+Grafana+Loki · profile `stress` k6. **DILARANG auto-run `docker build`/`up`** demi menjaga RAM/CPU. |
+| Config fail-fast | `.env.example` bersih tanpa secret asli + validasi skema env ketat. WAJIB *crash on boot* bila env hilang/invalid, sebelum membuka port HTTP atau pool DB. |
+| Graceful shutdown | Handler SIGINT & SIGTERM terpusat: tolak koneksi baru · grace period 5–15 detik untuk in-flight request · tutup pool DB/Redis · flush log & OTel trace · exit code 0 |
+| Migrasi & seeder | `migrations/` up/down perdana + seeder idempotent (`seed.sql` atau seeder framework) untuk data master tanpa error duplikasi |
+| Task runner | `Makefile`/`Taskfile.yml`: `dev` · `infra-up`/`down` · `telemetry-up` · `migrate` · `seed` · `test` · `stress` |
+
+## 3. Fase implementasi
+
+Eksekusi dengan kepatuhan penuh pada standar yang telah diekstrak subagent.

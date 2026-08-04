@@ -1,17 +1,30 @@
-# Brownfield Protocol — Legacy / Refactoring / Tambah Fitur di Repo Go Eksisting
+# Brownfield Go — Protokol Repo Eksisting
 
-> Dipicu dari `SKILL.md` saat user meminta penambahan fitur baru, modifikasi, optimasi, atau audit pada codebase yang sudah ada.
+> Dipicu dari `SKILL.md` saat tambah fitur / refactor / optimasi / audit. **Baseline regresi (§3.3 `AGENTS.md`) WAJIB tuntas lebih dulu.**
 
-Saat user meminta **penambahan fitur baru, modifikasi, optimasi, atau audit** pada **codebase yang sudah ada (Legacy/Existing Project)**, DILARANG memaksakan *Big Bang Rewrite*, penciptaan "Frankenstein Codebase", atau pemakaian daftar subagent statis yang tidak relevan. Gunakan protokol **Dynamic Reconnaissance & Partitioning**:
+**DILARANG:** Big Bang Rewrite · "Frankenstein Codebase" · daftar subagent statis yang tidak relevan dengan repo.
 
-1. **Intai & Pembelahan Subagent secara 100% Dinamis (Dynamic Hybrid Swarm):**
-   Agen Utama DILARANG mematok nama atau jumlah peran subagent secara kaku. Pertama, lirik struktur direktori root dan dependency (`go.mod`/config) dari repository user. Setelah itu, spawn tim Subagent ber-model `pro` (dari 3 hingga >10 secara elastis) dengan strategi pembagian yang benar-benar selaras dengan kenyataan repo asli:
-   - **Pembagian Berbasis Modul / Folder:** Jika project user dibagi menjadi beberapa modul/domain (misal: `/order`, `/user`, `/catalog`, `/payment`), spawn **1 Subagent Auditor terpisah untuk membedah masing-masing folder/modul**.
-   - **Pembagian Berbasis Tech Stack di `go.mod`:** Jika mendeteksi library tertentu di `go.mod` (misal `gorm.io/gorm`, `kafka-go`, atau `graphql`), spawn subagent auditor dengan misi spesifik memburu kerentanan library tersebut (misal N+1 GORM Hunter, atau Kafka DLQ Auditor). Jika TIDAK ADA fitur finansial/uang, DILARANG memanggil spesialis fintech/moneter!
-   - **Pembagian Berbasis Volume File:** Jika satu folder/package sangat padat (>30 file), pecah audit atas folder tersebut ke beberapa subagent berdasarkan sub-package atau fungsi eksekusi (misal: Subagent A fokus layer Handler/API, Subagent B fokus layer Query/Repository).
-   - **Mastery Standard Matcher (Subagent Dedikatif):** Tugas subagent ini murni mengkonsolidasi seluruh laporan kecacatan dari para auditor di atas, lalu menarik dan membaca HANYA file di direktori `references/` kita yang **spesifik bisa menjadi obat pencerah untuk menyembuhkan temuan tersebut** (WAJIB membedah `zero_downtime_migrations.md` jika audit menemukan skema DB lama yang harus diubah).
-2. **Zero-Steering Grilling (Opsi Evolusi / Penambahan Fitur):**
-   Agen Utama merangkum laporan dari seluruh tim spesialis dan menyajikan ≥3 opsi netral beserta trade-off untuk user (Gasskan):
-   - **Opsi 1: Native Consistent Extension (KISS):** Tanam fitur baru dengan mematuhi pola asli/ekspresi arsitektur repo tersebut (agar tim developer lama tidak bingung), NAMUN disuntikkan perlindungan standar Top 1% (WAJIB timeout, parameterized queries, RED metrics, dan index DB). Cepat dan konsisten.
-   - **Opsi 2: Strangler Fig Pattern (Modular Isolation):** Fitur/modul baru didirikan secara independen menggunakan arsitektur modern kita (`internal/` Modular Monolith/Clean/SQLC) tanpa merusak kode lama. Terhubung ke legacy hanya melalui interface facade/proxy.
-   - **Opsi 3: Surgical Rewrite & Expansion:** Jika modul lama terkait sudah terlalu cacat (misal fitur baru bergantung pada modul pembayaran jadul yang fatal/rentan race condition), ajukan operasi bedah modul lama sekaligus merancang fitur barunya berpadu berstandar Top 1%.
+## 1. Rekonesans — bentuk tim sesuai kenyataan repo
+
+Lirik struktur direktori + `go.mod` **dulu**, baru sebar subagent tier `pro` (3–10, elastis):
+
+| Kondisi repo | Bentuk subagent |
+| :--- | :--- |
+| Terbagi modul/domain (`/order`, `/user`, `/payment`) | 1 auditor per modul |
+| `gorm.io/gorm` terdeteksi | N+1 GORM Hunter |
+| `kafka-go` terdeteksi | Kafka DLQ Auditor |
+| `graphql` terdeteksi | Auditor resolver & N+1 |
+| Satu folder >30 berkas | Pecah per layer: Handler/API vs Query/Repository |
+| **Selalu, tepat 1** | **Mastery Standard Matcher** — konsolidasi seluruh temuan auditor, lalu baca HANYA referensi yang jadi obatnya. WAJIB membedah `zero_downtime_migrations.md` bila skema DB lama ikut berubah. |
+
+DILARANG memanggil spesialis fintech/moneter bila repo tidak punya fitur uang.
+
+## 2. Sajikan ≥3 opsi — Zero-Steering Grilling
+
+| Opsi | Kapan cocok | Konsekuensi |
+| :--- | :--- | :--- |
+| **Native Consistent Extension** (KISS) | Pola repo masih sehat, tim lama harus tetap paham | Cepat & konsisten. WAJIB tetap suntik timeout, parameterized query, RED metrics, index DB. |
+| **Strangler Fig** | Modul baru bisa berdiri sendiri | Modul baru pakai `internal/` Clean/SQLC, tersambung ke legacy hanya lewat facade/proxy. Kode lama utuh. |
+| **Surgical Rewrite** | Modul lama fatal (race condition, pembayaran rentan) | Bedah modul lama sekalian bangun fitur barunya. Paling mahal, paling bersih. |
+
+DILARANG memberi label "(Recommended)" sepihak — lihat §4 `AGENTS.md`.
