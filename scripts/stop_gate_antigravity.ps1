@@ -8,10 +8,12 @@
 
 $ErrorActionPreference = 'Continue'
 
-# --- PENANDA PASIF ---
-# Menjawab satu pertanyaan tanpa perlu tes khusus: apakah Antigravity BENAR-BENAR
-# memanggil skrip ini? Kalau berkas penanda ini muncul, hook dieksekusi tapi
-# keluarannya diabaikan. Kalau tidak pernah muncul, hooks.json memang mati total.
+# --- PENANDA PASIF (SEMENTARA) ---
+# Sisa satu pertanyaan: apakah ~/.gemini/config/hooks.json GLOBAL cukup sendiri?
+# Saat hook terbukti memblokir, ada dua salinan terpasang (global + .agents/ workspace).
+# Yang workspace sudah dihapus. Kalau penanda ini muncul lagi di pemakaian Antigravity
+# berikutnya, berarti global cukup dan baris ini boleh dicabut. Kalau tidak pernah
+# muncul, hooks.json wajib per-proyek di .agents/.
 try { "$(Get-Date -Format o)" | Out-File -FilePath "$env:TEMP\agy_stop_hook_marker.txt" -Append -Encoding ascii } catch { }
 
 # Setel $false untuk mematikan Gate 4 (blokir saat kode berubah tapi test tak pernah jalan).
