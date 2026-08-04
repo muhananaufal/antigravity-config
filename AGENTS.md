@@ -21,6 +21,7 @@
 - **Verifikasi:** WAJIB jalankan linter/unit test/build check sebelum selesai (jika belum ada, berikan rekomendasi).
 - **Type-Safety & Error Handling:** DILARANG untyped bypass. WAJIB proper error handling production-ready.
 - **Zero Placeholder:** DILARANG `// TODO` / kode kosong / hardcode credentials (WAJIB `.env`/config).
+- **Architecture & Bootstrap:** WAJIB patuhi protokol inisiasi proyek (arsitektur, modular container, observability, & stress harness) sesuai SSOT pada `SKILL.md` domain terkait.
 - **KISS & Standard Library First:** Prioritaskan first-party / mature packages. Jangan reinvent the wheel.
 - **Defensive Programming:** WAJIB tangani edge-cases (null/empty, timeout, DB lock, race condition, dll) secara graceful.
 - **Fallback Search:** WAJIB baca SEMUA skill references dulu — gunakan `search_web` hanya jika benar-benar tidak ada.

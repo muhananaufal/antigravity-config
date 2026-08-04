@@ -5,7 +5,7 @@ description: Gunakan skill ini ketika merancang arsitektur, konkurensi, DB/SQLC,
 
 # Golang Mastery
 
-SSOT arsitektur & rekayasa sistem Golang enterprise & high-throughput (28 Domain, 197 File Mahakarya).
+SSOT arsitektur & rekayasa sistem Golang enterprise & high-throughput (28 Domain, 198 File Mahakarya).
 
 ## 🔁 Greenfield Protocol (Init Proyek dari Nol — Dynamic Swarm Scaling)
 
@@ -20,7 +20,12 @@ LLM secara alami akan mengambil jalan pintas (laziness) jika disuruh membaca pul
    - **Subagent Niche DINAMIS (1 Subagent per Domain Terdeteksi):** 
      - Agen utama mengecek tabel **Auto-Detect** di bawah. Untuk **SETIAP 1 domain niche** yang cocok dengan proyek (misal: `fintech_reliability/`, `hft_zero_alloc/`, `realtime_networking/`), Wajib spawn **1 Subagent Dedikatif terpisah**. (Jika terdeteksi 4 domain niche, maka summon 3 Core + 4 Niche = **7 Subagents paralel**!).
 3. **Wait & Compile:** Agen Utama menunggu semua subagent melapor, merangkumnya, lalu membuat `implementation_plan.md` dengan opsi *Zero-Steering Grilling*.
-4. **Fase Implementasi (Coding):** Agen mematuhi standar yang sudah diekstrak subagent dan menggunakan `view_file` ke referensi spesifik HANYA jika butuh kode spesifik (seperti detail sintaks).
+5. **Day-0 Greenfield Production-Ready Quintet (Hukum Wajib Inisiasi Proyek Baru):** Setiap inisialisasi proyek baru (Greenfield) di Golang WAJIB secara default menghasilkan 5 pilar fondasi Day-0 berikut di root proyek:
+   - **Pilar 1: Modular 3-Tier Container Topology:** Tier 1 Core (`docker-compose.yml` DB PostgreSQL/Valkey), Tier 2 Telemetry (`profiles: [telemetry]` OTel Collector, Prometheus, Grafana, Loki), Tier 3 Stress Harness (`profiles: [stress]` `grafana/k6`). *(Dilarang auto-run `docker build`/`up` tanpa izin user).*
+   - **Pilar 2: Fail-Fast Type-Safe Configuration:** `.env.example` bersih + validasi `envconfig`/`caarlos0/env` saat boot (wajib panic/log.Fatal sebelum `net.Listen` atau `sql.Open` jika env invalid).
+   - **Pilar 3: Graceful Shutdown Protocol:** `signal.NotifyContext` menangkap `SIGINT`/`SIGTERM`, server `Shutdown(ctx)` dengan timeout 5-15s, `db.Close()`, serta OTel `tp.Shutdown(ctx)` dan logger sync.
+   - **Pilar 4: Migration & Idempotent Seeder Baseline:** Folder `migrations/` (`golang-migrate`/`goose`) + `seed.sql` data inisial.
+   - **Pilar 5: Unified Task Runner (`Makefile`):** Perintah baku `make dev` (air hot-reload), `make infra-up`/`down`, `make telemetry-up`, `make migrate`, `make seed`, `make test`, `make stress`.
 
 ## 🏛️ Brownfield Protocol (Legacy / Refactoring / Tambah Fitur di Repo Eksisting)
 
@@ -80,7 +85,7 @@ Domain yang hampir selalu relevan untuk Go service manapun:
 | **Security** | `references/security_owasp/` | semua |
 | **Testing** | `references/testing_quality/` | semua |
 | **Architecture** | `references/arch_patterns/` | semua |
-| **Docker & DevOps** | `references/devops_control_planes/` | semua |
+| **Docker & DevOps** | `references/devops_control_planes/` | semua, termasuk `modular_3tier_container_topology.md` |
 | **Resilience Patterns** | `references/distributed_patterns_resilience/` | `retry_backoff_jitter.md`, `idempotency_key_engine.md`, `bulkhead_isolation.md` |
 | **Caching** | `references/caching_strategy/` | `cache_aside_singleflight.md`, `multilevel_cache_l1l2.md` |
 

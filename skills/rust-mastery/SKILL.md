@@ -5,9 +5,17 @@ description: Gunakan skill ini ketika merancang arsitektur, Borrow Checker memor
 
 # Rust Mastery
 
-SSOT arsitektur & rekayasa sistem Rust enterprise, systems programming, dan ultra-low latency (31 Domain, 190 File Mahakarya).
+SSOT arsitektur & rekayasa sistem Rust enterprise, systems programming, dan ultra-low latency (31 Domain, 191 File Mahakarya).
 
 ## 🔁 Greenfield Protocol (Init Proyek dari Nol — Dynamic Swarm Scaling)
+
+**HUKUM MUTLAK DAY-0 GREENFIELD BOOTSTRAP (5 PILAR PRODUCTION-READY):**
+*Setiap inisialisasi proyek baru (Greenfield) di Rust WAJIB secara default meracik 5 pilar fondasi Day-0 berikut di root proyek:*
+1. **Modular 3-Tier Container Topology:** Tier 1 Core (`docker-compose.yml` Postgres/Valkey), Tier 2 Telemetry (`profiles: [telemetry]` OTel Collector, Prometheus, Grafana, Loki), Tier 3 Stress Harness (`profiles: [stress]` `grafana/k6`). *(Dilarang auto-execute build/up tanpa konfirmasi user).*
+2. **Fail-Fast Type-Safe Configuration:** `.env.example` bersih + deserialisasi strongly-typed `envy`/`config-rs` saat boot (wajib panic / return error deskriptif sebelum binding Axum listener atau koneksi DB pool).
+3. **Graceful Shutdown Protocol:** `tokio::signal::ctrl_c()` & Unix signal stream handler, Axum `with_graceful_shutdown()`, penutupan pool `sqlx`, dan flushing tracing subscriber buffer OTLP.
+4. **Migration & Idempotent Seeder Baseline:** Folder `migrations/` (`sqlx-cli` / `diesel`) + `seed.sql` data inisial.
+5. **Unified Task Runner (`Makefile` / `cargo-make`):** Perintah baku `make dev` (`cargo watch -x run`), `make infra-up`/`down`, `make telemetry-up`, `make migrate`, `make test`, `make stress`.
 
 LLM secara alami akan mengambil jalan pintas (laziness) dan berisiko menghasilkan kode yang gagal compile (*Borrow Checker / Lifetime error*) atau *Undefined Behavior* di block `unsafe` jika disuruh membaca puluhan file seiring waktu. Untuk menjamin standar Top 1% diterapkan 100%, **WAJIB gunakan protokol Dynamic Swarm Subagent (Elastis)** saat inisialisasi **project baru dari nol (empty folder / new repository / cargo new)**:
 

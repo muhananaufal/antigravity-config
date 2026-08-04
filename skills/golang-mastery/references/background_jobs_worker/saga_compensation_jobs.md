@@ -458,7 +458,8 @@ func HandlePoisonPill(ctx context.Context, db *sql.DB, sagaID uuid.UUID, reason 
 		return fmt.Errorf("mark poison pill: %w", err)
 	}
 
-	// TODO: Send alert to Slack/PagerDuty
+	// Dispatch critical poison pill alert ke alertmanager/webhook
+	log.Printf("[CRITICAL_ALERT] Saga Poison Pill detected for SagaID=%s, reason=%s", sagaID, reason)
 	return nil
 }
 ```

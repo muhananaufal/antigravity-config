@@ -105,7 +105,9 @@ func (p *ExampleProvider) Configure(ctx context.Context, req provider.ConfigureR
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	// TODO: Init API Client dengan apiToken.ValueString()
+	client := NewAPIClient(apiToken.ValueString())
+	resp.DataSourceData = client
+	resp.ResourceData = client
 }
 
 func (p *ExampleProvider) DataSources(_ context.Context) []func() datasource.DataSource {
