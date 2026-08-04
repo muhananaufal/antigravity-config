@@ -44,3 +44,9 @@ Pelajaran yang sudah dibayar mahal. WAJIB dibaca sebelum task teknis (§3.1 `AGE
 
 - Menguji skrip secara terpisah ≠ menguji sambungannya. Bug false-block hanya muncul saat dijalankan dengan **argv persis** dari `settings.json`.
 - Dokumentasi resmi bisa menjanjikan mekanisme yang tidak ada di build terpasang. **Uji sebelum mengandalkan.**
+
+## Proses (lanjutan)
+
+- **Metrik hijau bukan berarti benar.** Membaca `AGENTS.md` utuh dari atas ke bawah setelah belasan suntingan parsial membongkar 5 cacat yang lolos SEMUA pengukuran: rujukan basi ke section yang sudah dikosongkan, aturan yang saling meniadakan antar-section, presedensi baris tabel yang ambigu, dan macro yang tidak tahu jalur baru. WAJIB baca utuh sekali setelah rangkaian edit besar.
+- Memindahkan isi section jadi skill WAJIB diikuti sapuan rujukan ke section itu — glosarium dan berkas lain bisa masih menunjuk ke tempat yang sudah kosong.
+- Menambah baris di daftar bernomor menggeser SEMUA rujukan `§n.m` sesudahnya. Periksa lintas berkas, bukan hanya berkas yang disunting.

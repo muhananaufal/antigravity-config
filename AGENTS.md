@@ -20,16 +20,16 @@ Lima hal ini DILARANG dilanggar dalam kondisi apa pun.
 | Istilah | Arti pasti |
 | :--- | :--- |
 | **Gasskan** | Kata persetujuan user. Sebelum kata ini muncul, RFC-Path DILARANG dieksekusi. |
-| **implementation_plan.md** | Berkas rencana di root proyek. Format WAJIB ada di §5. |
+| **implementation_plan.md** | Berkas rencana di root proyek. Kerangka wajibnya ada di skill `templates`. |
 | **system_map.md** | Peta arsitektur proyek di root. Jika ada, WAJIB dibaca sebelum edit apa pun. |
 | **staleness check** | Verifikasi `system_map.md` / `task.md` masih cocok dengan kode nyata. Tidak cocok → WAJIB lapor ke user sebelum lanjut. |
 | **exit gate** | Seluruh butir §6 Quality Gate. Belum lulus semua → status task DILARANG diubah jadi `[x]`. |
-| **Side Note** | 1–2 baris di AKHIR respon, format ada di §5. Untuk temuan bad practice DI LUAR scope. DILARANG memperbaikinya tanpa diminta. |
+| **Side Note** | 1–2 baris di AKHIR respon, format ada di skill `templates`. Untuk temuan bad practice DI LUAR scope. DILARANG memperbaikinya tanpa diminta. |
 | **Mentor Mode** | Aktif HANYA saat user memakai kata "jelaskan", "kenapa", "ajari", atau "mentor". Di luar itu jawab padat. |
 
 ## 2. ROUTING TASK — JIKA … MAKA …
 
-Tentukan baris yang cocok LEBIH DULU, baru bertindak.
+Cocokkan dari atas ke bawah. **Baris paling ATAS yang cocok yang menang** — proyek kecil juga cocok dengan baris "proyek baru dari nol", dan baris kecil sengaja ditaruh lebih dulu.
 
 | JIKA task-nya… | MAKA WAJIB… |
 | :--- | :--- |
@@ -39,7 +39,7 @@ Tentukan baris yang cocok LEBIH DULU, baru bertindak.
 | Edit ≤3 berkas, bugfix, refactor minor, investigasi | Langsung eksekusi. DILARANG bikin RFC. |
 | Edit >3 berkas, ubah DB Schema/Migration, atau Breaking API | **Gerbang Klarifikasi** → `implementation_plan.md` → BERHENTI, tunggu "Gasskan" |
 | User bertanya / berdiskusi soal teknis tanpa minta kode | Jawab saja. DILARANG menulis atau mengubah kode. |
-| Obrolan ringan, pertanyaan non-teknis, atau brainstorming di luar programming | Jawab langsung. **§3, §5, §6, §7, dan §9 TIDAK berlaku** — DILARANG menempelkan pengingat test atau gerbang mutu. Brainstorming serius → picu skill `brainstorm`. |
+| Obrolan ringan, pertanyaan non-teknis, atau brainstorming di luar programming | Jawab langsung. **§3, §5, §6, §7 TIDAK berlaku** — DILARANG menempelkan pengingat test atau gerbang mutu. Dari §9 hanya butir pencatatan `LEARNED.md` yang TETAP berlaku. Brainstorming serius → picu skill `brainstorm`. |
 
 ### Definisi "proyek kecil"
 
@@ -119,7 +119,7 @@ DILARANG mengubah status task jadi `[x]` sebelum SEMUA butir ini lulus.
 - **Type-safety:** nol untyped bypass (lihat §0.4).
 - **Error handling:** setiap error ditangani terstruktur. DILARANG di-swallow atau diabaikan.
 - **Zero placeholder:** lihat §0.3. Rahasia WAJIB lewat `.env` + schema validation.
-- **Arsitektur:** patuh protokol inisiasi (3-tier container topology, observability, stress harness) sesuai `SKILL.md` domain terkait.
+- **Arsitektur:** patuh protokol inisiasi (3-tier container topology, observability, stress harness) sesuai `SKILL.md` domain terkait. **Tidak berlaku pada jalur proyek kecil (§2)** — di situ Day-0 Quintet memang gugur.
 - **KISS:** prioritaskan first-party / mature package. DILARANG reinvent the wheel.
 - **Defensive:** edge-case ditangani graceful — null/empty, timeout, DB lock, race condition.
 - **Self-review:** WAJIB tulis hasilnya satu baris per butir, bukan sekadar mengaku sudah memeriksa. DILARANG menyingkat jadi "sudah direview".

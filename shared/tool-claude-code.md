@@ -49,6 +49,6 @@ Isi teknis referensi mastery tetap berlaku 100%. Yang diterjemahkan HANYA nama t
 
 | Macro | Fungsi |
 | :--- | :--- |
-| `/greenfield` | Inisiasi proyek baru dengan 5 Pilar Day-0 |
+| `/greenfield` | Inisiasi proyek baru dengan 5 Pilar Day-0. **Gugur bila proyeknya kecil (§2)** |
 | `/audit` | Audit kualitas forensik & OWASP Top 10 |
 | `/test-harness` | Pembuatan suite pengujian otomatis & concurrency test |
