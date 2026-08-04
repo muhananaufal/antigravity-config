@@ -66,6 +66,11 @@ Domain yang hampir selalu relevan untuk Go service manapun:
 
 | Konteks / Keyword | Baca Referensi |
 | :--- | :--- |
+| Menetapkan SLO, error budget, burn-rate alert, keputusan paging | `references/engineering_practice/slo_error_budget.md` |
+| Keputusan arsitektur yang perlu dicatat & dipertahankan | `references/engineering_practice/adr_decision_records.md` |
+| Insiden produksi, postmortem, severity, MTTD/MTTM, on-call | `references/engineering_practice/incident_postmortem.md` |
+| Melakukan code review, menyusun standar review, linter kustom tim | `references/engineering_practice/code_review_go.md` |
+| Menulis design doc / RFC fitur besar sebelum implementasi | `references/engineering_practice/technical_design_doc.md` |
 | Runtime internals, GC tuning, CGO, PGO, goroutine stack | `references/runtime_internals/` |
 | Distributed transactions, saga, outbox, CQRS, feature flags, multi-tenancy | `references/distributed_patterns_resilience/` |
 | Raft, etcd, LSM, WAL, gossip, vector clock, BadgerDB | `references/distributed_consensus_storage/` |
