@@ -1,0 +1,12 @@
+{
+  "quality-gate": {
+    "enabled": true,
+    "Stop": [
+      {
+        "type": "command",
+        "command": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/stop_gate_antigravity.ps1",
+        "timeout": 60
+      }
+    ]
+  }
+}

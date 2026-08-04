@@ -18,7 +18,7 @@ DILARANG membuat `implementation_plan.md` atau menulis kode sebelum protokol yan
 
 ## 🔍 Auto-Detect Niche Domain (Scan dari Task)
 
-Agent wajib mencocokkan nature of task ke domain berikut **secara proaktif**:
+Agent WAJIB mencocokkan nature of task ke domain berikut **secara proaktif**:
 
 | Jika task melibatkan... | Otomatis baca domain Niche |
 | :--- | :--- |

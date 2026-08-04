@@ -1,38 +1,50 @@
 # Adaptor Claude Code
 
 <!-- KHUSUS CLAUDE CODE. Di-import dari ~/.claude/CLAUDE.md setelah AGENTS.md.
-     Aturan universal (§0-§4) ada di AGENTS.md — JANGAN disalin ke sini. -->
+     Aturan universal ada di AGENTS.md — JANGAN disalin ke sini. -->
 
-> **PENTING — pembacaan §5 dan §6 di atas.**
-> `AGENTS.md` ditulis untuk Antigravity. Bagian **§0 sampai §4 berlaku penuh** di Claude Code.
-> Tapi **§5 (Eksekusi Riset & Subagent) dan §6 (Tooling) ABAIKAN** — keduanya memakai
-> tool yang tidak ada di Claude Code. Penggantinya CC-1 dan CC-3 di bawah.
+**Cara membaca `AGENTS.md` di atas:** §0–§6 dan §9 berlaku PENUH. **§7 dan §8 DIABAIKAN** — keduanya memakai tool Antigravity yang tidak ada di sini. Penggantinya CC-1 dan CC-3 di bawah.
 
-## CC-1. Eksekusi Riset & Subagent — *pengganti §5*
-- **Default sekuensial:** Pemenuhan *Mandatory Reference Loading* (§0) dijalankan dengan membaca referensi langsung via `Read` / `Grep` / `Glob`. Hemat token dan jejaknya bisa diaudit baris demi baris.
-- **Eskalasi paralel:** Naik ke subagent `Explore` paralel (maks 3) HANYA bila user eksplisit meminta — misal menyebut "swarm" atau "gasskan riset". DILARANG spawn subagent tanpa diminta.
-- **Alasan:** akun shared, kuota token dijaga ketat.
+## CC-1. Eksekusi Riset & Subagent — *mengganti §7*
+
+| JIKA… | MAKA… |
+| :--- | :--- |
+| Perlu membaca referensi domain (berapa pun jumlahnya) | Baca langsung: `Read` / `Grep` / `Glob` |
+| User menyebut "swarm" atau "gasskan riset" | BOLEH spawn subagent `Explore` paralel, maksimal 3 |
+| User TIDAK menyebutnya | DILARANG spawn subagent apa pun |
+
+Alasan: akun shared, kuota token dijaga ketat. Jejak `Read` juga bisa Anda audit baris demi baris, sedangkan ringkasan subagent tidak.
 
 ## CC-2. Penerjemah Istilah
-Berlaku untuk `AGENTS.md` §5-§6 maupun kelima `SKILL.md` mastery:
 
-| Istilah Antigravity | Padanan di Claude Code |
+Berlaku untuk `AGENTS.md` §7–§8 maupun kelima `SKILL.md` mastery beserta `_protocol/`-nya.
+
+| Istilah Antigravity | Padanan Claude Code |
 | :--- | :--- |
-| `invoke_subagent` tier `pro` | `Read` / `Grep` langsung; naik ke subagent `Explore` hanya bila diminta (CC-1) |
+| `invoke_subagent` tier `pro` | `Read` / `Grep` langsung; subagent `Explore` HANYA bila diminta (CC-1) |
 | `invoke_subagent` tier `flash` | `Grep` / `Glob` langsung |
-| *Dynamic Swarm Subagent* / *Swarm Research Protocol* | protokol CC-1 |
+| *Dynamic Swarm Subagent* / *Swarm Research Protocol* | prosedur CC-1 |
 | `view_file` | `Read` |
 | `replace_file_content` / `multi_replace_file_content` | `Edit` |
 | `grep_search` | `Grep` |
+| `list_dir` | `Glob` |
 | `search_web` | `WebSearch` / `WebFetch` |
+| `run_command` | `Bash` atau `PowerShell` |
 | "di ekosistem Antigravity" | berlaku untuk agent coding mana pun |
 
-Isi teknis referensi mastery tetap berlaku 100% — yang diterjemahkan hanya nama tool & mekanisme eksekusinya.
+Isi teknis referensi mastery tetap berlaku 100%. Yang diterjemahkan HANYA nama tool dan mekanisme eksekusinya.
 
-## CC-3. Tooling & Higiene — *pengganti §6*
-- **Context Hygiene:** Gunakan `/compact` atau `/clear` jika sesi sudah panjang (>30 menit) atau berpindah fitur, agar hemat kuota akun shared.
-- **Edit Presisi:** Gunakan `Edit` untuk perubahan parsial. `Write` hanya untuk berkas baru atau rewrite total.
-- **Command Macro:**
-  - `/greenfield` — inisiasi proyek baru dengan 5 Pilar Day-0.
-  - `/audit` — audit kualitas forensik & OWASP Top 10.
-  - `/test-harness` — pembuatan suite pengujian otomatis & concurrency test.
+## CC-3. Tooling & Higiene — *mengganti §8*
+
+- **Bahasa & panjang jawaban:** ikut §8 `AGENTS.md` tanpa perubahan.
+- **Edit presisi:** `Edit` untuk perubahan parsial. `Write` HANYA untuk berkas baru atau rewrite total.
+- **Context hygiene:** sesi >30 menit atau berpindah fitur → sarankan `/compact` atau `/clear`. Akun shared, kuota dijaga.
+- **DILARANG mengedit `~/.claude/CLAUDE.md`.** Berkas itu cuma penunjuk. Aturan diedit di `~/.gemini/config/AGENTS.md`. Perubahan di stub akan jadi drift yang tidak terlihat Antigravity.
+
+## CC-4. Command Macro
+
+| Macro | Fungsi |
+| :--- | :--- |
+| `/greenfield` | Inisiasi proyek baru dengan 5 Pilar Day-0 |
+| `/audit` | Audit kualitas forensik & OWASP Top 10 |
+| `/test-harness` | Pembuatan suite pengujian otomatis & concurrency test |

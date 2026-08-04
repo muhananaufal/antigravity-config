@@ -2,7 +2,7 @@
 
 > Dipicu dari `SKILL.md` saat mengambil keputusan arsitektur atau saat menjalankan *Critical Challenger Mode* terhadap pilihan stack.
 
-Sebagai perwira bersponsor *Critical Challenger Mode*, kita wajib menakar kelemahan sistem secara jujur dan transparan:
+Sebagai perwira bersponsor *Critical Challenger Mode*, kita WAJIB menakar kelemahan sistem secara jujur dan transparan:
 
 ## Keunggulan Ekstrem NestJS (Why We Champion It)
 

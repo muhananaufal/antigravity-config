@@ -18,7 +18,7 @@ DILARANG membuat `implementation_plan.md` atau menulis kode sebelum protokol yan
 
 ## 🔍 Auto-Detect Context Domain (Scan dari Task)
 
-Agent wajib mencocokkan nature of task ke domain berikut **secara proaktif**:
+Agent WAJIB mencocokkan nature of task ke domain berikut **secara proaktif**:
 
 | Jika task melibatkan... | Otomatis baca |
 | :--- | :--- |
@@ -43,7 +43,7 @@ Agent wajib mencocokkan nature of task ke domain berikut **secara proaktif**:
 | Streaming Excel 1 Juta baris (`excelize`), govips JIT image, FFmpeg video HLS, chromedp PDF | `media_asset_pipeline/` |
 | Katalog dinamis `x/text`, format uang/mata uang ICU, propagasi zona waktu Context, multi-region router | `i18n_localization/` |
 
-## 📦 Core References (Wajib Baca Setiap Project)
+## 📦 Core References (WAJIB Baca Setiap Project)
 
 Domain yang hampir selalu relevan untuk Go service manapun:
 

@@ -12,7 +12,7 @@ Selamat datang di mahakarya abadi **`nestjs-mastery`**, sebuah mesin pendorong k
 ## 🏛️ Filosofi Arsitektur Mutlak & Pilar Utama
 
 1. **Fastify First Engine Dominant:** Express adalah legenda masa lalu yang lamban dan boros I/O. Di lingkungan enterprise ini, **Fastify (`@nestjs/platform-fastify`)** dipatok sebagai adapter HTTP utama murni untuk meluncurkan latensi eksekusi JSON berkecepatan tinggi dan skalabilitas koneksi bersamaan yang ekstrem.
-2. **Kedisiplinan Hexagonal & Modular DDD:** Struktur direktori wajib dipisahkan berdasarkan pola *Domain-Driven Design (DDD) Bounded Contexts* dan *Hexagonal Ports & Adapters*. Business logic murni berada di tengah (core domain), sepenuhnya buta terhadap database eksternal maupun protokol HTTP/gRPC.
+2. **Kedisiplinan Hexagonal & Modular DDD:** Struktur direktori WAJIB dipisahkan berdasarkan pola *Domain-Driven Design (DDD) Bounded Contexts* dan *Hexagonal Ports & Adapters*. Business logic murni berada di tengah (core domain), sepenuhnya buta terhadap database eksternal maupun protokol HTTP/gRPC.
 3. **Strict Type-Safety & Zero `any` Bypass:** TypeScript tidak berhak disalahgunakan sebagai JavaScript berbaju modern. Penggunaan `any`, `Object`, atau `unknown` tanpa pengecekan tipe refleksi eksternal yang ketat (*Zod*, *Ajv*, *TypeBox*, atau *class-validator* berlambang `whitelist: true`) adalah **DOSA BESAR**.
 4. **Resilience & Non-Blocking Event Loop:** Node.js / Bun bekerja di atas V8 Single-Threaded Event Loop. Komputasi CPU-bound masif (seperti hashing, kriptografi, atau pemrosesan Excel gb-scale) **WAJIB DIASTRAKSI KELUAR DARI MAIN EVENT LOOP** ke kumpulan benang eksekusi (*Worker Threads pool via Piscina* atau *Rust N-API Addon via napi-rs*).
 5. **Zero-Trust & OWASP API Security:** Tidak ada paket request yang dianggap aman secara default. Enkripsi otentikasi menggunakan JWKS asimetris / OIDC di HTTP-Only Secure Cookies, otentikasi metadata RBAC/ABAC murni via `Reflector`, dan mitigasi pembantaian DDOS dari pintu masuk dengan Redis Valkey Throttling.
@@ -33,7 +33,7 @@ DILARANG membuat `implementation_plan.md` atau menulis kode sebelum protokol yan
 Ketika Anda dihadapkan pada tugas pengembangan, optimasi, atau perombakan sistem di proyek NestJS, panggil subagent atau navigasikan rujukan ilmu ekstrim Anda sesuai taksonomi **3-Tier Enterprise Architecture** (Core, Distributed/Cloud, dan Niche Verticals) berikut tanpa keterikatan penomoran alur sekuensial (Murni Modular Domain Random-Access):
 
 ### Tier I: Core Foundation & Application Infrastructure (15 Domain)
-*(Ilmu fondasi wajib yang bergelar Fardu Ain untuk diimplementasikan pada 100% produksi aplikasi NestJS Enterprise)*
+*(Ilmu fondasi WAJIB yang bergelar Fardu Ain untuk diimplementasikan pada 100% produksi aplikasi NestJS Enterprise)*
 | Nama Domain | Direktori Referensi | Rujukan Utama yang Tersedia (SSOT) |
 | :--- | :--- | :--- |
 | **Core Arch Patterns** | `references/core_arch_patterns/` | DI IoC Container Internals, Hexagonal Ports/Adapters, Modular DDD, CQRS Event Sourcing, Dynamic Modules `forRootAsync` |
