@@ -1,6 +1,6 @@
 # Brownfield — Protokol Repo Eksisting
 
-> Dipicu dari `SKILL.md` saat menghadapi repo yang sudah ada (`go.mod`, `Cargo.toml`, `composer.json`, `package.json`, dll). **Baseline regresi (§3.3 `AGENTS.md`) WAJIB tuntas lebih dulu.**
+> Dipicu dari `SKILL.md` saat menghadapi repo yang sudah ada (`go.mod`, `Cargo.toml`, `composer.json`, `package.json`, dll). **Baseline regresi (§3.4 `AGENTS.md`) WAJIB tuntas lebih dulu.**
 
 **DILARANG:** Big Bang Rewrite · "Frankenstein Codebase" · daftar subagent statis lawas yang tidak relevan.
 

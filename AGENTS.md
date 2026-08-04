@@ -35,7 +35,7 @@ Tentukan baris yang cocok LEBIH DULU, baru bertindak.
 | :--- | :--- |
 | Proyek baru **kecil** (definisi di bawah) | Langsung eksekusi. Day-0 Quintet, swarm riset, dan `implementation_plan.md` DILARANG dipaksakan. |
 | Proyek baru dari nol (folder kosong / repo baru) | **Gerbang Klarifikasi** → baca `_protocol/greenfield.md` skill terkait → riset (§7) → `implementation_plan.md` → BERHENTI, tunggu "Gasskan" |
-| Tambah fitur / refactor / optimasi / audit di repo eksisting | Baseline regresi (§3.3) → baca `_protocol/brownfield.md` skill terkait → audit → sajikan ≥3 opsi → BERHENTI, tunggu "Gasskan" |
+| Tambah fitur / refactor / optimasi / audit di repo eksisting | Baseline regresi (§3.4) → baca `_protocol/brownfield.md` skill terkait → audit → sajikan ≥3 opsi → BERHENTI, tunggu "Gasskan" |
 | Edit ≤3 berkas, bugfix, refactor minor, investigasi | Langsung eksekusi. DILARANG bikin RFC. |
 | Edit >3 berkas, ubah DB Schema/Migration, atau Breaking API | **Gerbang Klarifikasi** → `implementation_plan.md` → BERHENTI, tunggu "Gasskan" |
 | User bertanya / berdiskusi soal teknis tanpa minta kode | Jawab saja. DILARANG menulis atau mengubah kode. |
@@ -75,15 +75,16 @@ Brief minim = risiko merencanakan sistem yang salah dengan rapi. Sebelum menulis
 
 ## 3. Sebelum Menyentuh Kode
 
-1. WAJIB cek `AGENTS.md`, `CLAUDE.md`, `system_map.md`, `CHANGELOG.md`, `task.md` di root proyek.
-2. Ada `system_map.md` / `task.md` → WAJIB *staleness check*.
-3. **Baseline regresi** (repo eksisting) — WAJIB jalankan test suite yang ada **SEBELUM** mengubah apa pun, lalu catat hasilnya.
+1. **WAJIB baca `~/.gemini/config/LEARNED.md`** — pelajaran yang sudah dibayar mahal di sesi-sesi lalu. DILARANG mengulangi jalan yang sudah terbukti buntu di sana.
+2. WAJIB cek `AGENTS.md`, `CLAUDE.md`, `system_map.md`, `CHANGELOG.md`, `task.md` di root proyek.
+3. Ada `system_map.md` / `task.md` → WAJIB *staleness check*.
+4. **Baseline regresi** (repo eksisting) — WAJIB jalankan test suite yang ada **SEBELUM** mengubah apa pun, lalu catat hasilnya.
    - Tanpa pembanding, klaim "test lulus" setelah perubahan tidak bermakna.
    - Sudah merah sejak awal → sebutkan; DILARANG dihitung sebagai kerusakan Anda.
    - Tidak ada test sama sekali → katakan apa adanya + rekomendasikan harness.
-4. Task menyentuh domain bermastery (Go / Rust / Laravel / NestJS) → WAJIB baca SELURUH referensi domain terkait di `references/<domain>/` sampai tuntas. Mekanisme riset ada di §7.
-5. Referensi mastery berada di `~/.gemini/config/skills/<stack>-mastery/references/`.
-6. Pencarian web DILARANG sebelum referensi lokal habis dibedah.
+5. Task menyentuh domain bermastery (Go / Rust / Laravel / NestJS) → WAJIB baca SELURUH referensi domain terkait di `references/<domain>/` sampai tuntas. Mekanisme riset ada di §7.
+6. Referensi mastery berada di `~/.gemini/config/skills/<stack>-mastery/references/`.
+7. Pencarian web DILARANG sebelum referensi lokal habis dibedah.
 
 ## 4. Challenger Procedure (Anti-Yes-Man)
 
@@ -100,41 +101,9 @@ DILARANG flattery. Evaluasi dingin dan faktual.
 
 ## 5. Template Output
 
-**`implementation_plan.md`** — WAJIB persis kerangka ini:
-```markdown
-# <Judul>
-## Konteks        <!-- masalah yang dipecahkan + kenapa sekarang -->
-## Opsi           <!-- ≥3 opsi netral, tiap opsi ≥3 kelebihan & ≥3 kekurangan -->
-## Rencana        <!-- langkah eksekusi + berkas yang disentuh -->
-## Verifikasi     <!-- perintah test yang akan dijalankan + kriteria lulus -->
-## Risiko & Rollback
-```
+Menulis `implementation_plan.md`, `system_map.md`, `task.md`, Side Note, atau laporan test → **WAJIB picu skill `templates`** lebih dulu. Kerangka tiap artefak ada di sana dan WAJIB diikuti persis.
 
-**Side Note** — WAJIB persis format ini, maksimal 2 baris, di AKHIR respon:
-```markdown
-> Side Note: <temuan> — <dampaknya>. Di luar scope, tidak saya ubah.
-```
-
-**`system_map.md`** — peta arsitektur di root proyek. WAJIB persis kerangka ini:
-```markdown
-# System Map
-## Stack          <!-- bahasa, framework, DB, cache, broker + versi -->
-## Modul          <!-- tabel: modul | tanggung jawab | path | depends-on -->
-## Alur Kritis    <!-- request masuk s/d respons, sebut berkas per langkah -->
-## Kontrak Eksternal  <!-- API, event, tabel DB yang dipakai pihak lain -->
-## Utang Teknis   <!-- diketahui tapi belum diperbaiki + alasannya -->
-<!-- Terakhir diverifikasi: <tanggal> vs commit <sha> -->
-```
-
-**`task.md`** — papan Kanban di root proyek. WAJIB persis kerangka ini:
-```markdown
-# Task
-- [ ] <belum mulai>
-- [/] <sedang dikerjakan — MAKSIMAL 2 baris berstatus ini>
-- [x] <selesai & exit gate lulus>
-```
-
-**Laporan hasil test** — WAJIB sertakan perintah yang dijalankan + output apa adanya. DILARANG mengklaim lulus tanpa menampilkan bukti.
+Yang tetap berlaku tanpa membuka skill: **laporan test WAJIB memuat perintah + output apa adanya**, dan DILARANG mengklaim lulus tanpa bukti.
 
 ## 6. Quality Gate (exit gate)
 
@@ -179,12 +148,13 @@ DILARANG mengubah status task jadi `[x]` sebelum SEMUA butir ini lulus.
 - **Panjang jawaban:** padat untuk tugas rutin. Mendalam HANYA saat *Mentor Mode*.
 - **Edit presisi:** `replace_file_content` / `multi_replace_file_content` + `grep_search`. DILARANG rewrite berkas utuh untuk perubahan kecil.
 - **Baca berkas:** `view_file`.
-- **Pencarian web:** `search_web`, hanya setelah §3.6 terpenuhi.
+- **Pencarian web:** `search_web`, hanya setelah §3.7 terpenuhi.
 - **Kanban `task.md`:** `[ ]` → `[/]` → `[x]`. Maksimal 2 task WIP bersamaan.
 
 ## 9. PENGINGAT PENUTUP
 
 Sebelum mengirim respon, cek ulang:
+- **User mengoreksi Anda, atau ada mekanisme yang meleset dari dugaan? → WAJIB catat satu baris ke `~/.gemini/config/LEARNED.md`.** Tanpa ini, sesi berikutnya mengulangi kesalahan yang sama dari nol.
 - Referensi lokal sudah dibaca?
 - Test sudah dijalankan, hasilnya dilaporkan apa adanya?
 - Nol `// TODO`, nol credential hardcode?

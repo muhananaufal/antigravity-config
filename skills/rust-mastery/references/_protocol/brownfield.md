@@ -1,6 +1,6 @@
 # Brownfield Rust — Protokol Repo Eksisting
 
-> Dipicu dari `SKILL.md` saat tambah fitur / refactor / optimasi / audit pada repo ber-`Cargo.toml`. **Baseline regresi (§3.3 `AGENTS.md`) WAJIB tuntas lebih dulu.**
+> Dipicu dari `SKILL.md` saat tambah fitur / refactor / optimasi / audit pada repo ber-`Cargo.toml`. **Baseline regresi (§3.4 `AGENTS.md`) WAJIB tuntas lebih dulu.**
 
 **DILARANG:** Big Bang Rewrite · "Frankenstein Codebase" · daftar subagent statis yang tidak relevan dengan repo.
 
