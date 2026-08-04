@@ -10,7 +10,10 @@
 [CmdletBinding()]
 param(
     [string]$Path = (Get-Location).Path,
-    [switch]$Full
+    [switch]$Full,
+    # Path transcript sesi. Diisi HANYA oleh Stop hook. Kalau diisi, Gate 4 aktif:
+    # berkas sumber berubah tapi tidak ada perintah test terpanggil = pelanggaran.
+    [string]$Transcript = ''
 )
 
 $ErrorActionPreference = 'Continue'
@@ -92,6 +95,25 @@ foreach ($f in $targets) {
         if ($line -match 'process\.env|os\.Getenv|env\(|getenv|ENV\[|\$_ENV|std::env|Deno\.env') { continue }
         if ($line -match '(?i)example|contoh|anti-?pattern|salah|placeholder|xxxx|your[_-]?|<[a-z_]+>|\.\.\.') { continue }
         $violations.Add("SECRET       $($f.FullName):$($h.LineNumber)  $($line.Trim())")
+    }
+}
+
+# --- Gate 4: berkas sumber berubah tapi test tidak pernah dijalankan ---
+# Sengaja sempit. Hanya menyala bila SEMUA syarat terpenuhi:
+#   (a) transcript diberikan (artinya dipanggil dari Stop hook)
+#   (b) ada berkas SUMBER yang berubah - .md/.yaml/.json/.sql/.sh tidak dihitung
+#   (c) tidak ada satu pun perintah test terpanggil sepanjang sesi
+# Fail-open: transcript tidak terbaca -> lewat.
+$SRC_EXT = @('.go','.rs','.php','.ts','.tsx','.js','.jsx','.mjs','.cjs','.py','.java','.cs','.rb')
+if ($Transcript -and (Test-Path -LiteralPath $Transcript)) {
+    $srcChanged = @($targets | Where-Object { $SRC_EXT -contains $_.Extension })
+    if ($srcChanged.Count -gt 0) {
+        $TESTCMD = 'go test|cargo test|npm (run )?test|pnpm (run )?test|yarn test|php artisan test|phpunit|bin.pest|pytest|jest|vitest|mvn [^|]*test|gradle [^|]*test|dotnet test'
+        $found = Select-String -LiteralPath $Transcript -Pattern $TESTCMD -List -ErrorAction SilentlyContinue
+        if (-not $found) {
+            $names = ($srcChanged | Select-Object -First 5 | ForEach-Object { $_.Name }) -join ', '
+            $violations.Add("TEST_BELUM_JALAN  $($srcChanged.Count) berkas sumber berubah ($names) tapi tidak ada perintah test terpanggil di sesi ini")
+        }
     }
 }
 

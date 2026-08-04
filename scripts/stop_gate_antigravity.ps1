@@ -8,6 +8,10 @@
 
 $ErrorActionPreference = 'Continue'
 
+# Setel $false untuk mematikan Gate 4 (blokir saat kode berubah tapi test tak pernah jalan).
+# Placeholder & secret tetap ditegakkan apa pun nilainya.
+$ENFORCE_TESTS = $true
+
 function Emit-Allow { Write-Output '{}'; exit 0 }
 
 try {
@@ -31,10 +35,13 @@ try {
     $gate = Join-Path $PSScriptRoot 'quality_gate.ps1'
     if (-not (Test-Path -LiteralPath $gate)) { Emit-Allow }
 
-    $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $gate -Path $ws
+    $tp = ''
+    if ($ENFORCE_TESTS -and $inp.transcriptPath -and (Test-Path -LiteralPath $inp.transcriptPath)) { $tp = $inp.transcriptPath }
+
+    $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $gate -Path $ws -Transcript $tp
     if ($LASTEXITCODE -eq 0) { Emit-Allow }
 
-    $detail = ($out | Where-Object { $_ -match '^\s+(PLACEHOLDER|SECRET|GAGAL)' } | Select-Object -First 15) -join "`n"
+    $detail = ($out | Where-Object { $_ -match '^\s+(PLACEHOLDER|SECRET|GAGAL|TEST_BELUM_JALAN)' } | Select-Object -First 15) -join "`n"
     $reason = "QUALITY GATE GAGAL. DILARANG berhenti sebelum ini dibereskan:`n$detail`n`nPerbaiki, lalu jalankan ulang gate untuk membuktikan lulus."
 
     @{ decision = 'continue'; reason = $reason } | ConvertTo-Json -Compress

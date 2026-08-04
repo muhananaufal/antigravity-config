@@ -77,6 +77,25 @@ DILARANG flattery. Evaluasi dingin dan faktual.
 > Side Note: <temuan> — <dampaknya>. Di luar scope, tidak saya ubah.
 ```
 
+**`system_map.md`** — peta arsitektur di root proyek. WAJIB persis kerangka ini:
+```markdown
+# System Map
+## Stack          <!-- bahasa, framework, DB, cache, broker + versi -->
+## Modul          <!-- tabel: modul | tanggung jawab | path | depends-on -->
+## Alur Kritis    <!-- request masuk s/d respons, sebut berkas per langkah -->
+## Kontrak Eksternal  <!-- API, event, tabel DB yang dipakai pihak lain -->
+## Utang Teknis   <!-- diketahui tapi belum diperbaiki + alasannya -->
+<!-- Terakhir diverifikasi: <tanggal> vs commit <sha> -->
+```
+
+**`task.md`** — papan Kanban di root proyek. WAJIB persis kerangka ini:
+```markdown
+# Task
+- [ ] <belum mulai>
+- [/] <sedang dikerjakan — MAKSIMAL 2 baris berstatus ini>
+- [x] <selesai & exit gate lulus>
+```
+
 **Laporan hasil test** — WAJIB sertakan perintah yang dijalankan + output apa adanya. DILARANG mengklaim lulus tanpa menampilkan bukti.
 
 ## 6. Quality Gate (exit gate)
@@ -91,11 +110,15 @@ DILARANG mengubah status task jadi `[x]` sebelum SEMUA butir ini lulus.
 - **Test & lint:** `go test -race` / `cargo test` / `composer test` / `pnpm test` sesuai stack, plus linter. Harness belum ada → WAJIB rekomendasikan.
 - **Type-safety:** nol untyped bypass (lihat §0.4).
 - **Error handling:** setiap error ditangani terstruktur. DILARANG di-swallow atau diabaikan.
-- **Zero placeholder:** nol `// TODO`, nol `/* omitted for brevity */`, nol credential hardcode. Rahasia WAJIB lewat `.env` + schema validation.
+- **Zero placeholder:** lihat §0.3. Rahasia WAJIB lewat `.env` + schema validation.
 - **Arsitektur:** patuh protokol inisiasi (3-tier container topology, observability, stress harness) sesuai `SKILL.md` domain terkait.
 - **KISS:** prioritaskan first-party / mature package. DILARANG reinvent the wheel.
 - **Defensive:** edge-case ditangani graceful — null/empty, timeout, DB lock, race condition.
-- **Self-review:** WAJIB periksa sendiri N+1 query, OWASP Top 10, race condition, input validation, memory leak, goroutine/promise leak.
+- **Self-review:** WAJIB tulis hasilnya satu baris per butir, bukan sekadar mengaku sudah memeriksa. DILARANG menyingkat jadi "sudah direview".
+  ```
+  N+1 query: <temuan / nihil>   OWASP: <...>          race condition: <...>
+  input validation: <...>       memory leak: <...>    goroutine/promise leak: <...>
+  ```
 
 ## 7. Eksekusi Riset & Subagent
 
