@@ -61,10 +61,39 @@ Lapisan 2 dan 3 diisolasi menggunakan fitur `profiles` dari Docker Compose, sehi
 
 ### A. `docker-compose.yml`
 
-File utama ini menyatukan semua kontainer dengan pemisahan profil. Gunakan variabel environment dengan default fallback agar tidak ada *hardcoded secrets*.
+File utama ini menyatukan semua kontainer dengan pemisahan profil.
+
+> ### ⚠️ Dua hal yang harus diluruskan sebelum menyalin berkas ini
+>
+> **1. `${VAR:-nilai}` BUKAN cara menghindari hardcoded secret — ia ADALAH hardcoded secret.**
+>
+> Bentuk `POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-secret123}` menuliskan
+> `secret123` **ke dalam berkas yang masuk git**. Itu kredensial hardcode
+> dengan langkah tak-langsung satu lapis, dan ia melanggar aturan "zero
+> placeholder, rahasia lewat `.env` + validasi schema" yang dipakai seluruh
+> korpus ini. Yang lebih berbahaya: default yang bekerja membuat tidak ada
+> yang pernah menyetel `.env`, sehingga `secret123` menjadi kata sandi
+> sungguhan di setiap mesin tim — dan setiap orang tahu isinya.
+>
+> Gunakan `${VAR:?pesan}` — Compose **menolak start** bila variabelnya tidak
+> ada, dengan pesan yang memberi tahu apa yang harus disetel. Tidak ada
+> default yang bisa bocor, dan kegagalannya terjadi di detik pertama, bukan
+> di produksi.
+>
+> **2. `"5432:5432"` mengikat ke SELURUH antarmuka jaringan, bukan localhost.**
+>
+> Docker juga menulis aturan iptables-nya sendiri yang **melewati `ufw` dan
+> `firewalld`** — jadi firewall host yang Anda kira melindungi mesin ini tidak
+> berlaku untuk port yang dipublikasikan Docker. Di jaringan kantor atau wifi
+> kafe, stack ini mengekspos Postgres, Grafana, dan Redis ke satu segmen
+> jaringan penuh.
+>
+> Prefiks `127.0.0.1:` pada setiap `ports` yang tidak benar-benar perlu
+> dijangkau dari luar mesin.
 
 ```yaml
-version: '3.8'
+# TIDAK ADA `version:` -- kunci itu obsolete di Compose V2 dan hanya
+# menghasilkan peringatan "the attribute `version` is obsolete".
 
 x-logging: &default-logging
   driver: "json-file"
@@ -77,22 +106,45 @@ services:
   # TIER 1: Core Foundation (Selalu jalan tanpa profil khusus)
   # ---------------------------------------------------------
   api:
-    build: 
+    build:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "8080:8080"
-      - "2112:2112"
+      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:2112:2112"
     environment:
       - APP_ENV=development
-      - DB_DSN=postgres://${POSTGRES_USER:-appuser}:${POSTGRES_PASSWORD:-secret123}@postgres:5432/${POSTGRES_DB:-appdb}?sslmode=disable
+      - DB_DSN=postgres://${POSTGRES_USER:?setel di .env}:${POSTGRES_PASSWORD:?setel di .env}@postgres:5432/${POSTGRES_DB:?setel di .env}?sslmode=disable
       - REDIS_ADDR=redis:6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:?setel di .env}
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
+    # HEALTHCHECK PADA `api` BUKAN OPSIONAL DI SINI.
+    #
+    # Tanpa ini, `depends_on` milik k6 di Tier 3 TIDAK BISA memakai
+    # `condition: service_healthy` -- yang justru diwajibkan Anti-Pattern 2
+    # berkas ini sendiri. Yang tersisa hanya `depends_on` telanjang, yang
+    # hanya menunggu container START, sehingga k6 mulai membanjiri API yang
+    # belum selesai memigrasi DB: persis 502/connection refused yang
+    # anti-pattern itu ada untuk mencegahnya.
+    #
+    # Perintahnya harus cocok dengan base image runtime Anda. Bila
+    # distroless (lihat `devops_control_planes/docker_container_go.md`),
+    # tidak ada wget/curl/sh -- binernya sendiri yang jadi health checker.
+    healthcheck:
+      test: ["CMD", "/app", "-healthcheck"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+    deploy:
+      resources:
+        limits: { memory: 512M, cpus: "1.0" }
+    restart: unless-stopped
     logging: *default-logging
     networks:
       - app_network
@@ -100,13 +152,19 @@ services:
   postgres:
     image: postgres:16-alpine
     environment:
-      - POSTGRES_USER=${POSTGRES_USER:-appuser}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-secret123}
-      - POSTGRES_DB=${POSTGRES_DB:-appdb}
+      # `:?` bukan `:-`. Tanpa .env, Compose menolak start dengan pesan yang
+      # menyebut variabelnya -- alih-alih diam-diam memakai kata sandi yang
+      # tertulis di repo dan diketahui semua orang.
+      - POSTGRES_USER=${POSTGRES_USER:?setel di .env}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?setel di .env}
+      - POSTGRES_DB=${POSTGRES_DB:?setel di .env}
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-appuser}"]
+      # -d WAJIB: tanpa nama database, pg_isready menguji koneksi ke database
+      # bawaan yang senama dengan user, dan bisa melaporkan "siap" untuk
+      # instance yang belum selesai membuat database aplikasi.
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -118,13 +176,24 @@ services:
 
   redis:
     image: valkey/valkey:7.2-alpine
+    # TANPA BARIS INI, REDIS BERJALAN TANPA AUTENTIKASI SAMA SEKALI --
+    # dan itu jauh lebih berbahaya daripada kata sandi lemah pada Postgres,
+    # karena tidak ada satu pun lapisan yang menghalangi siapa pun yang bisa
+    # menjangkau portnya.
+    command: ["valkey-server", "--requirepass", "${REDIS_PASSWORD:?setel di .env}"]
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      # valkey-cli, bukan redis-cli: image ini memang Valkey, jadi jangan
+      # bergantung pada symlink kompatibilitas yang bisa hilang antar rilis.
+      # `| grep PONG` juga penting -- `ping` polos bisa keluar dengan status 0
+      # sementara balasannya "LOADING" saat server masih memuat dump.
+      test: ["CMD-SHELL", "valkey-cli -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
       interval: 5s
       timeout: 3s
       retries: 5
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD:?setel di .env}
     logging: *default-logging
     networks:
       - app_network
@@ -139,10 +208,16 @@ services:
     profiles: ["telemetry"]
     command: ["--config=/etc/otel-collector-config.yaml"]
     volumes:
-      - ./infra/telemetry/otel-collector-config.yaml:/etc/otel-collector-config.yaml
+      - ./infra/telemetry/otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro
     ports:
-      - "4317:4317" # OTLP gRPC
-      - "4318:4318" # OTLP HTTP
+      - "127.0.0.1:4317:4317" # OTLP gRPC
+      - "127.0.0.1:4318:4318" # OTLP HTTP
+    # memory_limiter di config collector memakai limit_mib: 1500. Angka itu
+    # hanya bermakna bila container-nya MEMANG punya batas -- kalau tidak, ia
+    # sekadar angka yang tidak merujuk apa pun.
+    deploy:
+      resources:
+        limits: { memory: 2G }
     networks:
       - app_network
 
@@ -152,11 +227,17 @@ services:
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
-      - '--storage.tsdb.retention.time=15d'
+      # 15d DENGAN scrape_interval 5s ADALAH BOM DISK DI LAPTOP -- dan justru
+      # itu yang dikeluhkan bagian "Kekurangan #3" berkas ini sendiri
+      # ("akumulasi data ... hingga puluhan Gigabyte"). Untuk stack lokal,
+      # retensi diukur dalam jam. Naikkan hanya bila memang sedang menyelidiki
+      # sesuatu yang butuh sejarah panjang.
+      - '--storage.tsdb.retention.time=${PROM_RETENTION:-24h}'
+      - '--storage.tsdb.retention.size=2GB'
     ports:
-      - "9090:9090"
+      - "127.0.0.1:9090:9090"
     volumes:
-      - ./infra/telemetry/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./infra/telemetry/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
     networks:
       - app_network
@@ -165,10 +246,13 @@ services:
     image: grafana/grafana:10.3.3
     profiles: ["telemetry"]
     environment:
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin123}
-      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:?setel di .env}
+      # Anonymous auth + port yang terbuka ke seluruh antarmuka = dasbor
+      # internal yang bisa dibaca siapa pun di segmen jaringan yang sama.
+      # Aktifkan hanya bila portnya memang terikat ke 127.0.0.1 saja.
+      - GF_AUTH_ANONYMOUS_ENABLED=${GRAFANA_ANON:-false}
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     depends_on:
       - prometheus
     volumes:
@@ -176,12 +260,38 @@ services:
     networks:
       - app_network
 
+  # LOKI TIDAK MENERIMA APA PUN TANPA PENGIRIM LOG.
+  #
+  # Versi sebelumnya menjalankan Loki sendirian sementara `logging: json-file`
+  # menulis log ke disk host. Tidak ada satu byte pun yang sampai ke Loki --
+  # ia hanya memakan RAM sambil digambar di diagram sebagai "Log Aggregation".
+  #
+  # `promtail` di bawah yang membuat kotak itu benar. Alternatif tanpa
+  # container tambahan: pasang logging driver Loki
+  # (`logging: { driver: loki, options: { loki-url: ... } }`), tetapi driver
+  # itu adalah plugin yang harus dipasang lebih dulu di daemon Docker --
+  # ketergantungan tersembunyi yang tidak cocok untuk stack "zero-touch".
   loki:
     image: grafana/loki:2.9.4
     profiles: ["telemetry"]
     command: -config.file=/etc/loki/local-config.yaml
     ports:
-      - "3100:3100"
+      - "127.0.0.1:3100:3100"
+    networks:
+      - app_network
+
+  promtail:
+    image: grafana/promtail:2.9.4
+    profiles: ["telemetry"]
+    command: -config.file=/etc/promtail/config.yaml
+    volumes:
+      - ./infra/telemetry/promtail.yaml:/etc/promtail/config.yaml:ro
+      # Membaca log container dari daemon host. `:ro` -- promtail tidak pernah
+      # perlu menulis ke sini.
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - loki
     networks:
       - app_network
 
@@ -193,11 +303,18 @@ services:
     profiles: ["stress"]
     command: run /scripts/k6-stress.js
     volumes:
-      - ./infra/stress/k6-stress.js:/scripts/k6-stress.js
+      - ./infra/stress/k6-stress.js:/scripts/k6-stress.js:ro
     networks:
       - app_network
     depends_on:
-      - api
+      # `- api` telanjang -- bentuk sebelumnya -- hanya menunggu container
+      # START. k6 lalu mulai membanjiri API yang masih memigrasi database, dan
+      # hasil ujinya penuh 502/connection refused: persis kegagalan yang
+      # Anti-Pattern 2 di bawah ada untuk mencegahnya, di berkas yang sama.
+      #
+      # Bentuk ini hanya bisa ditulis karena `api` sekarang punya healthcheck.
+      api:
+        condition: service_healthy
 
 networks:
   app_network:
@@ -237,18 +354,45 @@ exporters:
     endpoint: "0.0.0.0:8889"
     namespace: "golang_app"
   debug:
-    verbosity: detailed
+    # `verbosity: detailed` MENCETAK SETIAP SPAN DAN SETIAP TITIK METRIK.
+    #
+    # Di stack yang juga memuat generator beban (Tier 3), itu bom log: k6
+    # dengan 100 VU menghasilkan ribuan span per detik, dan seluruhnya
+    # dicetak ke stdout collector. Itu persis mekanisme kegagalan yang
+    # diuraikan Edge Case 3 di bawah -- hanya sumbernya bukan aplikasi Anda,
+    # melainkan collector-nya sendiri.
+    #
+    # `basic` mencetak ringkasan hitungan saja. Naikkan ke `detailed` hanya
+    # saat sedang men-debug pipeline, lalu turunkan lagi.
+    verbosity: ${OTEL_DEBUG_VERBOSITY:-basic}
 
 service:
   pipelines:
     traces:
       receivers: [otlp]
       processors: [memory_limiter, batch]
-      exporters: [debug]
+      # HANYA `debug` berarti TRACE TIDAK DISIMPAN DI MANA PUN -- ia dicetak
+      # ke stdout collector lalu hilang. Diagram di atas menggambar Tier 2
+      # sebagai "Receive Traces", tetapi tanpa backend trace, satu-satunya
+      # cara membaca trace adalah `docker compose logs otel-collector`.
+      #
+      # Tambahkan Tempo (atau Jaeger) bila trace memang mau dipakai; bila
+      # tidak, hapus pipeline trace-nya sekalian agar tidak ada yang mengira
+      # tracing sudah terpasang.
+      exporters: [otlp/tempo, debug]
     metrics:
       receivers: [otlp]
       processors: [memory_limiter, batch]
       exporters: [prometheus, debug]
+```
+
+Bagian `otlp/tempo` di atas mengacu pada exporter berikut — tambahkan ke blok `exporters`, dan tambahkan servis `tempo` ke profil `telemetry`:
+
+```yaml
+exporters:
+  otlp/tempo:
+    endpoint: tempo:4317
+    tls: { insecure: true }   # jaringan Compose lokal; JANGAN di produksi
 ```
 
 ### C. Konfigurasi Prometheus Scrape (`prometheus.yml`)
@@ -273,7 +417,22 @@ scrape_configs:
 
 ### D. K6 Stress Harness Script (`k6-stress.js`)
 
-Simpan di `./infra/stress/k6-stress.js`. Ini adalah script uji tegak nyata untuk mengukur apakah service Golang mampu bertahan dan memenuhi kriteria latensi p99 < 50ms di bawah tekanan 100 virtual users secara konstan.
+Simpan di `./infra/stress/k6-stress.js`.
+
+> **Dua koreksi terhadap versi sebelumnya, dan keduanya menentukan apakah skrip ini bermakna.**
+>
+> **1. Menembak `/health` tidak mengukur apa pun tentang aplikasi Anda.**
+> Endpoint itu membalas konstanta tanpa menyentuh database, cache, maupun satu
+> baris logika bisnis. Yang terukur adalah kecepatan stack HTTP Go — yang
+> memang selalu cepat. Skrip seperti itu menghasilkan p99 hijau yang meyakinkan
+> sambil membiarkan N+1 query, pool koneksi yang terlalu kecil, dan lock
+> contention lolos sepenuhnya. Beban harus menyentuh jalur yang benar-benar
+> dipakai pengguna.
+>
+> **2. `check()` TIDAK BISA menggagalkan build.** Ini jebakan k6 yang paling
+> sering menggigit: `check` yang gagal hanya menaikkan penghitung dan dicetak
+> di ringkasan — exit code k6 tetap **0**. Hanya `thresholds` yang menentukan
+> exit code. Gerbang CI yang bersandar pada `check` selalu lulus.
 
 ```javascript
 import http from 'k6/http';
@@ -281,28 +440,53 @@ import { check, sleep } from 'k6';
 
 export const options = {
   stages: [
-    { duration: '5s', target: 50 },  // Ramp-up to 50 users over 5 seconds
-    { duration: '20s', target: 100 }, // Stay at 100 users for 20 seconds
-    { duration: '5s', target: 0 },   // Ramp-down to 0 users
+    { duration: '5s', target: 50 },   // Ramp-up ke 50 VU
+    { duration: '20s', target: 100 }, // Tahan 100 VU
+    { duration: '5s', target: 0 },    // Ramp-down
   ],
   thresholds: {
-    // Assert p99 latency must be lower than 50ms, and p95 lower than 30ms
     http_req_duration: ['p(95)<30', 'p(99)<50'],
-    // Assert error rate is strictly less than 1%
-    http_req_failed: ['rate<0.01'], 
+    http_req_failed: ['rate<0.01'],
+
+    // BARIS INI yang membuat check() ikut menentukan exit code.
+    // Tanpanya, seluruh check bisa gagal dan k6 tetap keluar dengan status 0.
+    checks: ['rate>0.99'],
+
+    // Ambang per-endpoint. Tanpa pemisahan ini, satu endpoint yang cepat
+    // (/health) menutupi satu endpoint yang lambat di dalam agregat p99 yang
+    // sama -- dan justru endpoint lambat itulah yang ingin ditemukan.
+    'http_req_duration{endpoint:health}': ['p(99)<20'],
+    'http_req_duration{endpoint:daftar_produk}': ['p(99)<200'],
   },
 };
 
 export default function () {
-  const res = http.get('http://api:8080/health');
-  
-  check(res, {
-    'status is 200': (r) => r.status === 200,
-    'response time is fast': (r) => r.timings.duration < 50,
+  // Endpoint sepele: hanya untuk memastikan proses hidup.
+  const sehat = http.get('http://api:8080/health', {
+    tags: { endpoint: 'health' },
+  });
+  check(sehat, { 'health 200': (r) => r.status === 200 });
+
+  // JALUR YANG SEBENARNYA DIUKUR: menyentuh DB dan cache, seperti pengguna.
+  // Ini yang menemukan N+1 query, pool koneksi kurang, dan lock contention.
+  const daftar = http.get('http://api:8080/api/v1/produk?limit=20', {
+    tags: { endpoint: 'daftar_produk' },
+  });
+  check(daftar, {
+    'daftar produk 200': (r) => r.status === 200,
+    'daftar produk berisi data': (r) => {
+      try {
+        return JSON.parse(r.body).items?.length > 0;
+      } catch {
+        // Body bukan JSON -- misalnya halaman galat proxy. Tanpa penjaga ini,
+        // JSON.parse melempar dan iterasi VU-nya berhenti, sehingga beban
+        // yang sebenarnya diterapkan lebih kecil dari yang dilaporkan.
+        return false;
+      }
+    },
   });
 
-  // Short sleep to simulate real user wait time between requests
-  sleep(0.1); 
+  sleep(0.1);
 }
 ```
 
@@ -334,6 +518,20 @@ Menjalankan model kontainerisasi multi-tier seperti ini tentu memiliki konsekuen
 
 ✅ **BENAR:** Memberi label `depends_on` untuk memastikan kontainer di-boot berurutan. Gunakan spesifikasi `condition: service_healthy` pada database dan cache agar layer Golang (Tier 1) dan Load Generator (Tier 3) mendapatkan *clean slate* lingkungan pengujian.
 
+**Dan syarat yang membuat aturan ini bisa dipakai:** `condition: service_healthy` **hanya sah bila servis yang dirujuk punya `healthcheck`**. Menuliskannya terhadap servis tanpa healthcheck membuat Compose menolak konfigurasinya. Karena itu `api` di manifes atas wajib punya healthcheck sendiri — tanpa itu, k6 hanya bisa memakai `depends_on: [api]` telanjang, yang menunggu container *start* dan bukan *siap*, yaitu tepat kegagalan yang anti-pattern ini lawan.
+
+### Anti-Pattern 3: Kredensial Default lewat `${VAR:-nilai}`
+
+❌ **SALAH:** `POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-secret123}`. Kata sandinya tertulis di berkas yang masuk git. Lebih buruk, karena defaultnya *bekerja*, tidak ada yang pernah menyetel `.env` — sehingga `secret123` menjadi kata sandi sungguhan di setiap mesin tim, dan setiap orang tahu isinya.
+
+✅ **BENAR:** `${POSTGRES_PASSWORD:?setel di .env}`. Compose menolak start dengan pesan yang menyebut variabel yang kurang. Tidak ada nilai yang bisa bocor, dan kegagalannya terjadi di detik pertama alih-alih menjadi temuan audit.
+
+### Anti-Pattern 4: `ports` Tanpa Prefiks Alamat
+
+❌ **SALAH:** `"5432:5432"`. Docker mengikat ke **seluruh antarmuka**, dan aturan iptables yang ditulisnya **melewati `ufw` dan `firewalld`** — firewall host yang Anda kira aktif tidak berlaku untuk port yang dipublikasikan Docker. Di wifi kafe atau jaringan kantor, ini mengekspos database ke satu segmen penuh.
+
+✅ **BENAR:** `"127.0.0.1:5432:5432"`. Tetap bisa diakses `psql` di mesin sendiri, tidak bisa dijangkau siapa pun di luar. Hilangkan prefiksnya hanya untuk port yang memang harus dijangkau perangkat lain, dan hanya dengan sadar.
+
 ## 5. Production Edge Cases
 
 Penerapan *topology* ini di produksi atau skala beban tinggi berpotensi menabrak batasan-batasan nyata, yaitu:
@@ -364,9 +562,23 @@ Penerapan *topology* ini di produksi atau skala beban tinggi berpotensi menabrak
 | Kontributor melewati uji lokal | waktu dan sumber daya untuk start | Stack terlalu berat |
 | Perilaku beda antara Compose dan produksi | health check dan restart policy | Semantik orkestrator berbeda |
 | Data hilang setelah `docker compose down` | volume yang dipakai | Data di bind mount atau anonymous volume |
+| Layanan bisa dijangkau dari mesin lain | prefiks alamat pada `ports` | Port terikat 0.0.0.0; iptables Docker melewati ufw |
+| Uji beban selalu hijau, produksi tetap lambat | endpoint yang ditembak k6 | Beban hanya menyentuh `/health` |
+| Gerbang CI beban tidak pernah gagal | apakah ada threshold `checks` | `check()` tidak memengaruhi exit code k6 |
+| Loki menyala tapi kosong | apakah ada pengirim log | Tidak ada promtail / logging driver Loki |
 
 ```bash
 docker compose config                 # konfigurasi setelah interpolasi
+                                      # WAJIB dijalankan: `:?` akan gagal di
+                                      # sini bila .env belum lengkap
+
+# Port yang benar-benar terekspos ke luar mesin. Apa pun yang tampil sebagai
+# 0.0.0.0 dapat dijangkau seluruh segmen jaringan Anda -- termasuk yang
+# dikira dilindungi ufw, karena Docker menulis aturan iptables-nya sendiri.
+docker compose ps --format '{{.Service}}\t{{.Ports}}' | grep -v '127.0.0.1'
+
+# Kredensial yang tidak sengaja tertulis di manifes
+grep -nE ':-[A-Za-z0-9_.]{4,}\}' docker-compose.yml   # default `:-` = hardcode
 docker compose ps --format json | jq -r '.[] | "\(.Service) \(.State) \(.Health)"'
 
 # Health check yang benar-benar terpasang
