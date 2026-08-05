@@ -1,5 +1,7 @@
 # Game Session & Data Persistence
 
+> **Berlaku:** Go 1.21+ · **Lihat juga:** `game_backend/game_server_architecture.md` · `db_sqlc/acid_transactions_isolation.md` · `distributed_patterns_resilience/idempotency_key_engine.md` · `observability_resilience/graceful_shutdown_drain.md`
+
 ## Konsep Internal & Trade-offs
 
 Di game multiplayer yang persisten (MMORPG atau Game Survival dengan *Progression* level), kehilangan data (rollback progress) karena server mati (*crash*) adalah dosa fatal yang menyebabkan pemain berhenti bermain (*churn rate* tinggi).
@@ -282,4 +284,35 @@ func TestSessionManager_AccumulatesAndFlushesDeltas(t *testing.T) {
 		t.Fatalf("Expected no ops on second flush, but got ops: %v", mockPipe.Ops)
 	}
 }
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **Menyimpan state ke database setiap tick.** Tick 30 Hz dikali ribuan sesi adalah beban tulis yang tidak akan ditangani database mana pun. Simpan pada titik yang bermakna: akhir ronde, perubahan penting, dan interval berkala.
+- **Tanpa checkpoint sama sekali.** Deploy dan crash akan menghapus kemajuan pemain, dan itu adalah salah satu keluhan paling merusak kepercayaan pada permainan daring.
+- **Penyimpanan yang tidak idempoten.** Retry saat simpan bisa menggandakan hadiah atau item. Pada ekonomi permainan, itu masalah yang menyebar cepat.
+- **Mengandalkan graceful shutdown untuk menyimpan.** Node bisa hilang tanpa sinyal. State yang hanya tersimpan saat shutdown adalah state yang akan hilang.
+- **Menyimpan seluruh state dunia per pemain.** Data tumbuh cepat dan sebagian besar tidak pernah dibaca lagi. Simpan yang benar-benar menentukan kemajuan.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Beban tulis database sangat tinggi | frekuensi checkpoint | Terlalu sering menyimpan |
+| Pemain melaporkan kemajuan hilang | interval checkpoint terakhir | Terlalu jarang menyimpan |
+| Item atau hadiah ganda | idempotensi penyimpanan | Retry menggandakan |
+| Kehilangan state saat node hilang | apakah bergantung pada shutdown | Penyimpanan hanya saat berhenti rapi |
+| Ukuran data per pemain tumbuh cepat | apa yang disimpan | Menyimpan lebih dari yang dibutuhkan |
+
+```sql
+-- Jarak antara checkpoint terakhir dan sekarang: ini "berapa banyak yang hilang bila crash"
+SELECT pemain_id, now() - disimpan_pada AS sejak_checkpoint
+FROM sesi_permainan WHERE aktif ORDER BY disimpan_pada LIMIT 20;
+
+SELECT pg_size_pretty(avg(pg_column_size(state))::bigint) AS rata_ukuran_state FROM sesi_permainan;
+```
+
+```bash
+curl -s localhost:9090/metrics | grep -E 'session_(save|restore|lost)_total'
+kubectl logs -l app=game --since=24h | grep -c 'state tidak ditemukan'
 ```

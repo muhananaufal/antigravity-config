@@ -1,5 +1,7 @@
 # Eksekusi WASM Plugin Runtime dengan Wazero di Go
 
+> **Berlaku:** Go 1.21+ · `tetratelabs/wazero` · WASI · **Lihat juga:** `embedded_tinygo/wasm_tinygo_browser.md` · `system_programming_linux/seccomp_bpf_sandbox.md` · `runtime_internals/cgo_abi_boundaries.md` · `distributed_patterns_resilience/feature_flags_launchdarkly.md`
+
 ## Konsep Utama dan Internal
 
 Seringkali sistem (seperti Kong, Envoy, atau custom API Gateways) menuntut kemampuan di mana pengguna bisa menginjeksi potongan logika ekstensi mereka sendiri (Plugins / Middleware) tanpa harus men-compile ulang aplikasi utamanya.
@@ -209,3 +211,33 @@ addFunc.Call(ctx, uint64(uintptr(unsafe.Pointer(ptrStr)))) // SEGFAULT PANIC!
 3. **Memory Leaks pada Instance Persistent Module:**
    Jika sebuah modul plugin stateful ditaruh (cached) terus menerus secara konkuren oleh banyak goroutine di instance `Module` yang sama, setiap pemanggilan internal *malloc* yang diekspos (tapi si penulis TinyGo/Rust tidak pernah mem-`free` heap-nya) akan melebarkan (*grow*) kurva limit *api.Memory* sandbox tanpa henti hingga Server Go Host meletus kehabisan RAM Host OS.
    *Defensive:* Instansiasi sandbox `Module` baru per *request pipeline isolation* dan pastikan SELALU jalankan `.Close(ctx)` via defer. Ini langsung memusnahkan arena Linear Memory sebesar apapun milik plugin WASM itu (membabat bersih memory leaks Guest) seketika secara serentak ke OS.
+
+## Kapan JANGAN Pakai Ini
+
+- **Plugin WASM bila `plugin` Go atau proses terpisah cukup.** WASM membawa runtime, batas ABI, dan biaya konversi data di setiap panggilan. Proses terpisah yang berkomunikasi lewat pipa sering lebih sederhana dan lebih mudah didebug.
+- **Tanpa batas sumber daya per instans.** Modul WASM bisa mengalokasikan memori dan berputar dalam loop tak berujung. Tanpa batas memori dan mekanisme penghentian, satu plugin bisa menjatuhkan host.
+- **Untuk pekerjaan yang membutuhkan throughput tinggi lintas batas.** Setiap panggilan menyalin data melintasi batas memori linear WASM. Pada data besar dan frekuensi tinggi, penyalinan itu mendominasi.
+- **Menganggap WASM sebagai sandbox keamanan yang lengkap.** Ia mengisolasi memori dengan baik, tetapi setiap fungsi host yang Anda ekspos adalah permukaan serangan. Sandbox-nya sekuat antarmuka yang Anda berikan.
+- **Mengkompilasi Go ke WASM tanpa memperhitungkan ukuran dan runtime.** Biner Go WASM membawa runtime dan GC; TinyGo menghasilkan yang jauh lebih kecil dengan trade-off kompatibilitas.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Host kehabisan memori | batas memori per instans WASM | Modul mengalokasikan tanpa batas |
+| Satu plugin menggantung seluruh host | mekanisme penghentian | Tidak ada batas waktu eksekusi |
+| Throughput rendah pada data besar | ukuran data per panggilan | Penyalinan lintas batas mendominasi |
+| Plugin bisa melakukan hal tak terduga | daftar fungsi host | Permukaan serangan ada di API host |
+| Ukuran modul sangat besar | kompilator yang dipakai | Go standar membawa runtime penuh |
+
+```bash
+# Ukuran modul: Go standar vs TinyGo
+ls -lh plugin.wasm
+wasm-objdump -h plugin.wasm 2>/dev/null | head
+
+# Batas yang benar-benar diterapkan host
+curl -s localhost:9090/metrics | grep -E 'wasm_(instances|memory_bytes|exec_duration|killed_total)'
+
+# Plugin yang dihentikan karena melewati batas
+kubectl logs -l app=host --since=1h | grep -ci 'wasm.*timeout\|wasm.*memory limit'
+```

@@ -1,5 +1,7 @@
 # High-Performance Excel Streaming (1 Juta Baris, <20MB RAM)
 
+> **Berlaku:** Go 1.21+ · `qax-os/excelize` v2 · **Lihat juga:** `media_asset_pipeline/chromedp_pdf_rendering_engine.md` · `fintech_reliability/financial_reporting_olap.md` · `runtime_internals/escape_analysis_pprof.md` · `background_jobs_worker/river_postgres_jobs.md`
+
 Streaming API pada `xuri/excelize` adalah kunci utama untuk menangani file Excel berukuran raksasa tanpa mengorbankan memori. Pendekatan tradisional yang memuat seluruh DOM Excel ke memori akan menyebabkan GC (Garbage Collector) thrashing dan Out-Of-Memory (OOM) pauses.
 
 ## Arsitektur Alur Memori (StreamWriter)
@@ -220,3 +222,33 @@ f.SaveAs("result.xlsx")
 1. **Context Timeout saat Ekspor Data Masif:** Ekspor 1 juta baris dari database lambat bisa memakan waktu menit-an. Jika koneksi HTTP klien terputus, backend tidak boleh terus menggerus CPU. Wajib menginjeksi context cancellation (misal cek `ctx.Done()` setiap 1000 iterasi loop) untuk memutus proses di tengah jalan.
 2. **Karakter Ilegal dalam Sel Excel (XML Encoding Error):** Excel menggunakan standar XML ketat (XML 1.0). Karakter kontrol seperti `\x00` - `\x08` akan memecahkan proses unmarshaling saat file dibuka. Wajib melakukan sanitasi string data (menghilangkan non-printable characters) sebelum dimasukkan ke `SetRow()`.
 3. **Membaca File Corrupted dengan Endless Loop:** Kadangkala file Excel hasil unggahan pengguna memiliki struktur internal `<sheetData>` yang rusak. Ketika menggunakan `rows.Next()`, pastikan menambahkan pengecekan `rows.Error()` sesudah loop, dan sediakan time-out context ketat, agar worker tidak terjebak dalam pembacaan tak berujung (CPU pin) karena iterasi gagal maju.
+
+## Kapan JANGAN Pakai Ini
+
+- **Menulis jutaan baris tanpa StreamWriter.** API biasa menyimpan seluruh lembar di memori sebelum menulisnya. Pada satu juta baris, itu gigabyte — dan berakhir `OOMKilled` di tengah pekerjaan yang sudah berjalan lama.
+- **Menghasilkan berkas Excel di jalur permintaan HTTP.** Pembuatannya memakan detik sampai menit. Ia pekerjaan latar dengan pemberitahuan saat selesai, bukan respons sinkron.
+- **Excel untuk pertukaran data antar sistem.** CSV atau Parquet lebih sederhana, lebih cepat, dan tidak membawa batasan format Excel. Excel untuk manusia yang akan membukanya.
+- **Mengabaikan batas format.** Satu lembar Excel maksimal sekitar 1.048.576 baris. Melewatinya bukan sekadar lambat — berkasnya tidak valid.
+- **Rumus dan gaya per sel pada volume besar.** Keduanya memperbesar berkas dan memperlambat pembuatan secara dramatis. Untuk ekspor besar, nilai polos jauh lebih tepat.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Proses `OOMKilled` saat ekspor besar | apakah StreamWriter dipakai | Seluruh lembar dibangun di memori |
+| Permintaan HTTP timeout saat ekspor | apakah sinkron | Pembuatan berkas di jalur permintaan |
+| Berkas tidak bisa dibuka | jumlah baris | Melewati batas format |
+| Berkas sangat besar | gaya dan rumus per sel | Metadata mendominasi isi |
+| Ekspor makin lambat tiap bulan | pertumbuhan data | Tidak ada paginasi atau pembatasan rentang |
+
+```bash
+# Memori saat ekspor besar berjalan
+kubectl top pod -l app=export
+go tool pprof -sample_index=inuse_space -top http://localhost:6060/debug/pprof/heap | head -15
+
+# Durasi dan ukuran hasil
+curl -s localhost:9090/metrics | grep -E 'export_(duration_seconds|rows_total|bytes)'
+
+kubectl get pods -l app=export -o json \
+  | jq -r '.items[] | select(.status.containerStatuses[]?.lastState.terminated.reason=="OOMKilled") | .metadata.name'
+```

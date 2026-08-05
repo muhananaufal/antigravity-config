@@ -1,5 +1,7 @@
 # Custom Protoc Plugin Generator di Go (protogen)
 
+> **Berlaku:** Go 1.21+ · `protogen` · **Lihat juga:** `microservices_grpc/grpc_protobuf_patterns.md` · `ast_metaprogramming/code_generation_template.md` · `microservices_grpc/api_versioning_strategy.md` · `ci_cd_pipeline/monorepo_go_ci.md`
+
 ## Konsep Utama dan Internal
 
 Ketika perusahaan beralih ke arsitektur Microservices dengan Protocol Buffers (gRPC), *tooling* sering menjadi hambatan besar. *Developer* membuang ratusan jam membuat kode repositori, *HTTP Mux routers*, atau logika registri logger yang berulang-ulang dari skema API yang ada.
@@ -205,3 +207,35 @@ func generatePlugin(gen *protogen.Plugin) {
 3. **Ketidaklengkapan Opsi 'go_package' pada Protobuf mentah:**
    Seringkali pengguna lupa meletakkan baris `option go_package = "myapp/pb";` di file proto mereka. Plugin `protogen` Go memiliki syarat (requirement) bawaan absolut menolak berjalan tanpa anotasi import absolut tersebut dan akan melempar _panic crash_.
    *Defensive:* Jangan berharap banyak untuk kode error transparan dari plugin. Untuk menembus dinding pertahanan, tegakkan linter skema (`buf lint`) pra-kompilasi, atau jalankan plugin dengan parameter flag *Compiler Override* (`protoc --custom_opt=paths=source_relative`) jika memaksa pergerakan output statis tanpa paksaan anotasi paket.
+
+## Kapan JANGAN Pakai Ini
+
+- **Plugin protoc sendiri untuk sesuatu yang bisa jadi pustaka biasa.** Plugin menambah langkah build dan versi yang harus disinkronkan di setiap mesin dan pipeline. Pustaka runtime tidak.
+- **Plugin yang menghasilkan kode tanpa jalur ekstensi.** Pengguna akan selalu butuh sesuatu yang tidak Anda antisipasi. Tanpa titik ekstensi, mereka akan menyunting hasil generate — dan suntingannya hilang.
+- **Tanpa menyematkan versi plugin di berkas hasil.** Ketika hasil berbeda antar mesin, pertanyaan pertama adalah "versi plugin mana" — dan tanpa penanda, tidak ada jawabannya.
+- **Plugin yang mengasumsikan opsi proto tertentu selalu ada.** Berkas `.proto` dari tim lain tidak akan punya opsi kustom Anda; plugin harus menanganinya dengan anggun, bukan panik.
+- **Menghasilkan kode yang bergantung pada detail internal runtime protobuf.** API internal berubah antar versi minor, dan kode generate Anda akan rusak di seluruh repo sekaligus.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Hasil generate berbeda antar mesin | versi plugin dan protoc | Versi tidak disematkan |
+| Pengguna menyunting hasil generate | ketersediaan titik ekstensi | Plugin tidak bisa diperluas |
+| Plugin panik pada proto tim lain | penanganan opsi yang tidak ada | Asumsi tentang opsi kustom |
+| Build rusak setelah upgrade protobuf | ketergantungan pada API internal | Kode generate memakai internal |
+| Langkah build makin lama | jumlah plugin di rantai | Terlalu banyak plugin berurutan |
+
+```bash
+# Versi yang benar-benar dipakai -- keduanya harus disematkan, bukan "yang ada di PATH"
+protoc --version
+protoc-gen-go --version
+buf --version
+
+# Reproducibility: generate dua kali harus menghasilkan berkas identik
+buf generate && sha256sum gen/**/*.pb.go > /tmp/a
+buf generate && sha256sum gen/**/*.pb.go > /tmp/b
+diff /tmp/a /tmp/b && echo "reproducible"
+
+go generate ./... && git diff --exit-code
+```

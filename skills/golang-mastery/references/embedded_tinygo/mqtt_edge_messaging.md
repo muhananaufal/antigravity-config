@@ -1,5 +1,7 @@
 # MQTT & Edge Messaging (TinyGo IoT)
 
+> **Berlaku:** TinyGo 0.31+ · MQTT 3.1.1 · **Lihat juga:** `advanced_networking_protocols/mqtt_broker_client.md` · `embedded_tinygo/tinygo_microcontroller_basics.md` · `distributed_patterns_resilience/idempotency_key_engine.md` · `observability_resilience/rate_limiting_patterns.md`
+
 ## Konsep Internal & Trade-offs
 
 Mengirimkan data dari ujung mikrokontroler (Edge Node) seperti Raspberry Pi Pico W atau ESP32 ke cloud/server tidak ideal menggunakan koneksi HTTPS murni. *Overhead* sertifikat TLS/SSL (Handshake HTTP) dan header HTTP sangat menguras memori (RAM) serta *bandwidth* berharga untuk pesan *payload* yang seringkali hanya sebesar 2 byte (misal, `25` untuk indikator suhu).
@@ -262,4 +264,38 @@ func TestIoTNode_RobustReconnection(t *testing.T) {
 		t.Fatalf("Expected MQTT client to have published queued data after recovering online, got 0")
 	}
 }
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **Tanpa buffer lokal saat jaringan terputus.** Perangkat edge sering kehilangan konektivitas. Data yang tidak dibuffer hilang, dan hilangnya tidak terlihat sampai ada yang membandingkan dengan sumber lain.
+- **Publikasi setiap pembacaan sensor.** Bandwidth, daya, dan biaya seluler naik sebanding jumlah pesan. Agregasi di perangkat hampir selalu lebih murah daripada mengirim mentah.
+- **Tanpa memikirkan konsumsi daya dari radio.** Radio adalah komponen paling boros pada perangkat baterai. Interval publikasi menentukan umur baterai lebih dari faktor lain mana pun.
+- **Kredensial yang sama untuk seluruh armada perangkat.** Satu perangkat yang jatuh ke tangan orang lain berarti seluruh armada terkompromi, dan pencabutannya menyentuh semua unit.
+- **Tanpa idempotensi pada sisi penerima.** Perangkat yang reconnect akan mengirim ulang buffer-nya. Itu perilaku yang benar, dan penerima harus siap menghadapinya.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Data hilang dari periode tertentu | buffer saat offline | Tidak ada penyimpanan lokal |
+| Biaya data seluler tinggi | jumlah pesan per perangkat | Publikasi terlalu sering |
+| Baterai habis lebih cepat dari desain | interval radio aktif | Radio terlalu sering menyala |
+| Satu perangkat bocor, semua harus diganti | kredensial per perangkat | Kredensial dibagi seluruh armada |
+| Nilai ganda di basis data | idempotensi penerima | Pengiriman ulang setelah reconnect |
+
+```bash
+# Perangkat yang lama tidak melapor -- kandidat masalah konektivitas atau daya
+mosquitto_sub -h broker -t 'perangkat/+/status' -v -C 20
+
+# Volume pesan per perangkat: dasar untuk menghitung biaya dan umur baterai
+kubectl logs -l app=ingest --since=24h \
+  | jq -r '.device_id' | sort | uniq -c | sort -rn | head
+
+# Duplikat akibat pengiriman ulang -- normal, tapi penerima harus menanganinya
+```
+
+```sql
+SELECT device_id, waktu_sensor, count(*) FROM pembacaan
+GROUP BY 1,2 HAVING count(*) > 1 LIMIT 20;
 ```

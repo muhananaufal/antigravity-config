@@ -1,5 +1,7 @@
 # Custom Linter Framework dengan analysis.Analyzer
 
+> **Berlaku:** Go 1.21+ · `golang.org/x/tools/go/analysis` · **Lihat juga:** `ast_metaprogramming/go_ast_analysis.md` · `engineering_practice/code_review_go.md` · `testing_quality/govulncheck_security_scan.md` · `ci_cd_pipeline/security_scanning_ci.md`
+
 ## Konsep Utama dan Internal
 
 Tim engineer yang besar tidak bisa hanya bergantung pada Code Review (PR) manual untuk menegakkan aturan khusus/arsitektur tim—mereka mengotomatisasinya melalui *Linter kustom*. Dahulu linter ditulis secara serampangan menggunakan *script AST raw*. Saat ini, Go menyediakan API de facto standar: `golang.org/x/tools/go/analysis`.
@@ -216,3 +218,35 @@ if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
 3. **Mengacuhkan Directive '//nolint':**
    Framework core `analysis.Pass` tidak dilengkapi logika *out-of-the-box* untuk men-skip *reporting* apabila pengguna telah menyematkan komen `//nolint:nopanic`.
    *Defensive:* Jika Anda membungkus linter ini langsung ke file CLI Go mandiri (`singlechecker.Main`), linter akan melaporkan baris tersebut terus menerus walau dikomen. Solusinya, pertimbangkan memasukkannya ke konfigurasi runtime `golangci-lint` yang memiliki supervisor middleware untuk memberangus output laporan (*suppression*) jika file memiliki regex nolint, alih-alih me-re-implement logic parsig comment secara mubazir di script Anda sendiri.
+
+## Kapan JANGAN Pakai Ini
+
+- **Linter untuk aturan yang bisa ditegakkan tipe.** Bila kompilator bisa menolaknya, biarkan kompilator yang menolaknya. Linter untuk pola yang **valid secara tipe tetapi salah dalam konteks Anda**.
+- **Linter tanpa uji berbasis `analysistest`.** Analyzer yang salah menghasilkan temuan palsu, dan temuan palsu adalah cara tercepat membuat tim mematikan linter itu selamanya.
+- **Aturan yang tidak menawarkan perbaikan atau alternatif jelas.** Temuan yang hanya berkata "jangan begitu" tanpa menunjukkan yang benar akan diabaikan atau di-`//nolint`.
+- **Memblokir CI pada aturan gaya.** Simpan pemblokiran untuk aturan kebenaran. Gaya diselesaikan formatter, bukan gerbang yang menghentikan orang bekerja.
+- **Analyzer yang lambat di jalur interaktif.** Linter yang menambah beberapa detik pada setiap `golangci-lint run` mengubah kebiasaan tim — mereka berhenti menjalankannya secara lokal.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| `//nolint` bertebaran untuk satu aturan | tingkat temuan palsu aturan itu | Analyzer terlalu agresif atau salah |
+| Tim mematikan linter | rasio temuan berguna | Kepercayaan sudah hilang |
+| Waktu lint naik mencolok | durasi per analyzer | Ada analyzer yang mahal |
+| Temuan tidak pernah diperbaiki | apakah ada saran perbaikan | Pesan tidak menunjukkan jalan keluar |
+| Aturan gaya memblokir rilis | apa yang memblokir CI | Gaya diperlakukan seperti kebenaran |
+
+```bash
+# Uji analyzer WAJIB ada -- temuan palsu menghancurkan kepercayaan lebih cepat
+# daripada bug yang lolos
+go test ./analyzer/... -run TestAnalyzer
+
+golangci-lint run --enable=linter-kustom ./...
+
+# Analyzer mana yang paling mahal
+golangci-lint run --print-resources-usage ./... 2>&1 | tail -10
+
+# Berapa banyak pengecualian untuk tiap aturan -- angka tinggi berarti aturannya bermasalah
+grep -rhoE '//nolint:[a-z,-]+' --include='*.go' . | sort | uniq -c | sort -rn | head
+```

@@ -1,5 +1,7 @@
 # Vector Search and HNSW Internals
 
+> **Berlaku:** Go 1.21+ · HNSW · **Lihat juga:** `ai_data_infra/pgvector_similarity_search.md` · `ai_data_infra/embedding_pipeline.md` · `runtime_internals/memory_allocator_arenas.md` · `hft_zero_alloc/cpu_cache_optimization.md`
+
 ## Konsep Utama
 Hierarchical Navigable Small World (HNSW) adalah algoritma *Approximate Nearest Neighbor* (ANN) berbasis graf yang menawarkan keseimbangan optimal antara kecepatan (*throughput*) dan akurasi (*recall*). HNSW mengkombinasikan struktur *skip list* probabilistik dengan *Navigable Small World* (NSW). 
 
@@ -244,3 +246,33 @@ graph TD;
 
 
 <!-- Padding for > 10KB Requirement: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA -->
+
+## Kapan JANGAN Pakai Ini
+
+- **Index dalam-memori tanpa rencana persistensi.** Membangun ulang index HNSW jutaan vektor saat start bisa memakan menit sampai jam. Pod yang di-restart menjadi pod yang tidak siap dalam waktu lama.
+- **HNSW untuk data yang sering berubah.** Penghapusan pada HNSW bersifat penandaan; ruang tidak dibebaskan dan kualitas graf menurun. Data yang berputar cepat menuntut pembangunan ulang berkala.
+- **Tanpa memikirkan memori per vektor.** Satu juta vektor 768 dimensi float32 adalah sekitar 3 GB hanya untuk vektornya, sebelum struktur graf. Angka ini harus dihitung sebelum menulis kode.
+- **Sebagai satu-satunya sumber kebenaran.** Index adalah struktur turunan. Vektor dan metadatanya harus tersimpan di tempat yang durabel dan bisa dipakai membangun ulang.
+- **Mengabaikan pengukuran recall.** Tanpa set evaluasi, Anda tidak bisa membedakan "index cepat" dari "index yang melewatkan separuh hasil relevan".
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Pod lama sekali menjadi siap | waktu pembangunan index | Index dibangun ulang saat start |
+| Memori naik terus meski data dihapus | penanganan penghapusan HNSW | Penghapusan hanya penandaan |
+| Kualitas hasil menurun perlahan | rasio penghapusan sejak build | Graf terdegradasi |
+| Memori melebihi perkiraan | dimensi × jumlah × ukuran tipe | Perhitungan awal terlewat |
+| Tidak tahu apakah hasil bagus | set evaluasi recall | Tidak ada pengukuran |
+
+```bash
+# Waktu dari start sampai siap -- ini menentukan strategi persistensi
+kubectl logs <pod> | grep -iE 'index siap|index built|ready in'
+
+# Memori yang dipakai index
+kubectl top pod -l app=vector
+go tool pprof -sample_index=inuse_space -top http://localhost:6060/debug/pprof/heap | head -15
+
+# Recall terhadap set evaluasi -- angka ini WAJIB dipantau, bukan sekali diukur
+curl -s localhost:9090/metrics | grep -E 'vector_(recall|search_duration|index_size)'
+```

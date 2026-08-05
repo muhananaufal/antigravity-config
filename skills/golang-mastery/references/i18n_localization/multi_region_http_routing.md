@@ -1,5 +1,7 @@
 # Multi-Region HTTP Routing & SEO Hreflang di Go
 
+> **Berlaku:** Go 1.21+ · **Lihat juga:** `i18n_localization/timezone_context_propagation.md` · `i18n_localization/x_text_dynamic_catalog.md` · `db_sqlc/read_replica_routing.md` · `advanced_networking_protocols/dns_resolution_patterns.md`
+
 Dokumen ini mendefinisikan arsitektur multi-region namespace routing di Golang (ideal untuk platform e-commerce global atau SaaS internasional). Selain routing, ini mencakup implementasi `hreflang` XML Sitemap multi-bahasa yang memastikan SEO global bebas kanibalisasi, dan teknik fallback Geo-IP.
 
 ## Arsitektur URL Localized Namespace
@@ -233,3 +235,33 @@ Jika menggunakan Cloudflare, r.RemoteAddr biasanya memuat IP Cloudflare (misal A
 ### ⚠️ Edge Case 3: Sitemap "x-default" Hreflang
 Banyak implementasi SEO melupakan tag `x-default`. Tanpa `x-default`, Googlebot mungkin kebingungan mana halaman utama yang ditawarkan kepada pengunjung Spanyol yang tidak masuk dalam region dukungan.
 **Mitigasi**: Selalu definisikan satu canonical URL dengan hreflang `x-default` (biasanya bahasa Inggris/US) pada response XML Sitemap Anda.
+
+## Kapan JANGAN Pakai Ini
+
+- **Multi-region untuk latensi bila datanya tetap terpusat.** Menempatkan aplikasi dekat pengguna tidak membantu bila setiap permintaan tetap menyeberang benua ke database. Yang menentukan adalah lokasi **data**, bukan lokasi komputasi.
+- **Tanpa memutuskan model konsistensi lebih dulu.** Multi-region memaksa pilihan: satu penulis dengan latensi tulis tinggi, atau banyak penulis dengan penyelesaian konflik. Menunda keputusan ini berarti memilih yang salah secara tidak sadar.
+- **Routing berbasis geolokasi IP sebagai satu-satunya sinyal.** VPN, jaringan korporat, dan operator seluler membuat IP tidak selalu mencerminkan lokasi pengguna. Sediakan cara pengguna memilih sendiri.
+- **Mengabaikan kewajiban residensi data.** Sebagian yurisdiksi menuntut data warganya tetap di dalam negeri. Itu batasan hukum yang harus membentuk arsitektur sejak awal, bukan ditambal kemudian.
+- **Failover antar region tanpa pernah diuji.** Failover yang tidak pernah dilatih akan gagal pada percobaan pertama — yaitu saat satu region benar-benar hilang.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Latensi tetap tinggi meski ada region lokal | lokasi database yang dipanggil | Data tetap terpusat |
+| Pengguna diarahkan ke region yang jauh | akurasi geolokasi IP | VPN atau jaringan korporat |
+| Konflik data antar region | model konsistensi | Banyak penulis tanpa resolusi konflik |
+| Data warga tersimpan di luar yurisdiksi | penempatan data per pengguna | Residensi data tidak ditegakkan |
+| Failover gagal saat dibutuhkan | latihan failover terakhir | Jalur failover tidak pernah diuji |
+
+```bash
+# Latensi per region, dan ke mana permintaan sebenarnya pergi
+kubectl logs -l app=api --since=1h \
+  | jq -r '"\(.region_pengguna) \(.region_db) \(.durasi_ms)"' \
+  | awk '{k=$1"->"$2; s[k]+=$3; n[k]++} END{for(x in s) print x, int(s[x]/n[x])"ms", n[x]}' | sort
+
+# Sebaran pengguna per region
+kubectl logs -l app=api --since=24h | jq -r '.region_pengguna' | sort | uniq -c | sort -rn
+
+# Kapan failover terakhir dilatih -- bila tidak ada jawabannya, itu jawabannya
+```

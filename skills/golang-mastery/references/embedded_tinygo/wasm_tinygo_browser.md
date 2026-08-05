@@ -1,5 +1,7 @@
 # WebAssembly (WASM) & TinyGo Browser Target
 
+> **Berlaku:** TinyGo 0.31+ · WASM · **Lihat juga:** `ast_metaprogramming/plugin_wasm_runtime.md` · `embedded_tinygo/tinygo_microcontroller_basics.md` · `caching_strategy/http_cdn_caching.md` · `runtime_internals/build_system_linker.md`
+
 ## Konsep Internal & Trade-offs
 
 WebAssembly (WASM) adalah format instruksi biner yang dapat dieksekusi langsung oleh mesin virtual (*engine/JIT*) di dalam browser modern (V8/SpiderMonkey) dengan kecepatan nyaris mendekati *native* (bahasa mesin).
@@ -253,4 +255,32 @@ func TestProcessStringData_EdgeCaseEmpty(t *testing.T) {
 		t.Fatalf("Expected 0 capitals from empty string, got %d", result)
 	}
 }
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **Untuk logika yang sederhana dan sudah bisa ditulis di JavaScript.** Biner WASM harus diunduh, di-parse, dan diinstansiasi sebelum satu baris pun berjalan. Untuk beberapa ratus baris logika, itu ongkos tanpa imbalan.
+- **Tanpa memperhitungkan ukuran unduhan.** Go standar menghasilkan biner WASM megabyte-an; TinyGo jauh lebih kecil tetapi dengan dukungan pustaka yang terbatas. Angka ini harus diputuskan sebelum menulis kode.
+- **Untuk manipulasi DOM berat.** Setiap panggilan lintas batas WASM dan JavaScript punya ongkos. Kode yang menyentuh DOM ribuan kali akan lebih lambat daripada JavaScript biasa.
+- **Mengharapkan goroutine berperilaku seperti di server.** Model konkurensi di browser berbeda; blocking yang naif akan membekukan tab.
+- **Tanpa memikirkan pengalaman saat memuat.** Beberapa detik pertama tanpa umpan balik terasa seperti halaman yang rusak, dan pengguna pergi sebelum kode Anda sempat berjalan.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Halaman lama menjadi interaktif | ukuran dan waktu instansiasi WASM | Biner terlalu besar |
+| Lebih lambat daripada versi JavaScript | jumlah panggilan lintas batas | Manipulasi DOM lewat WASM |
+| Tab membeku | operasi blocking | Model konkurensi browser diabaikan |
+| Pengguna pergi sebelum aplikasi siap | umpan balik saat memuat | Tidak ada indikator pemuatan |
+| Biner tidak ter-cache | header cache pada `.wasm` | Diunduh ulang setiap kunjungan |
+
+```bash
+# Ukuran adalah faktor penentu pengalaman pertama
+tinygo build -o app.wasm -target=wasm ./cmd/web
+ls -lh app.wasm
+gzip -c app.wasm | wc -c        # yang benar-benar diunduh pengguna
+
+# Header cache pada berkas wasm -- tanpa ini diunduh ulang tiap kunjungan
+curl -sI https://app.contoh.id/app.wasm | grep -iE 'cache-control|content-encoding|etag'
 ```

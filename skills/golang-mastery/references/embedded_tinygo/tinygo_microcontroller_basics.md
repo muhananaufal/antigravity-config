@@ -1,5 +1,7 @@
 # TinyGo & Microcontroller Basics
 
+> **Berlaku:** TinyGo 0.31+ · **Lihat juga:** `embedded_tinygo/gpio_interrupt_driver.md` · `embedded_tinygo/i2c_spi_peripheral.md` · `embedded_tinygo/wasm_tinygo_browser.md` · `runtime_internals/build_system_linker.md`
+
 ## Konsep Internal & Trade-offs
 
 TinyGo adalah sebuah *compiler* alternatif untuk bahasa Go yang menggunakan LLVM sebagai *backend*. Secara desain, TinyGo ditujukan secara spesifik untuk memecahkan kelemahan utama standard compiler Go (GC berat, runtime besar, minimum biner 2MB+) agar bisa berjalan di *embedded systems* bersumber daya super rendah, mikrokontroler (contoh: memori SRAM <64KB), dan WebAssembly.
@@ -255,4 +257,34 @@ func TestSensorInterruptLogic_Mocked(t *testing.T) {
 		t.Fatal("Ekspektasi LED mati otomatis setelah debounce selesai")
 	}
 }
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **Mengharapkan seluruh pustaka standar Go bekerja.** TinyGo mendukung sebagian saja; refleksi terbatas, dan beberapa paket tidak tersedia sama sekali. Dependensi yang tampak sederhana bisa menarik paket yang tidak didukung dan gagal saat kompilasi.
+- **Goroutine dalam jumlah besar di mikrokontroler.** Setiap goroutine menempati stack dari RAM yang totalnya mungkin hanya puluhan kilobyte. Model konkurensi Go tetap ada, tetapi anggarannya berbeda beberapa orde besaran.
+- **Alokasi heap di jalur yang berjalan terus-menerus.** GC pada mikrokontroler sederhana dan RAM sangat terbatas. Kode yang mengalokasikan di loop utama akan kehabisan memori — dan gejalanya berupa perangkat yang membeku, bukan pesan galat.
+- **Tanpa menguji di perangkat sungguhan.** Simulator tidak mereplikasi waktu, interupsi, dan perilaku periferal. Kode yang bekerja di host bisa gagal di perangkat karena alasan yang tidak terlihat sama sekali.
+- **Tanpa mekanisme pembaruan firmware.** Perangkat yang tidak bisa diperbarui dari jarak jauh berarti setiap perbaikan bug menuntut akses fisik ke setiap unit.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Perangkat membeku setelah beberapa jam | alokasi di loop utama | RAM habis perlahan |
+| Firmware tidak muat di flash | ukuran biner vs kapasitas | Dependensi menarik terlalu banyak |
+| Bekerja di simulator, gagal di perangkat | perilaku waktu dan interupsi | Simulator tidak setia |
+| Perangkat reset berulang | watchdog dan penyebab reset | Panic atau kehabisan memori |
+| Bug tidak bisa diperbaiki di lapangan | mekanisme OTA | Tidak ada jalur pembaruan |
+
+```bash
+# Ukuran biner dan pemakaian memori -- angka pertama yang menentukan kelayakan
+tinygo build -o firmware.bin -target=pico ./cmd/device
+tinygo build -size=short -target=pico ./cmd/device
+
+# Paket yang tidak didukung akan muncul saat kompilasi, bukan saat jalan
+tinygo build -target=pico ./... 2>&1 | head -20
+
+# Keluaran serial dari perangkat sungguhan: satu-satunya kebenaran
+tinygo monitor -target=pico
 ```

@@ -1,5 +1,7 @@
 # Go AST & Static Analysis
 
+> **Berlaku:** Go 1.21+ · `go/ast`, `golang.org/x/tools/go/packages` · **Lihat juga:** `ast_metaprogramming/custom_linter_analysisgo.md` · `ast_metaprogramming/code_generation_template.md` · `engineering_practice/code_review_go.md` · `runtime_internals/build_system_linker.md`
+
 ## Konsep Utama dan Internal
 
 Abstract Syntax Tree (AST) di Go memungkinkan kita membedah kode sumber menjadi representasi hierarkis dari *token* dan *node* (deklarasi, ekspresi, tipe). Ekosistem Go sangat kaya akan *tooling* karena *compiler frontend*-nya terekspos sebagai *standard library* dan modul `x/tools`.
@@ -263,3 +265,31 @@ _, err := conf.Check("mypkg", fset, []*ast.File{f}, info)
 3. **Kompleksitas Generic Types (Instantiated Signatures):**
    Pada Go 1.18+, AST dan Type-Info menjadi jauh lebih kompleks akibat Generics. Jika Anda melacak sebuah fungsi `func Target[T any](val T)`, pemanggilan `Target[int](10)` di AST direpresentasikan sebagai node `*ast.IndexExpr` atau `*ast.IndexListExpr` sebelum masuk ke `*ast.CallExpr`.
    *Defensive:* Jangan melakukan *type-assertion* keras secara dangkal. Jika `callExpr.Fun` bukan `*ast.Ident` dan bukan `*ast.SelectorExpr`, periksa apakah ia adalah tipe instansiasi. Gunakan API baru seperti `go/types.InstantiatedSignature` (atau `types.Info.Instances`) alih-alih `types.Info.Uses` biasa jika Anda juga perlu mengetahui ke argumen T mana fungsi tersebut sedang dilebur. Jika *tools* tidak diupdate untuk mengenali generic node, traversal AST Anda akan tersandung (*silent fail/return*).
+
+## Kapan JANGAN Pakai Ini
+
+- **Mengurai kode Go dengan regex.** Komentar, string literal, dan generik membuat pendekatan berbasis teks salah pada kasus yang tidak Anda bayangkan — dan salahnya senyap. `go/parser` ada persis untuk ini.
+- **AST saja ketika yang dibutuhkan informasi tipe.** AST tahu bentuk sintaksis, bukan tipe. Pertanyaan seperti "apakah ini `error`" membutuhkan `go/types` melalui `packages.Load`, dan memuat tipe jauh lebih mahal daripada memuat sintaks.
+- **Menulis ulang berkas dari AST tanpa memperhatikan format dan komentar.** Komentar tidak melekat pada node seperti yang diharapkan; menulis ulang naif akan memindahkan atau menghilangkannya, dan diff-nya menjadi tidak bisa di-review.
+- **Menganalisis kode yang tidak bisa dikompilasi tanpa menangani galat.** `packages.Load` mengembalikan paket dengan galat; analisis yang mengabaikannya akan memberi hasil yang salah dengan percaya diri.
+- **Alat AST yang berjalan di setiap penyimpanan berkas.** Memuat paket dengan informasi tipe untuk repo besar memakan detik dan memori besar; itu bukan operasi interaktif.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Alat memberi hasil salah pada kode tertentu | apakah pakai regex atau parser | Analisis berbasis teks |
+| Komentar hilang setelah transformasi | penanganan `CommentMap` | Penulisan ulang naif |
+| Hasil analisis salah pada paket yang gagal build | penanganan `pkg.Errors` | Galat kompilasi diabaikan |
+| Alat sangat lambat di repo besar | mode `packages.Load` | Memuat tipe padahal hanya butuh sintaks |
+| Hasil berbeda antar mesin | versi Go dan build tag | Analisis bergantung lingkungan |
+
+```bash
+# Bandingkan biaya: sintaks saja jauh lebih murah daripada dengan tipe
+time go run ./cmd/analisis -mode=syntax ./...
+time go run ./cmd/analisis -mode=types  ./...
+
+# Paket yang gagal dimuat WAJIB ditangani, bukan diabaikan
+go build ./... 2>&1 | head
+go vet ./... 2>&1 | head
+```

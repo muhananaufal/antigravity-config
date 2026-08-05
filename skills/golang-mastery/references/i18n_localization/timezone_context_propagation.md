@@ -1,5 +1,7 @@
 # Propagasi Context Zona Waktu dan Penanganan DST
 
+> **Berlaku:** Go 1.21+ · `time` · IANA tzdata · **Lihat juga:** `i18n_localization/multi_region_http_routing.md` · `concurrency/context_cancellation_timeout.md` · `fintech_reliability/financial_reporting_olap.md` · `background_jobs_worker/cron_scheduler_go.md`
+
 Dokumen ini menjelaskan strategi propagasi `time.Location` di aplikasi berskala enterprise, merespons perubahan wilayah (region) client dan menangani kompleksitas Daylight Saving Time (DST) di Golang.
 
 ## Arsitektur Propagasi Zona Waktu
@@ -180,3 +182,36 @@ Di banyak negara (seperti USA), saat Spring Forward (musim semi), jam melompat d
 ### ⚠️ Edge Case 3: IANA Timezone ID Deprecation
 ID seperti `US/Eastern` atau `Asia/Saigon` sering kali didepresiasi dan dipindahkan (`America/New_York` atau `Asia/Ho_Chi_Minh`). Jika DB pengguna lama masih menyimpan ID lawas, `LoadLocation` mungkin error suatu saat nanti.
 **Mitigasi**: Buat layer translasi (alias mapping) dari zona waktu lawas ke zona waktu standar modern sebelum memanggil `time.LoadLocation`.
+
+## Kapan JANGAN Pakai Ini
+
+- **Menyimpan waktu tanpa zona.** `TIMESTAMP` tanpa zona waktu adalah sumber kebingungan permanen: tidak ada yang tahu apakah nilainya UTC, waktu server, atau waktu pengguna. `TIMESTAMPTZ` dan UTC di penyimpanan, konversi hanya di presentasi.
+- **Zona waktu server sebagai zona waktu bisnis.** Memindahkan server ke region lain seharusnya tidak mengubah kapan hari akuntansi dimulai. Zona bisnis WAJIB eksplisit di konfigurasi.
+- **Menghitung "besok" dengan menambah 24 jam.** Peralihan DST membuat sebagian hari berdurasi 23 atau 25 jam. Aritmetika kalender harus melalui `time.Date` pada lokasi yang benar.
+- **Container tanpa `tzdata`.** `time.LoadLocation` gagal, dan pada image `scratch` atau `distroless` minimal itu berarti seluruh logika zona waktu tidak berfungsi. Sematkan dengan `import _ "time/tzdata"` atau pasang paketnya.
+- **Menerima zona waktu dari input pengguna tanpa validasi.** Nama zona yang tidak dikenal menghasilkan galat pada jalur yang mungkin tidak menanganinya.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| `LoadLocation` gagal di produksi | ada tidaknya tzdata di image | Image minimal tanpa basis data zona |
+| Laporan berubah setelah pindah region | zona waktu bisnis | Zona diambil dari server |
+| Anomali dua kali setahun | penanganan DST | Aritmetika 24 jam |
+| Waktu tampil salah bagi sebagian pengguna | konversi di presentasi | Zona pengguna tidak dibawa |
+| Data lama ambigu | tipe kolom waktu | `TIMESTAMP` tanpa zona |
+
+```bash
+# tzdata di dalam image -- tanpa ini LoadLocation gagal
+kubectl exec <pod> -- ls /usr/share/zoneinfo/Asia/Jakarta 2>&1
+kubectl exec <pod> -- date
+
+# Sematkan basis data zona ke dalam biner untuk image minimal
+grep -rn 'time/tzdata' --include='*.go' .
+```
+
+```sql
+-- Kolom waktu tanpa zona: sumber ambiguitas permanen
+SELECT table_name, column_name, data_type FROM information_schema.columns
+WHERE data_type = 'timestamp without time zone';
+```

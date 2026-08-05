@@ -1,5 +1,7 @@
 # Pemrograman Finansial Multi-Kultur: Mata Uang & Angka (ICU)
 
+> **Berlaku:** Go 1.21+ · `golang.org/x/text/currency`, `.../number` · **Lihat juga:** `i18n_localization/x_text_dynamic_catalog.md` · `fintech_reliability/decimal_arithmetic_money.md` · `i18n_localization/multi_region_http_routing.md` · `fintech_reliability/rate_card_pricing_engine.md`
+
 Dokumen ini membedah panduan arsitektur sistem keuangan multi-negara di Golang menggunakan `golang.org/x/text/currency`, `golang.org/x/text/number`, dan pengelolaan Plural. Menjamin bahwa uang, yang menjadi darah operasi fintech, di-render sempurna (tanpa precision loss) dan dengan separator ribuan serta pecahan yang sesuai regulasi negara.
 
 ## Pipeline Format Angka ICU & Mata Uang
@@ -202,3 +204,34 @@ Golang `x/text` mematuhi spesifikasi Unicode CLDR. Terkadang spasi di antara "Rp
 ### ⚠️ Edge Case 3: Pluralisasi Zero (0) dan Fractional (1.5)
 Bahasa Slavic (seperti Rusia, Polandia) memiliki lebih dari 3 aturan plural (Zero, One, Few, Many, Other). Jika anda menggunakan if/else manual untuk plural, bahasa tersebut akan pecah.
 **Mitigasi**: Gunakan `feature/plural` secara menyeluruh melalui x/text catalog yang mendukung formula CLDR kompleks untuk setiap lokalisasi.
+
+## Kapan JANGAN Pakai Ini
+
+- **Memformat uang dengan `fmt.Sprintf("%.2f")`.** Pemisah desimal, pemisah ribuan, posisi simbol, dan jumlah desimal semuanya berbeda per lokal. IDR umumnya nol desimal; memaksa dua desimal salah secara lokal maupun secara akuntansi.
+- **Menyimpan angka yang sudah diformat.** Format adalah urusan presentasi. Angka yang tersimpan dalam bentuk teks berlokal tidak bisa dihitung, diurutkan, maupun dijumlahkan tanpa mengurainya kembali.
+- **Mengasumsikan lokal menentukan mata uang.** Pengguna berbahasa Indonesia bisa membayar dalam USD. Bahasa dan mata uang adalah dua dimensi terpisah, dan mencampurnya menghasilkan tampilan yang salah.
+- **Mengurai masukan angka dengan asumsi format tunggal.** `1.000` berarti seribu di sebagian lokal dan satu koma nol di lokal lain. Masukan pengguna harus diurai sesuai lokalnya.
+- **Konversi mata uang tanpa mencatat kurs dan waktunya.** Angka hasil konversi tanpa kurs yang tercatat tidak bisa direkonsiliasi maupun dijelaskan.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Nilai terlihat salah bagi pengguna tertentu | pemisah dan desimal per lokal | Format di-hardcode |
+| Angka tidak bisa dijumlahkan | tipe data tersimpan | Angka disimpan sebagai teks berformat |
+| Simbol mata uang tidak sesuai | pemisahan lokal dan mata uang | Mata uang diturunkan dari bahasa |
+| Masukan pengguna terbaca salah | penguraian sesuai lokal | Format masukan diasumsikan seragam |
+| Selisih pada laporan lintas mata uang | pencatatan kurs | Kurs tidak tersimpan bersama nilai |
+
+```sql
+-- Nilai uang yang tersimpan sebagai teks: harus numeric
+SELECT table_name, column_name, data_type FROM information_schema.columns
+WHERE column_name ~* '(harga|jumlah|total|amount)' AND data_type IN ('text','character varying');
+
+-- Konversi tanpa kurs tercatat tidak bisa direkonsiliasi
+SELECT count(*) FROM transaksi WHERE mata_uang <> 'IDR' AND kurs IS NULL;
+```
+
+```bash
+grep -rn 'Sprintf("%\.[0-9]f' --include='*.go' . | grep -iE 'harga|jumlah|total' | head
+```

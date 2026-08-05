@@ -1,5 +1,7 @@
 # Code Generation di Go: Template, Jennifer, dan Format
 
+> **Berlaku:** Go 1.21+ · `text/template` · `go:generate` · **Lihat juga:** `ast_metaprogramming/go_ast_analysis.md` · `ast_metaprogramming/protoc_plugin_generator.md` · `db_sqlc/sqlc_pgx_driver.md` · `microservices_grpc/openapi_ogen_codegen.md`
+
 ## Konsep Utama dan Internal
 
 Fitur `//go:generate` di Go merupakan fasilitas *first-class* untuk eksekusi skrip atau *tooling* saat pra-kompilasi. Dalam skenario pengembangan modern, seringkali *boilerplate code* yang masif (enumerator, *mocking*, model API, adapter GORM) ditulis secara manual, padahal sumber kebenarannya bisa ditarik dari anotasi kustom, JSON Schema, atau definisi Database. 
@@ -207,3 +209,33 @@ Pengembang lupa meletakkan komentar ajaib (directive standar Go) di file hasil *
 3. **Build Tag Isolation (Pemblokiran Karantina Tool Code Generator):**
    Kode `.go` dari alat (tooling program `main` generatornya sendiri) seringkali tertumpuk berdampingan dengan hirarki folder kode bisnis (API) yang dihasilkan. Ketika aplikasi utama (Main App API) di-build, *compiler Go* mencoba mengikutsertakan source tools generator tersebut yang bisa mengakibatkan *panic duplicate "main" func* atau dependensi impor `dave/jennifer` merembes ke binari produksi.
    *Defensive:* Tambahkan perlindungan Build Constraints (Tags) di baris absolut atas pada file sumber generatornya (`//go:build ignore` atau `//go:build !generate`). Opsi lain adalah memisahkannya ke folder khusus `tools/` atau `cmd/generator/` yang di-trigger dari root menggunakan argument absolut (misal `go run ./tools/generator.go -type=Status`).
+
+## Kapan JANGAN Pakai Ini
+
+- **Untuk sesuatu yang bisa diselesaikan generik.** Sejak Go 1.18, banyak kode yang dulu di-generate cukup ditulis sekali dengan parameter tipe — tanpa langkah build, tanpa berkas yang harus disinkronkan.
+- **Kode generate yang disunting manual.** Suntingan akan hilang pada regenerasi berikutnya, dan orang yang menyuntingnya tidak akan tahu sampai perubahannya diam-diam menghilang.
+- **Tanpa gerbang CI yang memastikan hasil generate sinkron.** Kode generate yang basi adalah kebohongan yang dikompilasi dengan sukses. `go generate ./... && git diff --exit-code`.
+- **Tanpa penanda "jangan disunting" di berkas hasil.** Konvensi `// Code generated ... DO NOT EDIT.` dikenali alat dan pembaca; menghilangkannya mengundang suntingan manual.
+- **Generator yang menghasilkan kode tak terbaca.** Kode generate tetap dibaca manusia saat men-debug produksi. Formatnya harus melewati `gofmt` dan tetap masuk akal.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Perilaku tidak sesuai definisi sumber | hasil `go generate` + `git diff` | Kode generate basi |
+| Perubahan hilang setelah regenerasi | penanda DO NOT EDIT | Berkas hasil disunting manual |
+| Sulit men-debug kode generate | keterbacaan keluaran | Generator menghasilkan kode yang tidak bisa dibaca |
+| Build gagal di mesin lain | dependensi generator | Generator tidak tercatat di `tools.go` |
+| Banyak kode generate yang mirip | apakah generik bisa dipakai | Generasi kode untuk masalah yang sudah punya solusi bahasa |
+
+```bash
+# Gerbang paling penting: hasil generate WAJIB sinkron dengan sumbernya
+go generate ./... && git diff --exit-code
+
+# Berkas hasil generate yang tidak punya penanda
+grep -rLn 'Code generated' --include='*_gen.go' --include='*.pb.go' . | head
+
+# Versi generator harus tercatat agar hasilnya reproducible
+cat tools.go 2>/dev/null
+go list -m all | grep -iE 'protoc|sqlc|mockgen|stringer'
+```

@@ -1,5 +1,7 @@
 # Metaprogramming Runtime: Dynamic Struct & Reflection di Go
 
+> **Berlaku:** Go 1.21+ · `reflect` · **Lihat juga:** `runtime_internals/reflection_unsafe_pointer.md` · `ast_metaprogramming/code_generation_template.md` · `runtime_internals/go_generics_type_parameters.md` · `runtime_internals/escape_analysis_pprof.md`
+
 ## Konsep Utama dan Internal
 
 Golang dikompilasi secara *statis* dengan struktur data bertipe mutlak (*Strongly and Statically Typed*). Compiler me-resolve alokasi layout struct di memori sejak proses build, sehingga ukuran byte presisi dan akses alamat pointer sangat cepat di runtime OS.
@@ -226,3 +228,31 @@ ptr.Elem().FieldByName("user_id").SetString("123") // PANIC KERNEL: "cannot set 
 3. **Collision / Duplikasi Identifikasi Field Struct:**
    Sebuah JSON kacau memuat format field `{"ID": 12, "iD": 30}`. Setelah program generator kita menerapkan *Capitalize* ke kunci di atas, JSON tersebut beralih menjadi 2 buah struktur nama identik `[]reflect.StructField{ {Name: "ID"}, {Name: "ID"} }`.
    *Defensive:* `reflect.StructOf` akan **Panic Mutlak** bila menelan array tipe duplikat *Name*. Sangat direkomendasikan membersihkan data metadata definisi via deduplikasi menggunakan map validasi `seenFields := make(map[string]bool)` tepat sebelum array dimasukkan ke pendelegasi instruksi StructOf.
+
+## Kapan JANGAN Pakai Ini
+
+- **Di jalur panas.** Setiap operasi refleksi mengalokasikan dan tidak bisa di-inline. Untuk serialisasi berkecepatan tinggi, kode yang di-generate mengalahkan refleksi telak dan tidak punya kejutan.
+- **Ketika generik sudah cukup.** Sejak Go 1.18, banyak pemakaian refleksi bisa diganti parameter tipe — dengan keamanan tipe saat kompilasi dan tanpa ongkos runtime.
+- **Untuk mengakses field tidak terekspor pustaka pihak ketiga.** Tata letak struct bukan bagian dari kontrak API dan bisa berubah di rilis tambalan. Kode Anda akan rusak tanpa satu pun peringatan kompilator.
+- **Tanpa menangani `panic` dari operasi refleksi.** Refleksi memindahkan kesalahan tipe dari waktu kompilasi ke waktu jalan. Setiap `Field`, `Call`, dan `Set` yang salah adalah panic di produksi.
+- **Membangun struct dinamis untuk masalah yang sebenarnya adalah `map`.** Bila field tidak diketahui saat kompilasi dan tidak ada perilaku yang melekat padanya, `map[string]any` lebih sederhana dan jujur.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Profil CPU didominasi `reflect.*` | jalur yang memakai refleksi | Refleksi di hot path |
+| Alokasi tinggi pada serialisasi | profil alokasi | Setiap operasi refleksi mengalokasikan |
+| Panic setelah upgrade dependensi | akses field tidak terekspor | Tata letak struct berubah |
+| Galat tipe muncul di produksi | validasi sebelum operasi refleksi | Kesalahan tipe berpindah ke runtime |
+| Kode sulit dipahami tanpa menjalankannya | apakah generik bisa dipakai | Refleksi untuk masalah yang punya solusi statis |
+
+```bash
+go tool pprof -top 'http://localhost:6060/debug/pprof/profile?seconds=30' | grep -i reflect
+go tool pprof -sample_index=alloc_objects -top 'http://localhost:6060/debug/pprof/allocs?seconds=30' | grep -i reflect
+
+go test -bench=. -benchmem -run='^$' ./...
+
+# Panic dari refleksi di produksi
+kubectl logs -l app=api --previous | grep -A10 'reflect:' | head -20
+```

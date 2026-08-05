@@ -1,5 +1,7 @@
 # govips JIT Image Engine: Pemrosesan Gambar Berkecepatan Dewa
 
+> **Berlaku:** Go 1.21+ · libvips via cgo · **Lihat juga:** `media_asset_pipeline/ffmpeg_hls_video_transcoder.md` · `caching_strategy/http_cdn_caching.md` · `runtime_internals/cgo_abi_boundaries.md` · `cloud_provider_sdk/cloud_storage_patterns.md`
+
 Library `davidbyttow/govips` (bindings untuk libvips) memungkinkan pemrosesan gambar (resize, crop, konversi ke WebP/AVIF) dengan penggunaan memori yang jauh lebih efisien dibandingkan library standar `image/jpeg`.
 
 ## Arsitektur Goroutine Worker Pool
@@ -218,3 +220,33 @@ func handler(w http.ResponseWriter, r *http.Request) {
 1. **CGO Memory Lock & Thread Limits:** Libvips beroperasi multithreaded di level C. Jika Goroutine worker pool terlalu besar (misal: 1000 goroutine) memanggil libvips, C-threads akan menghabiskan CPU dan berujung context-switching overhead tinggi (thrashing). Batasi worker pool seukuran `runtime.NumCPU() * 2`.
 2. **Korupsi File Input JPEG:** Libvips akan panik (SIGSEGV di C-level) jika memproses gambar yang rusak parah (malformed header). Wajib me-recover dari panic di dalam goroutine worker, atau mem-validasi magic bytes header gambar murni di Go sebelum melemparkannya ke fungsi CGO libvips.
 3. **Batas Resolusi Gigapixel:** Ketika memproses gambar super besar (misal 50.000 x 50.000 pixel, serangan "Image Bomb"), libvips tetap berusaha mengalokasikan RAM buffer. Gunakan `vips.NewImageFromFile` tetapi limitasi dimensi lebar/tinggi input. Cek metadata dimensi header dulu menggunakan stream reader ringan Go `image.DecodeConfig` sebelum libvips membacanya.
+
+## Kapan JANGAN Pakai Ini
+
+- **Pemrosesan gambar sinkron di jalur permintaan tanpa cache.** Setiap permintaan yang memicu pemrosesan penuh membuat CPU menjadi batas kapasitas Anda. Hasil WAJIB di-cache dan disajikan CDN.
+- **Tanpa batas dimensi dan ukuran masukan.** Gambar 30.000 × 30.000 piksel akan menghabiskan memori dan CPU dari satu permintaan. Ini vektor DoS klasik yang murah dieksekusi.
+- **Mempercayai ekstensi atau `Content-Type` dari klien.** Format harus dideteksi dari isi berkas. Berkas yang mengaku PNG bisa berisi apa pun.
+- **Mengabaikan bahwa libvips berjalan lewat cgo.** Ia membawa seluruh konsekuensi cgo: build lebih rumit, biner tidak statis, dan crash di sisi C tidak menghasilkan stack trace Go.
+- **Menyimpan metadata gambar tanpa penyaringan.** EXIF memuat lokasi GPS dan informasi perangkat. Menyajikannya kembali ke publik membocorkan data pengguna tanpa disadari.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| CPU menjadi batas kapasitas | rasio cache hit gambar | Pemrosesan berulang untuk hasil yang sama |
+| Memori melonjak dari satu permintaan | batas dimensi masukan | Gambar raksasa diterima |
+| Crash tanpa stack trace Go | sisi C libvips | Kegagalan di dalam cgo |
+| Lokasi GPS pengguna bocor | penyaringan EXIF | Metadata ikut tersaji |
+| Container gagal start di image minimal | tautan dinamis libvips | Dependensi C tidak ada di image |
+
+```bash
+# Cache hit gambar: ini yang menentukan apakah CPU jadi batas
+curl -sI https://cdn.contoh.id/img/abc.jpg | grep -iE 'x-cache|cf-cache-status|age'
+curl -s localhost:9090/metrics | grep -E 'image_(process_duration|cache_hits|rejected_total)'
+
+# EXIF yang masih menempel pada gambar tersaji
+exiftool -GPS:all -Model gambar-tersaji.jpg 2>/dev/null | head
+
+# Dependensi C yang dibutuhkan biner
+ldd ./app | grep -i vips
+```

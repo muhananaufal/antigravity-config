@@ -1,5 +1,7 @@
 # Katalog Lokalisasi Dinamis Go dengan x/text (Zero-Downtime Reload)
 
+> **Berlaku:** Go 1.21+ · `golang.org/x/text` · **Lihat juga:** `i18n_localization/icu_currency_number_formatting.md` · `i18n_localization/timezone_context_propagation.md` · `i18n_localization/multi_region_http_routing.md` · `arch_patterns/config_management.md`
+
 Dokumen ini mendefinisikan standar arsitektur tingkat enterprise untuk implementasi i18n (Internationalization) di Golang menggunakan `golang.org/x/text`. Fokus utama adalah membangun katalog terjemahan yang dinamis, thread-safe, dan dapat di-reload secara on-the-fly (tanpa restart binary) melalui external data source seperti JSON, Redis, atau Database.
 
 ## Arsitektur Resolusi Bahasa & Reloading
@@ -241,3 +243,33 @@ Jika user meminta `es-AR` (Spanyol Argentina) namun katalog hanya punya `es` (Sp
 ### ⚠️ Edge Case 3: Thundering Herd pada Saat Reload Data
 Jika 50 worker nodes menembak Redis/DB serentak untuk reload saat webhook ditembak, DB bisa drop.
 **Mitigasi**: Terapkan splay/jitter delay acak `time.Sleep(rand.Intn(5000)*time.Millisecond)` sebelum `FetchTranslations` di dalam worker untuk meratakan beban ke DB.
+
+## Kapan JANGAN Pakai Ini
+
+- **Menyusun kalimat dengan menggabungkan potongan terjemahan.** Urutan kata berbeda antar bahasa, dan potongan yang masuk akal dalam bahasa Indonesia bisa menghasilkan kalimat yang kacau dalam bahasa lain. Satu pesan utuh dengan placeholder yang benar.
+- **Mengabaikan aturan jamak.** Bahasa punya jumlah bentuk jamak yang berbeda — dua, tiga, bahkan enam. `if n == 1` bekerja untuk bahasa Inggris dan salah untuk banyak bahasa lain.
+- **Kunci terjemahan berupa teks bahasa sumber.** Ketika teks sumber diperbaiki, seluruh terjemahan menjadi tidak cocok dan diam-diam kembali ke bahasa sumber.
+- **Memuat seluruh katalog untuk semua bahasa di setiap proses.** Pada puluhan bahasa dengan ribuan pesan, itu memori yang tidak dipakai. Muat sesuai kebutuhan.
+- **Menerima `Accept-Language` mentah sebagai pilihan bahasa.** Header itu bisa memuat bahasa yang tidak Anda dukung; pencocokan harus melalui `language.Matcher` dengan fallback yang ditetapkan.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Sebagian teks kembali ke bahasa sumber | kunci yang hilang di katalog | Terjemahan tidak lengkap atau kunci berubah |
+| Kalimat terasa janggal di bahasa tertentu | apakah kalimat disusun dari potongan | Struktur kalimat diasumsikan sama |
+| Bentuk jamak salah | aturan plural per bahasa | `if n == 1` dipakai |
+| Memori naik sebanding jumlah bahasa | strategi pemuatan katalog | Semua bahasa dimuat sekaligus |
+| Bahasa yang dipilih tidak sesuai harapan | pencocokan `Accept-Language` | Header dipakai mentah |
+
+```bash
+# Kunci yang dipakai kode tapi tidak ada di katalog
+grep -rhoE 'Sprintf\("[a-z0-9_.]+"' --include='*.go' . | sort -u > /tmp/dipakai.txt
+
+# Bahasa yang benar-benar diminta pengguna -- dasar memutuskan mana yang layak dilengkapi
+kubectl logs -l app=api --since=24h \
+  | jq -r '.bahasa' | sort | uniq -c | sort -rn | head
+
+# Kunci yang gagal diterjemahkan WAJIB jadi metrik, bukan hanya fallback diam-diam
+curl -s localhost:9090/metrics | grep -E 'i18n_(missing_key|fallback)_total'
+```

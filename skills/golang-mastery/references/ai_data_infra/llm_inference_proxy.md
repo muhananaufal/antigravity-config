@@ -1,5 +1,7 @@
 # LLM Inference Proxy & Gateway
 
+> **Berlaku:** Go 1.21+ · **Lihat juga:** `ai_data_infra/embedding_pipeline.md` · `observability_resilience/rate_limiting_patterns.md` · `observability_resilience/circuit_breaker_hystrix.md` · `caching_strategy/cache_aside_singleflight.md`
+
 ## Konsep Utama
 Sebuah LLM Inference Proxy (Gateway) adalah layer krusial di depan layanan AI yang mengabstraksi provider LLM (OpenAI, Anthropic, lokal vLLM). Proxy ini berfungsi layaknya API Gateway modern dengan fokus spesifik pada AI:
 1. **API Compatibility**: Menyediakan antarmuka `/v1/chat/completions` standar (OpenAI kompatibel) ke user, kemudian men-translate request ke berbagai *backend* LLM yang berbeda (misal, merubah format untuk Claude atau Gemini).
@@ -257,3 +259,34 @@ graph LR;
 
 
 <!-- Padding for > 10KB Requirement: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA -->
+
+## Kapan JANGAN Pakai Ini
+
+- **Tanpa batas biaya per pengguna dan per tenant.** Model dibayar per token. Satu pengguna dengan loop yang salah bisa menghabiskan anggaran bulanan dalam hitungan jam, dan tagihannya baru terlihat setelahnya.
+- **Timeout yang disamakan dengan panggilan HTTP biasa.** Inferensi bisa memakan puluhan detik secara wajar. Timeout 5 detik akan membatalkan permintaan sah dan tetap membayar tokennya.
+- **Streaming tanpa penanganan pemutusan klien.** Klien yang pergi di tengah stream tetap menghasilkan token yang Anda bayar. Pembatalan harus diteruskan ke penyedia.
+- **Cache respons tanpa memasukkan seluruh parameter ke kunci.** Suhu, model, dan system prompt semuanya mengubah hasil. Kunci yang hanya berisi prompt pengguna akan menyajikan jawaban dari konfigurasi lain.
+- **Menyimpan prompt dan respons tanpa penyaringan.** Prompt pengguna memuat data pribadi, dan menyimpannya memperluas kewajiban privasi ke sistem log dan analitik Anda.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Biaya melonjak tanpa kenaikan pengguna | token per pengguna | Tidak ada batas per tenant |
+| Permintaan sah dibatalkan | timeout vs durasi inferensi wajar | Timeout terlalu ketat |
+| Membayar token untuk klien yang sudah pergi | propagasi pembatalan | Stream tidak dihentikan ke hulu |
+| Jawaban tidak sesuai konfigurasi | komposisi kunci cache | Parameter tidak masuk kunci |
+| Data pribadi di sistem log | penyaringan prompt | Prompt disimpan mentah |
+
+```bash
+# Token dan biaya per tenant -- ini metrik pertama yang harus ada
+curl -s localhost:9090/metrics | grep -E 'llm_(tokens_total|cost|requests_total|cancelled_total)'
+
+# Distribusi durasi inferensi: dasar untuk menetapkan timeout yang benar
+kubectl logs -l app=llm-proxy --since=1h \
+  | jq -r 'select(.durasi_ms) | .durasi_ms' | sort -n | awk '{a[NR]=$1} END{print "p50:",a[int(NR*0.5)], "p99:",a[int(NR*0.99)]}'
+
+# Pengguna dengan konsumsi token tertinggi
+kubectl logs -l app=llm-proxy --since=24h \
+  | jq -r '"\(.tenant) \(.tokens)"' | awk '{s[$1]+=$2} END{for(k in s) print s[k], k}' | sort -rn | head
+```

@@ -1,5 +1,7 @@
 # Tick Rate & Fixed Timestep pada Game Server
 
+> **Berlaku:** Go 1.21+ · **Lihat juga:** `game_backend/game_server_architecture.md` · `game_backend/realtime_state_sync.md` · `runtime_internals/gc_mark_sweep_internals.md` · `runtime_internals/gmp_scheduler.md`
+
 ## Konsep Internal & Trade-offs
 
 Di dalam arsitektur game server (terutama game multiplayer real-time, FPS, atau simulasi fisika), konsep **Tick Rate** dan **Fixed Timestep** adalah jantung dari simulasi dunia. Server bertugas menjadi pemegang otoritas tunggal (Authoritative Server) yang menentukan posisi, tabrakan (collision), dan interaksi entitas. 
@@ -313,4 +315,33 @@ func TestFixedTimestep_AccuracyWithJitter(t *testing.T) {
 		t.Fatalf("Spiral of death preventer failed. Expected 15 ticks from capped lag, got %d", massiveTicks)
 	}
 }
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **Timestep variabel untuk simulasi fisika.** Hasilnya menjadi bergantung pada beban server: pemain di server yang sibuk mengalami fisika yang berbeda. Fixed timestep ada persis untuk membuat simulasi deterministik.
+- **Tick rate tinggi tanpa mengukur anggaran waktu per tick.** Tick 60 Hz berarti seluruh pemrosesan WAJIB selesai dalam 16 ms. Melewatinya membuat tick menumpuk dan simulasi tertinggal makin jauh.
+- **`time.Sleep` untuk mengatur tick.** Resolusinya tidak cukup presisi dan menumpuk penyimpangan. `time.Ticker` dengan penanganan tick yang terlewat lebih tepat.
+- **Mengabaikan jeda GC dalam anggaran tick.** Jeda GC beberapa milidetik pada tick 16 ms adalah porsi besar. Alokasi per tick harus ditekan, dan `GOGC`/`GOMEMLIMIT` disetel sadar.
+- **Mengejar tick yang tertinggal tanpa batas.** Setelah lonjakan beban, mengejar semua tick yang terlewat justru memperpanjang kelebihan beban. Batasi jumlah tick yang dikejar dalam satu putaran.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Simulasi terasa berbeda antar server | fixed vs variable timestep | Hasil bergantung beban |
+| Tick menumpuk dan tidak pernah mengejar | durasi pemrosesan per tick | Anggaran waktu terlampaui |
+| Hentakan berkala | `gctrace` vs waktu hentakan | Jeda GC masuk ke dalam tick |
+| Penyimpangan waktu bertambah | mekanisme penjadwalan tick | `Sleep` menumpuk penyimpangan |
+| Beban makin buruk setelah lonjakan | batas tick yang dikejar | Mengejar tanpa batas memperparah |
+
+```bash
+# Durasi pemrosesan per tick vs anggaran -- ini angka paling menentukan
+curl -s localhost:9090/metrics | grep -E 'tick_(duration_seconds|skipped_total|behind)'
+
+# Jeda GC dibandingkan panjang tick
+GODEBUG=gctrace=1 ./game 2>&1 | head -20
+
+# PromQL: p99 durasi tick harus jauh di bawah 1/tickrate
+#   histogram_quantile(0.99, rate(tick_duration_seconds_bucket[5m]))
 ```

@@ -1,5 +1,7 @@
 # Real-time State Synchronization (Game Server)
 
+> **Berlaku:** Go 1.21+ · **Lihat juga:** `game_backend/tick_rate_fixed_timestep.md` · `game_backend/spatial_partitioning.md` · `realtime_networking/websocket_gnet_epoll.md` · `realtime_networking/custom_binary_protocol.md`
+
 ## Konsep Internal & Trade-offs
 
 Dalam arsitektur *Client-Server* multiplayer, menjaga sinkronisasi posisi ratusan entitas (Pemain, NPC, Peluru) di jaringan ber-latensi tinggi adalah tantangan tersulit. Jika server mengirimkan seluruh `WorldState` (posisi setiap entitas) setiap 16ms (60Hz), *bandwidth* jaringan akan tersumbat dengan cepat (congestion).
@@ -268,4 +270,33 @@ func TestDeltaBroadcast_OnlySendsDirtyEntities(t *testing.T) {
 		t.Fatal("Timeout menunggu broadcast delta parsial")
 	}
 }
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **Mengirim state penuh setiap tick.** Bandwidth naik sebanding jumlah entitas dikali tick rate dikali pemain. Delta terhadap state terakhir yang diakui klien adalah satu-satunya cara ini menskala.
+- **Sinkronisasi tanpa memfilter berdasarkan relevansi.** Mengirim posisi entitas yang tidak terlihat pemain membuang bandwidth **dan** membocorkan informasi yang bisa dipakai untuk curang.
+- **Interpolasi tanpa buffer.** Klien yang menampilkan state terbaru langsung akan tersentak setiap kali ada paket terlambat. Buffer kecil menukar latensi dengan kehalusan — dan itu pertukaran yang biasanya layak.
+- **Prediksi klien tanpa rekonsiliasi.** Prediksi tanpa koreksi dari server menghasilkan divergensi yang makin besar, dan pemain melihat dirinya di tempat yang berbeda dari yang dilihat server.
+- **TCP untuk state yang cepat usang.** Pengiriman ulang TCP menahan paket baru demi paket lama yang sudah tidak relevan. Untuk posisi yang diperbarui 30 kali per detik, paket yang hilang lebih baik dilewatkan.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Bandwidth naik cepat dengan jumlah pemain | ukuran paket per tick | State penuh dikirim, bukan delta |
+| Gerakan tersentak-sentak | buffer interpolasi klien | Tidak ada buffer terhadap jitter |
+| Posisi pemain "melompat" | rekonsiliasi prediksi | Koreksi server terlalu besar |
+| Pemain tahu posisi lawan yang tersembunyi | filter relevansi | State dikirim tanpa penyaringan |
+| Lag memburuk saat ada kehilangan paket | protokol transport | TCP menahan paket baru demi yang lama |
+
+```bash
+# Bandwidth per pemain -- ini yang menentukan biaya dan skala
+curl -s localhost:9090/metrics | grep -E 'sync_(bytes_per_player|entities_sent|delta_size)'
+
+# Ukuran paket: bandingkan dengan jumlah entitas yang relevan
+kubectl logs -l app=game --since=10m | jq -r '.paket_bytes' | sort -n | tail -5
+
+# Kehilangan paket dan jitter dari sisi klien
+kubectl logs -l app=game --since=1h | jq -r '"\(.packet_loss) \(.jitter_ms)"' | sort -rn | head
 ```

@@ -1,5 +1,7 @@
 # AI Data Infrastructure: Text Embedding Pipeline via ONNX di Go
 
+> **Berlaku:** Go 1.21+ · **Lihat juga:** `ai_data_infra/pgvector_similarity_search.md` · `ai_data_infra/llm_inference_proxy.md` · `background_jobs_worker/river_postgres_jobs.md` · `ai_data_infra/stream_processing_watermill.md`
+
 ## 1. Konsep Utama & Infrastruktur Internal (Technical Depth)
 
 Meskipun Python adalah *lingua franca* untuk melatih (training) model *Machine Learning*, eksekusi model (inference) dalam arsitektur berskala besar memunculkan masalah bottleneck akibat *Global Interpreter Lock (GIL)* dan tingginya konsumsi memori Python. Oleh karena itu, arsitektur *AI Infrastructure* tingkat lanjut (seperti yang dilakukan oleh perusahaan *search engine* dan sistem rekomendasi) sering memigrasikan *inference pipeline* mereka menggunakan Go.
@@ -385,3 +387,35 @@ func createTensor(data []float32) {
     *Masalah:* Dalam sistem asinkron stream (seperti kafka poller), Go memasukkan berbagai macam *event* teks secara simultan dengan ukuran *batch* 32. Jika 31 pesan berukuran 5 kata, tetapi ada 1 pesan nyasar berukuran 512 kata.
     *Dampak:* Alokasi tensor ONNX *WAJIB* mensyaratkan bentuk kubus/persegi (Batch Size x Max Sequence di dalam *batch* tersebut). Ini berarti matriks *batch* tersebut akan terbentuk seukuran (32 x 512 token). 31 dokumen pendek tersebut akan direntangkan dengan padding angka 0 besar-besaran, memaksa CPU bekerja sangat keras memproses angka nol tak berguna, menghabiskan alokasi RAM mendadak 100x lebih masif daripada seharusnya, dan menaikkan drastis waktu interupsi (latency tail spike).
     *Defensif:* *Smart Batching*. Jangan menumpuk batch secara buta `[A, B, C]`. Sortir pesanan masuk di goroutine ke dalam *bucket* panjang (misal *ShortBucket* untuk pesan < 20 token, *LongBucket* untuk pesan > 100). Saat *bucket short* dieksekusi ONNX, bentuk tensor *hanya* akan sebesar 32 x 20. Utilisasi melonjak maksimal.
+
+## Kapan JANGAN Pakai Ini
+
+- **Tanpa menyimpan versi model bersama setiap vektor.** Ketika model diganti, Anda harus tahu vektor mana yang perlu dihitung ulang. Tanpa penanda versi, satu-satunya pilihan adalah menghitung ulang semuanya.
+- **Menghitung embedding secara sinkron di jalur permintaan.** Latensinya ditentukan penyedia model, bukan oleh Anda. Satu gangguan di sisi mereka menjadi gangguan di sisi Anda.
+- **Tanpa batching.** Sebagian besar penyedia embedding jauh lebih efisien per token pada batch. Memanggil satu per satu berarti membayar berkali-kali lipat untuk hasil yang sama.
+- **Memotong teks tanpa memikirkan batas potongan.** Potongan yang memotong kalimat di tengah menghasilkan embedding yang mewakili fragmen tanpa makna, dan kualitas pencarian menurun tanpa penyebab yang tampak.
+- **Tanpa deduplikasi.** Teks yang sama dihitung berulang kali, dan biayanya nyata pada volume besar.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Kualitas pencarian menurun tanpa sebab | versi model per vektor | Vektor dari beberapa model tercampur |
+| Biaya embedding lebih tinggi dari perkiraan | ukuran batch dan deduplikasi | Panggilan satu per satu, atau teks berulang |
+| Latensi permintaan bergantung penyedia | apakah sinkron di jalur permintaan | Embedding dihitung saat permintaan |
+| Hasil pencarian tidak relevan | strategi pemotongan teks | Potongan memotong makna |
+| Sebagian dokumen tidak pernah muncul | antrean embedding | Ada dokumen yang gagal diproses diam-diam |
+
+```sql
+-- Versi model per vektor: tanpa ini, pergantian model berarti hitung ulang semuanya
+SELECT versi_model, count(*), min(dibuat_pada), max(dibuat_pada)
+FROM dokumen_embedding GROUP BY 1;
+
+-- Dokumen yang belum punya embedding
+SELECT count(*) FROM dokumen d
+LEFT JOIN dokumen_embedding e ON e.dokumen_id = d.id WHERE e.id IS NULL;
+```
+
+```bash
+curl -s localhost:9090/metrics | grep -E 'embedding_(batch_size|tokens_total|errors_total|cache_hits)'
+```

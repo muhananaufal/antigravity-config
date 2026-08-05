@@ -1,5 +1,7 @@
 # Game Server Architecture (Golang)
 
+> **Berlaku:** Go 1.21+ · **Lihat juga:** `game_backend/tick_rate_fixed_timestep.md` · `game_backend/realtime_state_sync.md` · `realtime_networking/websocket_gnet_epoll.md` · `game_backend/game_session_persistence.md`
+
 ## Konsep Internal & Trade-offs
 
 Arsitektur game server (terutama yang *Authoritative* seperti MOBA, FPS, dan Survival) sangat berbeda dengan arsitektur REST API biasa. REST bersifat statis (*Stateless*), setiap HTTP request berumur pendek, tidak bergantung pada koneksi sebelumnya, dan datanya diambil dari Database.
@@ -273,4 +275,34 @@ func TestRoomActor_ConcurrencyAndBackpressure(t *testing.T) {
 		t.Fatalf("Lock-free room actor failed. Expected HP 500, got %d", room.WorldState["player1"])
 	}
 }
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **Arsitektur authoritative server untuk permainan tanpa insentif curang.** Simulasi di server menambah biaya komputasi dan latensi. Untuk permainan kooperatif tanpa kompetisi, kepercayaan pada klien bisa memadai — itu keputusan produk.
+- **Satu proses untuk semua ruang permainan tanpa isolasi.** Satu ruang yang bermasalah menjatuhkan semua pemain di proses itu. Isolasi per ruang atau per proses membatasi radius kerusakan.
+- **State permainan hanya di memori tanpa checkpoint.** Crash atau deploy berarti kehilangan sesi yang sedang berjalan, dan pemain merasakannya sebagai kehilangan kemajuan.
+- **Matchmaking di dalam proses permainan.** Keduanya punya profil beban dan siklus rilis yang berbeda; menyatukannya berarti setiap perubahan matchmaking men-deploy ulang server permainan yang sedang dipakai.
+- **Mengabaikan wilayah geografis.** Latensi ditentukan jarak fisik. Server yang jauh membuat permainan terasa buruk tanpa ada yang salah di kode.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Banyak pemain terputus bersamaan | isolasi antar ruang | Satu proses memegang terlalu banyak ruang |
+| Kemajuan pemain hilang saat deploy | frekuensi checkpoint | State hanya di memori |
+| Keluhan lag dari wilayah tertentu | latensi per wilayah | Server terlalu jauh dari pemain |
+| Deploy matchmaking mengganggu permainan | pemisahan layanan | Keduanya dalam satu proses |
+| Curang terdeteksi terlambat | apa yang diotorisasi server | Klien terlalu dipercaya |
+
+```bash
+# Sebaran pemain per proses -- konsentrasi tinggi berarti radius kerusakan besar
+curl -s localhost:9090/metrics | grep -E 'game_(rooms|players|ticks)'
+
+# Latensi per wilayah: ini menentukan pengalaman lebih dari apa pun di kode
+kubectl logs -l app=game --since=1h \
+  | jq -r '"\(.wilayah) \(.rtt_ms)"' | awk '{s[$1]+=$2;n[$1]++} END{for(k in s) print k, s[k]/n[k]}'
+
+# Sesi yang hilang saat deploy
+kubectl logs -l app=game --since=24h | grep -c 'sesi hilang'
 ```

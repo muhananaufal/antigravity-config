@@ -1,5 +1,7 @@
 # I2C & SPI Peripherals (TinyGo)
 
+> **Berlaku:** TinyGo 0.31+ · **Lihat juga:** `embedded_tinygo/gpio_interrupt_driver.md` · `embedded_tinygo/tinygo_microcontroller_basics.md` · `embedded_tinygo/mqtt_edge_messaging.md` · `realtime_networking/custom_binary_protocol.md`
+
 ## Konsep Internal & Trade-offs
 
 Di dunia mikrokontroler (embedded systems), membaca sensor canggih (seperti Giroskop MPU6050 atau Layar OLED SSD1306) atau menulis memori eksternal (SD Card / Flash) jarang menggunakan kaki digital biasa (GPIO/DigitalRead). Anda butuh protokol komunikasi bus serial perangkat keras: **I2C (Inter-Integrated Circuit)** atau **SPI (Serial Peripheral Interface)**.
@@ -227,4 +229,33 @@ func TestSensorDetectionAndErrorHandling(t *testing.T) {
 		t.Fatalf("Expected successful initialization, got error: %v", err)
 	}
 }
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **Tanpa timeout pada operasi bus.** Perangkat yang tidak merespons akan menggantung bus selamanya, dan seluruh firmware ikut berhenti tanpa jejak apa pun.
+- **Mengabaikan pull-up pada I2C.** Bus I2C membutuhkan resistor pull-up. Tanpa nilai yang benar, komunikasi bekerja pada kecepatan rendah dan gagal secara acak pada kecepatan lebih tinggi — gejala yang terlihat seperti bug perangkat lunak.
+- **Berbagi bus tanpa penguncian.** Dua goroutine yang mengakses bus yang sama bersamaan menghasilkan transaksi tercampur dan data yang salah tanpa satu pun galat.
+- **Mengasumsikan penulisan berhasil tanpa memeriksa ACK.** I2C memberi sinyal ACK/NACK. Kode yang mengabaikannya akan melanjutkan seolah semuanya baik padahal perangkat tidak menerima apa pun.
+- **Kecepatan bus tinggi pada kabel panjang.** Kapasitansi kabel membatasi kecepatan yang bisa diandalkan. Ini persoalan fisika, dan tidak ada perubahan kode yang menyelesaikannya.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Firmware membeku total | timeout pada operasi bus | Perangkat menahan bus |
+| Gagal acak pada kecepatan tinggi | pull-up dan panjang kabel | Batas fisik bus |
+| Data sensor tercampur | penguncian akses bus | Dua penggunaan bersamaan |
+| Nilai sensor tidak masuk akal | pemeriksaan ACK | Kegagalan tidak terdeteksi |
+| Bekerja di meja, gagal di lapangan | panjang kabel dan gangguan | Kondisi fisik berbeda |
+
+```bash
+# Pindai alamat yang benar-benar menjawab di bus (pada Linux SBC)
+i2cdetect -y 1
+
+# Perangkat yang tidak menjawab akan terlihat sebagai NACK, bukan sebagai data salah
+i2cget -y 1 0x48 0x00
+
+# Catat setiap kegagalan bus sebagai penghitung, bukan hanya log
+tinygo monitor -target=pico | grep -iE 'i2c|spi|timeout|nack'
 ```

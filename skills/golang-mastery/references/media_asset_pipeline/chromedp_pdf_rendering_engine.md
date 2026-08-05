@@ -1,5 +1,7 @@
 # Chromedp PDF Rendering Engine: Invoice Generator Presisi
 
+> **Berlaku:** Go 1.21+ · `chromedp` · Chrome headless · **Lihat juga:** `media_asset_pipeline/excelize_streaming_million_rows.md` · `system_programming_linux/process_management_exec.md` · `background_jobs_worker/river_postgres_jobs.md` · `devops_control_planes/docker_container_go.md`
+
 Membangun file PDF dari template HTML CSS menggunakan instance Chrome/Chromium Headless secara JIT adalah metode paling akurat (mendukung Grid, Flexbox, Web Fonts). Metode ini jauh lebih superior dari pustaka Go murni (seperti `gofpdf`) jika berurusan dengan CSS kompleks.
 
 ## Arsitektur Headless Debugger WS Connection Pooling
@@ -175,3 +177,35 @@ func handlePrint(w http.ResponseWriter, r *http.Request) {
 1. **Goroutine Leak di Tab Context:** Jika context lokal (Tab) `chromedp.NewContext` tidak ditutup lewat `cancel()` karena linter/developer error (misalnya `return err` prematur tanpa `defer cancel()`), Tab Headless tersebut beserta WebSocket hub-nya akan menjadi Zombie Goroutine Memory Leak di aplikasi Go. Pastikan lifecycle di-wrap ketat.
 2. **Zombie Chrome OS Process di Docker Container:** Walau Go crash atau dibunuh (SIGTERM), process `chrome` / `chromium` seringkali tetap menempel di host kernel PID 1 Docker sebagai zombie process, menyebabkan restart loop gagal. Wajib memakai init process dummy sebagai PID 1 di Dockerfile (seperti `tini` atau `dumb-init`) agar child PID disapu bersih saat Go aplikasi exit.
 3. **Layout Overflow Terpotong:** CSS `height: 100vh` akan dipaksa menjadi ukuran `WithPaperHeight` oleh headless print. Halaman yang overflow panjang tidak otomatis membuat lembar ke-2 (page break) kecuali CSS `@media print { page-break-after: always; }` ditulis dan diposisikan dengan seksama pada block-level elements DOM HTML.
+
+## Kapan JANGAN Pakai Ini
+
+- **Chrome headless bila pustaka PDF murni cukup.** Menjalankan browser lengkap untuk menghasilkan invoice adalah ratusan megabyte memori per instans. Untuk tata letak sederhana, pustaka PDF langsung jauh lebih ringan dan lebih dapat diprediksi.
+- **Merender HTML dari input pengguna tanpa isolasi.** Halaman yang dirender bisa memuat sumber daya eksternal dan menjalankan JavaScript. Tanpa isolasi jaringan, itu jalur SSRF yang lengkap — halaman bisa meminta metadata cloud internal.
+- **Tanpa timeout dan pembersihan instans browser.** Instans Chrome yang tertinggal adalah kebocoran memori berskala ratusan megabyte, dan menumpuk sampai node tidak sehat.
+- **Rendering sinkron di jalur permintaan.** Halaman kompleks memakan detik. Ia pekerjaan latar dengan pengunduhan hasil, bukan respons langsung.
+- **Tanpa menyematkan versi Chrome.** Pembaruan Chrome mengubah rendering, dan dokumen yang dihasilkan bulan lalu tidak lagi identik — masalah nyata untuk dokumen yang harus konsisten.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Memori pod naik dan tidak turun | instans Chrome yang tersisa | Browser tidak ditutup |
+| Permintaan ke alamat internal dari renderer | isolasi jaringan renderer | Jalur SSRF lewat HTML |
+| Tampilan PDF berubah tanpa perubahan kode | versi Chrome | Pembaruan browser mengubah rendering |
+| Permintaan timeout saat membuat PDF | apakah sinkron | Rendering di jalur permintaan |
+| Node tidak sehat setelah beberapa jam | jumlah proses Chrome | Instans menumpuk |
+
+```bash
+# Instans Chrome yang tertinggal -- penyebab paling umum masalah memori di sini
+kubectl exec <pod> -- ps -ef | grep -c '[c]hrome'
+kubectl top pod -l app=pdf
+
+# Versi Chrome yang benar-benar dipakai
+kubectl exec <pod> -- chromium --version
+
+# Renderer TIDAK BOLEH bisa menjangkau metadata cloud
+kubectl exec <pod> -- curl -s --max-time 2 http://169.254.169.254/ && echo "BAHAYA: metadata terjangkau"
+
+curl -s localhost:9090/metrics | grep -E 'pdf_(render_duration|failed_total|browser_instances)'
+```

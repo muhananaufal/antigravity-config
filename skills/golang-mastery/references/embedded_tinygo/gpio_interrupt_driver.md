@@ -1,5 +1,7 @@
 # GPIO & Interrupt Driver (TinyGo)
 
+> **Berlaku:** TinyGo 0.31+ · **Lihat juga:** `embedded_tinygo/tinygo_microcontroller_basics.md` · `embedded_tinygo/i2c_spi_peripheral.md` · `system_programming_linux/signal_handling_posix.md` · `concurrency/channel_patterns_pipelines.md`
+
 ## Konsep Internal & Trade-offs
 
 Di lingkungan *Bare Metal* mikrokontroler (SRAM di bawah 256KB, frekuensi CPU 16MHz-133MHz), menangani sinyal digital melalui pin GPIO (*General Purpose Input Output*) secara efisien adalah fundamental. Berbeda dengan Go di backend web di mana interaksi hardware di-abstraksi oleh OS, dengan TinyGo Anda berinteraksi nyaris langsung dengan register CPU.
@@ -268,4 +270,33 @@ func TestRotaryEncoder_EventLoopDebounce(t *testing.T) {
 		t.Fatalf("Expected second legit rotation to register, got %d events", eventCount)
 	}
 }
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **Pekerjaan berat di dalam handler interupsi.** Handler berjalan dengan interupsi lain tertunda. Pekerjaan panjang di sana membuat interupsi lain terlewat — termasuk yang menjaga komunikasi dan watchdog.
+- **Alokasi memori di dalam handler interupsi.** Alokasi bisa memicu GC pada konteks yang tidak boleh diinterupsi. Siapkan buffer sebelumnya dan pakai ulang.
+- **Tanpa debouncing pada masukan mekanis.** Satu penekanan tombol menghasilkan puluhan transisi dalam beberapa milidetik. Tanpa debounce, satu tindakan pengguna terbaca sebagai banyak kejadian.
+- **Berbagi variabel antara handler dan loop utama tanpa sinkronisasi.** Ini data race yang sama seperti di Go biasa, hanya dengan alat debug yang jauh lebih sedikit. Pakai operasi atomic atau nonaktifkan interupsi di bagian kritis yang pendek.
+- **Polling GPIO di loop ketat bila interupsi tersedia.** Polling membakar daya, dan pada perangkat bertenaga baterai itu perbedaan antara berbulan-bulan dan berhari-hari.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Kejadian terlewat saat sibuk | durasi handler interupsi | Handler menahan interupsi lain |
+| Satu tindakan terbaca berkali-kali | debouncing | Bouncing mekanis tidak ditangani |
+| Nilai variabel tidak konsisten | sinkronisasi handler vs loop utama | Data race |
+| Baterai habis jauh lebih cepat | polling vs interupsi | Loop polling membakar daya |
+| Perangkat reset acak | alokasi di handler | GC pada konteks interupsi |
+
+```bash
+# Durasi handler harus diukur, bukan diperkirakan -- toggle pin dan ukur dengan osiloskop,
+# atau catat lewat serial pada perangkat pengembangan
+tinygo monitor -target=pico
+
+# Konsumsi daya membedakan polling dari interupsi lebih jelas daripada kode
+# (ukur dengan multimeter pada jalur suplai)
+
+tinygo build -size=full -target=pico ./cmd/device
 ```

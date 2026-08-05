@@ -1,5 +1,7 @@
 # FFmpeg HLS Transcoder: Pipeline Context-Aware & Streaming I/O
 
+> **Berlaku:** Go 1.21+ · FFmpeg · HLS · **Lihat juga:** `media_asset_pipeline/govips_jit_image_engine.md` · `system_programming_linux/process_management_exec.md` · `background_jobs_worker/river_postgres_jobs.md` · `cloud_provider_sdk/cloud_storage_patterns.md`
+
 Transcoding video untuk Adaptive Bitrate Streaming (HLS) sering menjadi biang kerok I/O bottleneck dan file bengkak. Teknik top 1% ini memanfaatkan `os/exec` dengan Context, memantau output via Stderr (karena FFmpeg menulis log ke stderr), serta mengatur pipeline I/O pipes.
 
 ## Arsitektur Exec Context & Pipe Stream
@@ -177,3 +179,35 @@ fmt.Println(string(out))
 1. **EOF Pipe Error Saat Transcoding Cepat:** Kadangkala, subprocess FFmpeg selesai sangat cepat atau gagal mendadak (misal file input tidak ada). Saat Go `bufio.Scanner` mencoba membaca dari `StderrPipe`, ia akan mendapat `io.EOF`. Pastikan penanganan EOF pada goroutine pembaca log tidak panik atau nge-block `Wait()`. `Scanner` secara default menangani EOF graceful.
 2. **Zombie Process pada Pipa stdin (Piping I/O):** Jika meneruskan video ke stdin FFmpeg menggunakan `io.Pipe`, jika Go selesai mengalirkan data, ia WAJIB memanggil `Close()` pada writer stdin pipe. Jika tidak ditutup, FFmpeg tidak menerima sinyal `EOF` dan akan menunggu (hang) selamanya.
 3. **Timeout Graceful Cancellation OS Signal:** Pada OS Linux, membunuh exec via context melemparkan `SIGKILL` instan, membuat video yang sedang ditulis terpotong korup. Pada sistem high-end, disarankan menggunakan `cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }` dan memberi `WaitDelay` selama 5 detik bagi FFmpeg menulis trailer MP4 dengan baik.
+
+## Kapan JANGAN Pakai Ini
+
+- **Transcoding sinkron dalam permintaan HTTP.** Satu video bisa memakan menit sampai jam CPU. Ini pekerjaan latar dengan pelacakan kemajuan, tanpa pengecualian.
+- **Menjalankan FFmpeg lewat shell dengan argumen dari input pengguna.** Nama berkas yang mengandung karakter khusus menjadi command injection. Selalu `exec.Command` dengan argumen terpisah.
+- **Tanpa timeout dan batas sumber daya per pekerjaan.** Berkas masukan yang rusak bisa membuat FFmpeg berjalan tanpa henti dan menghabiskan CPU seluruh node.
+- **Tanpa memvalidasi masukan sebelum diproses.** Berkas media adalah format kompleks dari sumber tidak tepercaya; probe dulu, tolak yang tidak masuk akal sebelum menghabiskan CPU untuknya.
+- **Menyimpan hasil transcoding tanpa strategi kedaluwarsa.** Beberapa varian bitrate per video mengalikan biaya penyimpanan, dan sebagian besar varian jarang diakses.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Node CPU penuh oleh satu pekerjaan | timeout dan batas per pekerjaan | Pekerjaan tanpa batas |
+| Antrean transcoding menumpuk | kapasitas vs laju unggahan | Kapasitas tidak sebanding |
+| Proses FFmpeg yatim | pembersihan proses anak | Anak tidak mati bersama induk |
+| Biaya penyimpanan tumbuh cepat | jumlah varian per video | Tidak ada kedaluwarsa varian |
+| Perintah dijalankan dengan argumen tak terduga | apakah lewat shell | Command injection |
+
+```bash
+# Proses FFmpeg yang berjalan lebih lama dari yang wajar
+ps -eo pid,etimes,cmd | awk '/ffmpeg/ && $2 > 3600'
+
+# Antrean dan durasi pekerjaan
+curl -s localhost:9090/metrics | grep -E 'transcode_(queue_depth|duration_seconds|failed_total)'
+
+# Validasi masukan SEBELUM menghabiskan CPU
+ffprobe -v error -show_entries format=duration,size,format_name -of json masukan.mp4
+
+# Proses yatim setelah pod dihapus
+kubectl exec <pod> -- ps -ef | grep -c ffmpeg
+```

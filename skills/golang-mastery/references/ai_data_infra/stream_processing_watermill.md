@@ -1,5 +1,7 @@
 # Stream Processing dengan Watermill
 
+> **Berlaku:** Go 1.21+ · `ThreeDotsLabs/watermill` · **Lihat juga:** `arch_patterns/event_driven_pubsub.md` · `realtime_networking/kafka_consumer_producer.md` · `distributed_patterns_resilience/outbox_pattern_transactional.md` · `background_jobs_worker/job_observability.md`
+
 ## Konsep Utama
 Pipeline infrastruktur AI, seperti *real-time feature engineering* atau *asynchronous embedding generation*, membutuhkan bus pesan terdistribusi yang handal. Di ekosistem Go, `watermill` (github.com/ThreeDotsLabs/watermill) menjadi standar abstraksi *Pub/Sub*. Pustaka ini memisahkan logika domain (pemrosesan event) dari implementasi broker spesifik (Kafka, NATS JetStream, Redis Streams, Google Cloud PubSub, dll).
 
@@ -324,3 +326,33 @@ func (h *Handler) Handle(msg *message.Message) ([]*message.Message, error) {
 4. **Subscriber Rebalancing Lag:** Kafka consumer rebalance saat Pod scale-up (3→10 node) bisa memakan 10-30 detik. Selama periode ini seluruh consumer group berhenti mengkonsumsi. Pipeline yang mengasumsikan latency stabil akan mengalami queue buildup. Implementasikan backpressure signal (channel depth monitoring) dan alert jika consumer lag > threshold.
 
 5. **Watermill Router Panic Recovery:** Jika handler panic (nil pointer dereference, index out of bounds), middleware `middleware.Recoverer` menangkap panic dan convert ke Nack (retry). Tapi jika panic terjadi SEBELUM middleware dipasang (di router setup), router bisa crash. Selalu tambahkan `middleware.Recoverer` sebagai middleware PERTAMA (outermost) dalam chain agar semua panics tertangkap, dan test dengan `go test -race` untuk mendeteksi race condition di handler.
+
+## Kapan JANGAN Pakai Ini
+
+- **Sebagai lapisan abstraksi yang menyembunyikan semantik broker.** Kafka, NATS, dan RabbitMQ punya jaminan urutan, ack, dan retensi yang berbeda. Abstraksi yang menutupinya membuat Anda menulis kode yang benar untuk broker yang salah.
+- **Tanpa menangani pesan beracun.** Middleware retry bawaan akan mengulang selamanya bila tidak ada batas dan jalur dead letter.
+- **Untuk transformasi yang butuh state lintas pesan.** Agregasi berjendela dan join membutuhkan mesin pemrosesan stream yang menyimpan state; menyusunnya manual di handler akan hilang saat restart.
+- **Mengandalkan urutan di seluruh topic.** Urutan hanya berlaku dalam partisi atau subject tertentu, tergantung broker — dan abstraksinya tidak mengubah itu.
+- **Tanpa metrik per handler.** Pipeline dengan sepuluh handler yang hanya punya satu metrik agregat tidak bisa didiagnosis ketika salah satunya tersendat.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Pesan diulang tanpa henti | batas retry dan DLQ | Pesan beracun tanpa jalur keluar |
+| Perilaku berbeda saat ganti broker | jaminan broker yang sebenarnya | Abstraksi menutupi perbedaan semantik |
+| State agregasi hilang saat restart | di mana state disimpan | State hanya di memori handler |
+| Tidak tahu handler mana yang lambat | metrik per handler | Metrik terlalu agregat |
+| Urutan kejadian salah | kunci partisi/subject | Urutan diasumsikan berlaku global |
+
+```bash
+# Metrik WAJIB berlabel handler, bukan hanya agregat pipeline
+curl -s localhost:9090/metrics | grep -E 'watermill_(handler|publisher|subscriber)'
+
+# Pesan yang diulang berkali-kali
+kubectl logs -l app=stream --since=1h \
+  | jq -r 'select(.retry_count > 3) | .message_uuid' | sort | uniq -c | sort -rn | head
+
+# Lag di broker yang sebenarnya -- abstraksi tidak menghapus kebutuhan melihat ini
+kafka-consumer-groups --bootstrap-server "$BROKER" --describe --group watermill
+```

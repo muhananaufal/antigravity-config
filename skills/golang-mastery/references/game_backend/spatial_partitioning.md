@@ -1,5 +1,7 @@
 # Spatial Partitioning (Game Server)
 
+> **Berlaku:** Go 1.21+ · **Lihat juga:** `game_backend/realtime_state_sync.md` · `game_backend/game_server_architecture.md` · `hft_zero_alloc/cpu_cache_optimization.md` · `runtime_internals/escape_analysis_pprof.md`
+
 ## Konsep Internal & Trade-offs
 
 Di server game skala menengah hingga masif (MMO, Battle Royale, atau RTS), operasi yang paling berat bagi CPU bukanlah sinkronisasi jaringan, melainkan mendeteksi **Collision (Tabrakan)** dan menghitung **Jarak (Radius Pandang / Area of Interest)** antar entitas.
@@ -285,4 +287,30 @@ func TestSpatialGrid_UpdatePosition_SameCellOptimization(t *testing.T) {
 		t.Fatalf("Expected entity to remain in cell gracefully without issues")
 	}
 }
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **Untuk jumlah entitas yang kecil.** Di bawah beberapa ratus entitas, pemeriksaan langsung semua pasangan lebih cepat daripada memelihara struktur spasial — dan jauh lebih mudah dibuktikan benar.
+- **Grid berukuran tetap untuk sebaran entitas yang tidak merata.** Ketika semua pemain berkumpul di satu titik, satu sel memuat semuanya dan struktur itu tidak menyaring apa pun.
+- **Struktur spasial yang dibangun ulang tiap tick.** Untuk entitas yang bergerak, memperbarui posisi dalam struktur lebih murah daripada membangun ulang seluruhnya.
+- **Quadtree untuk entitas yang terus bergerak.** Penyisipan dan penghapusan berulang memicu pemecahan dan penggabungan node terus-menerus. Grid atau hash spasial lebih stabil untuk objek bergerak.
+- **Tanpa mengukur terhadap alternatif yang lebih sederhana.** Struktur spasial menambah kompleksitas nyata; angkanya harus membuktikan itu terbayar pada beban Anda.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Durasi tick melonjak saat pemain berkumpul | jumlah entitas per sel | Sebaran tidak merata; grid tidak menyaring |
+| CPU didominasi pemeliharaan struktur | rasio bangun vs query | Struktur dibangun ulang terlalu sering |
+| Tidak lebih cepat dari pemeriksaan langsung | jumlah entitas | Belum mencapai titik impas |
+| Alokasi tinggi tiap tick | apakah struktur dipakai ulang | Struktur dialokasikan ulang tiap tick |
+| Hasil query melewatkan entitas | penanganan batas sel | Entitas di perbatasan sel terlewat |
+
+```bash
+# Sebaran entitas per sel: puncak yang tinggi berarti partisi tidak efektif
+curl -s localhost:9090/metrics | grep -E 'spatial_(entities_per_cell|query_duration|rebuilds)'
+
+go test -bench='BenchmarkSpatial|BenchmarkBruteForce' -benchmem -count=10 -run='^$' ./...
+go tool pprof -top 'http://localhost:6060/debug/pprof/profile?seconds=30' | grep -i spatial
 ```
