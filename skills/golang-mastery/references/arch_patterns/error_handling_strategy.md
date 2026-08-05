@@ -95,8 +95,10 @@ Yang salah adalah mencatat **dan** mengembalikan di lapisan yang sama — satu k
 package galat
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 )
 
@@ -158,6 +160,23 @@ func DariRepository(err error, entitas string, id any) error {
 		return nil
 	}
 	switch {
+	// PENGECUALIAN yang wajib didahulukan: galat context TETAP dibungkus %w.
+	//
+	// Aturan "opaque-kan galat penyimpanan" benar untuk galat spesifik
+	// driver, tetapi menerapkannya tanpa pengecualian ini menimbulkan bug
+	// yang halus dan mahal. context.Canceled yang diratakan menjadi string
+	// tidak lagi bisa dikenali errors.Is, sehingga LayakDiulang di §5 jatuh
+	// ke cabang "tak dikenal" dan mengembalikan TRUE — lapisan retry lalu
+	// MENGULANG permintaan yang context-nya sudah dibatalkan. Tiap percobaan
+	// gagal seketika, seluruh kuota terbakar dalam mikrodetik, dan yang
+	// dilaporkan ke pemanggil adalah "percobaan habis", bukan pembatalan.
+	//
+	// Bukan hanya context: apa pun yang dipakai lapisan lain untuk mengambil
+	// KEPUTUSAN harus tetap bisa ditelusuri. Yang boleh di-opaque-kan adalah
+	// galat yang hanya berguna untuk dibaca manusia.
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return fmt.Errorf("%s %v: %w", entitas, id, err)
+
 	case errors.Is(err, errBarisTidakAda):
 		// Sentinel domain yang dibungkus; identitas pustaka TIDAK ikut keluar.
 		return fmt.Errorf("%s %v: %w", entitas, id, ErrTidakDitemukan)
@@ -190,11 +209,19 @@ type Respons struct {
 //
 // Ini SATU-SATUNYA tempat pemetaan terjadi. Menyebarnya ke tiap handler
 // adalah alasan paling umum 404 dan 500 tertukar secara acak.
-func KeHTTP(err error, korelasiID string) (int, Respons) {
+func KeHTTP(ctx context.Context, err error, korelasiID string) (int, Respons) {
 	var vBanyak *GalatBanyakValidasi
 	var vSatu *GalatValidasi
 
 	switch {
+	// URUTAN DUA CASE PERTAMA MENGIKAT, dan tidak terlihat dari kodenya.
+	//
+	// GalatBanyakValidasi.Unwrap() mengembalikan []error berisi setiap
+	// *GalatValidasi di dalamnya, sehingga `errors.As(err, &vSatu)` JUGA
+	// bernilai true untuk galat jamak — ia akan menemukan yang pertama.
+	// Menukar kedua case ini membuat respons hanya memuat satu field dari
+	// sekian yang gagal, dan kliennya memperbaiki satu per satu tanpa pernah
+	// tahu ada yang lain. Bug diam yang lolos setiap review.
 	case errors.As(err, &vBanyak):
 		f := make(map[string]string, len(vBanyak.Galat))
 		for _, v := range vBanyak.Galat {
@@ -230,8 +257,17 @@ func KeHTTP(err error, korelasiID string) (int, Respons) {
 		}
 
 	default:
-		// Galat tak dikenal TIDAK PERNAH dibocorkan isinya. Pesan aslinya
-		// dicatat di sisi server bersama korelasiID; klien hanya menerima ID.
+		// Galat tak dikenal TIDAK PERNAH dibocorkan isinya — dan pencatatannya
+		// dilakukan DI SINI, bukan diserahkan ke pemanggil.
+		//
+		// Versi sebelumnya menulis komentar "pesan aslinya dicatat di sisi
+		// server" tanpa satu baris pun yang mencatatnya: satu-satunya tempat
+		// galat itu masih utuh justru membuangnya, dan korelasiID yang
+		// diterima pengguna tidak menunjuk ke apa pun. Ketika ia menelepon
+		// dengan ID di tangan, tidak ada yang bisa dicari.
+		slog.ErrorContext(ctx, "galat tak tertangani dipetakan ke 500",
+			"korelasi_id", korelasiID, "galat", err)
+
 		return http.StatusInternalServerError, Respons{
 			Kode: "GALAT_INTERNAL", Pesan: "Terjadi kesalahan. Sebutkan ID ini bila menghubungi dukungan.",
 			KorelasiID: korelasiID,
@@ -250,6 +286,21 @@ func LayakDiulang(err error) bool {
 	if err == nil {
 		return false
 	}
+
+	// Context yang sudah selesai mendahului segalanya.
+	//
+	// context.Canceled berarti pemanggil SUDAH PERGI: mengulang hanya
+	// membakar kuota untuk hasil yang tidak akan dibaca siapa pun.
+	// context.DeadlineExceeded berarti anggaran waktunya sudah habis;
+	// percobaan berikutnya mustahil lebih cepat dari waktu yang sudah lewat.
+	//
+	// Keduanya sengaja diperiksa PERTAMA, karena cabang terakhir fungsi ini
+	// mengembalikan true untuk galat tak dikenal — dan galat context yang
+	// terlanjur diratakan menjadi string akan mendarat di sana.
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+
 	var v *GalatValidasi
 	switch {
 	case errors.As(err, &v),
@@ -261,7 +312,14 @@ func LayakDiulang(err error) bool {
 	if errors.As(err, &sementara) {
 		return sementara.Sementara()
 	}
-	return true // konservatif: galat tak dikenal dianggap sementara
+
+	// Konservatif: galat tak dikenal dianggap sementara.
+	//
+	// Konsekuensinya harus disadari — default ini hanya aman selama galat
+	// yang membawa KEPUTUSAN tidak pernah kehilangan identitasnya di
+	// perjalanan. Itulah alasan DariRepository di §3 mempertahankan
+	// pembungkusan %w untuk galat context.
+	return true
 }
 ```
 
@@ -271,11 +329,36 @@ func LayakDiulang(err error) bool {
 package galat
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
 	"testing"
 )
+
+// Bug yang paling mahal di berkas ini, dan sebelumnya tidak diuji sama
+// sekali: permintaan yang context-nya sudah dibatalkan TIDAK boleh
+// diklasifikasikan layak diulang.
+func TestGalatContextTidakLayakDiulang(t *testing.T) {
+	kasus := map[string]error{
+		"dibatalkan":         context.Canceled,
+		"deadline terlampaui": context.DeadlineExceeded,
+	}
+	for nama, asal := range kasus {
+		t.Run(nama, func(t *testing.T) {
+			// Lewat jalur terjemahan repository, persis seperti di produksi.
+			err := DariRepository(asal, "pesanan", 7)
+
+			if !errors.Is(err, asal) {
+				t.Fatalf("identitas galat context hilang setelah terjemahan: %v", err)
+			}
+			if LayakDiulang(err) {
+				t.Fatal("permintaan yang sudah dibatalkan diklasifikasikan layak diulang — " +
+					"lapisan retry akan membakar seluruh kuota lalu melapor 'percobaan habis'")
+			}
+		})
+	}
+}
 
 func TestDariRepository_MenerjemahkanTanpaMembocorkanPustaka(t *testing.T) {
 	err := DariRepository(errBarisTidakAda, "pesanan", 42)
@@ -320,7 +403,7 @@ func TestKeHTTP_PemetaanTerpusat(t *testing.T) {
 	}
 	for _, k := range kasus {
 		t.Run(k.nama, func(t *testing.T) {
-			status, resp := KeHTTP(k.err, "kor-1")
+			status, resp := KeHTTP(context.Background(), k.err, "kor-1")
 			if status != k.status || resp.Kode != k.kode {
 				t.Fatalf("mau %d/%s, dapat %d/%s", k.status, k.kode, status, resp.Kode)
 			}
@@ -333,7 +416,7 @@ func TestKeHTTP_PemetaanTerpusat(t *testing.T) {
 
 func TestKeHTTP_GalatInternalTidakBocorKeKlien(t *testing.T) {
 	rahasia := errors.New(`pq: relation "pengguna_rahasia" does not exist`)
-	_, resp := KeHTTP(fmt.Errorf("ambil: %v", rahasia), "kor-2")
+	_, resp := KeHTTP(context.Background(), fmt.Errorf("ambil: %v", rahasia), "kor-2")
 
 	if contains(resp.Pesan, "pengguna_rahasia") || contains(resp.Pesan, "pq:") {
 		t.Fatalf("detail internal bocor ke klien: %q", resp.Pesan)
@@ -351,7 +434,7 @@ func TestUnwrapSlice_MenelusuriSeluruhIsi(t *testing.T) {
 	if !errors.As(error(g), &v) {
 		t.Fatal("errors.As harus menemukan GalatValidasi di dalam gabungan")
 	}
-	status, resp := KeHTTP(g, "kor-3")
+	status, resp := KeHTTP(context.Background(), g, "kor-3")
 	if status != http.StatusUnprocessableEntity || len(resp.Field) != 2 {
 		t.Fatalf("kedua field harus dilaporkan, dapat %v", resp.Field)
 	}
@@ -419,7 +502,7 @@ func (r *Repo) Ambil(ctx context.Context, id int64) (*Pesanan, error) {
 
 // Di handler -- satu-satunya tempat yang mencatat:
 if err != nil {
-	status, resp := galat.KeHTTP(err, korelasiID)
+	status, resp := galat.KeHTTP(r.Context(), err, korelasiID)
 	if status >= 500 {
 		logger.Error("permintaan gagal", "err", err, "korelasi_id", korelasiID)
 	}
