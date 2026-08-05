@@ -70,14 +70,23 @@ func getUserVulnerable(ctx context.Context, db *sql.DB, username string) error {
 ```
 
 ```go
-// ✅ GOOD: Menggunakan Parameterized Queries (Prepared Statements)
-func getUserSafe(ctx context.Context, db *sql.DB, username string) error {
-	// Driver DB akan memisahkan antara struktur query dan data input
-	query := "SELECT * FROM users WHERE username = $1"
-	_, err := db.ExecContext(ctx, query, username)
-	return err
+// ✅ GOOD: Parameterized query — driver memisahkan STRUKTUR query dari DATA
+func getUserSafe(ctx context.Context, db *sql.DB, username string) (*User, error) {
+	// QueryRowContext, bukan ExecContext: yang ini SELECT dan hasilnya dipakai.
+	// (Versi sebelumnya memakai ExecContext lalu membuang barisnya, sehingga
+	// fungsi bernama getUser tidak pernah mengembalikan user.)
+	var u User
+	err := db.QueryRowContext(ctx,
+		`SELECT id, username FROM users WHERE username = $1`, username,
+	).Scan(&u.ID, &u.Username)
+	if err != nil {
+		return nil, err
+	}
+	return &u, nil
 }
 ```
+
+> Parameterisasi melindungi **nilai**, bukan **identifier**. Nama tabel, nama kolom, dan arah `ORDER BY` tidak bisa diparameterkan — untuk itu satu-satunya cara aman adalah memetakan input ke daftar putih nilai yang Anda tulis sendiri. `ORDER BY $1` bukan sekadar tidak aman; ia tidak berfungsi.
 
 ### ❌ Anti-Pattern 2: Path Traversal pada File System
 
@@ -97,29 +106,49 @@ func downloadFileVulnerable(w http.ResponseWriter, r *http.Request) {
 ```
 
 ```go
-// ✅ GOOD: Menggunakan filepath.Clean dan memeriksa Base Path
-func downloadFileSafe(w http.ResponseWriter, r *http.Request) {
-	filename := r.URL.Query().Get("file")
-	
-	// 1. Bersihkan path (menghilangkan resolve ../)
-	cleanPath := filepath.Clean(filename)
-	
-	// 2. Pastikan file hanya nama file saja, tidak ada path lain
-	if cleanPath != filepath.Base(cleanPath) {
-		http.Error(w, "Invalid filename", http.StatusBadRequest)
+// ✅ TERBAIK (Go 1.24+): os.Root mengurung SELURUH operasi di dalam satu
+// direktori. Ia menolak "..", path absolut, DAN symlink yang menunjuk keluar —
+// yang terakhir tidak bisa ditangani pemeriksaan string mana pun.
+var akar *os.Root // dibuka sekali saat start: os.OpenRoot("/var/www/uploads")
+
+func downloadFileTerbaik(w http.ResponseWriter, r *http.Request) {
+	f, err := akar.Open(r.URL.Query().Get("file"))
+	if err != nil {
+		http.Error(w, "berkas tidak ditemukan", http.StatusNotFound)
 		return
 	}
-	
-	// 3. Gabungkan dengan root direktori yang pasti aman
-	safePath := filepath.Join("/var/www/uploads/", cleanPath)
-	data, err := os.ReadFile(safePath)
+	defer f.Close()
+	io.Copy(w, f)
+}
+```
+
+```go
+// ✅ CUKUP untuk Go < 1.24: bersihkan, tolak apa pun yang bukan nama berkas polos
+func downloadFileSafe(w http.ResponseWriter, r *http.Request) {
+	nama := r.URL.Query().Get("file")
+
+	// `path`, bukan `path/filepath`: masukannya dari HTTP dan selalu memakai
+	// garis miring depan. filepath memperlakukan backslash sebagai pemisah di
+	// Windows, sehingga hasil pemeriksaan berbeda tergantung OS.
+	bersih := path.Clean(nama)
+	if bersih != nama || bersih != path.Base(bersih) || strings.HasPrefix(bersih, ".") {
+		http.Error(w, "nama berkas tidak valid", http.StatusBadRequest)
+		return
+	}
+
+	data, err := os.ReadFile(filepath.Join("/var/www/uploads", bersih))
 	if err != nil {
-		http.Error(w, "File not found", http.StatusNotFound)
+		http.Error(w, "berkas tidak ditemukan", http.StatusNotFound)
 		return
 	}
 	w.Write(data)
 }
 ```
+
+Dua lubang pada bentuk yang lebih sering ditulis (`cleanPath != filepath.Base(cleanPath)` saja):
+
+- **`.` dan `..` LOLOS.** `filepath.Base("..")` mengembalikan `".."`, jadi kedua sisi perbandingannya sama dan nilainya diterima. Di sini ia berhenti di `os.ReadFile` karena hasilnya direktori — tetapi pada kode yang menuliskan berkas atau menyusun path lebih lanjut, ia tidak berhenti di mana pun.
+- **Symlink tidak tersentuh.** `evil.png` yang merupakan symlink ke `/etc/passwd` lolos setiap pemeriksaan string, dan `os.ReadFile` mengikutinya dengan patuh. Hanya `os.Root` (atau `openat2` dengan `RESOLVE_BENEATH`) yang benar-benar menutup jalur ini. Inilah juga jawaban untuk TOCTOU di Kasus Tepi 4.
 
 ### ❌ Anti-Pattern 3: Reflected XSS pada API Response / Template
 
@@ -138,20 +167,36 @@ func searchHandlerVulnerable(w http.ResponseWriter, r *http.Request) {
 ```
 
 ```go
-// ✅ GOOD: Menggunakan html/template atau Escaping eksplisit
+// ✅ GOOD: html/template melakukan escaping SESUAI KONTEKS secara otomatis
+var tplCari = template.Must(template.New("cari").Parse(
+	`<h1>Hasil pencarian: {{.}}</h1><a href="/ulang?q={{.}}">ulangi</a>`))
+
 func searchHandlerSafe(w http.ResponseWriter, r *http.Request) {
-	query := r.URL.Query().Get("q")
-	w.Header().Set("Content-Type", "text/html")
-	
-	// html.EscapeString mengubah < menjadi &lt;
-	safeQuery := html.EscapeString(query)
-	fmt.Fprintf(w, "<h1>Search results for: %s</h1>", safeQuery)
+	// charset WAJIB disebut. Tanpa itu sebagian klien lama menebak encoding,
+	// dan penebakan itulah yang dulu membuat serangan XSS berbasis UTF-7 bisa
+	// dilakukan pada halaman yang isinya sudah di-escape dengan benar.
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_ = tplCari.Execute(w, r.URL.Query().Get("q"))
 }
 ```
 
+Perhatikan potongan di atas menaruh nilai yang sama di **dua konteks berbeda** — badan HTML dan nilai atribut `href`. `html/template` mengodekannya dengan aturan yang berbeda untuk masing-masing, dan menolak URL berskema `javascript:`. Itu tepatnya yang tidak bisa dilakukan `html.EscapeString`:
+
+- `html.EscapeString` hanya benar untuk **teks di badan HTML** dan atribut yang **diapit kutip**. Pada atribut tanpa kutip (`<div class={{.}}>`), penyerang cukup menyisipkan spasi lalu `onmouseover=...` — tidak satu pun karakter yang di-escape ikut terlibat.
+- Di dalam `<script>`, `<style>`, atau sebuah URL, aturan pengodeannya berbeda sama sekali, dan `html.EscapeString` tidak melindungi apa pun di sana.
+
+Ini juga alasan butir "Sanitasi sebagai pengganti pengodean kontekstual" ada di bagian **Kapan JANGAN Pakai Ini**: yang menentukan bukan seberapa bersih nilainya saat masuk, melainkan konteks tempat ia akhirnya dicetak.
+
 ## 4. Edge Cases & Defensive Programming Khusus Go
 
-1. **Null Byte Injection (`\x00`)**: String di Go (yang merupakan slice of byte) *mengizinkan* kehadiran karakter `null byte`. Akan tetapi, sistem file di level OS atau *C-bindings* (CGO) membaca string sebagai *null-terminated* string. Sebuah attacker dapat mengirim file bernama `malicious.php\x00.jpg`. Validasi Go (berpikir berakhiran `.jpg`) mungkin akan meloloskannya, tetapi OS akan menyimpannya sebagai `malicious.php`. **Selalu periksa dan tolak input yang mengandung `\x00` (`strings.ContainsRune(input, '\x00')`)**.
+1. **Null Byte Injection (`\x00`) — nasihatnya benar, tetapi mekanisme yang biasa disebut TIDAK berlaku untuk Go.** String Go boleh memuat `\x00`, dan pada bahasa yang meneruskan string apa adanya ke `open(2)` hal itu memang memotong nama berkas: `malicious.php\x00.jpg` tersimpan sebagai `malicious.php`. **Di Go itu tidak terjadi.** Lapisan syscall menolak path yang memuat NUL — `syscall.BytePtrFromString` mengembalikan `EINVAL` — sehingga `os.ReadFile("x.php\x00.jpg")` gagal dengan galat, bukan membuka berkas yang salah.
+
+   Yang tetap nyata, dan justru sering terlewat karena orang mengira Go sudah aman:
+   - **CGO dan proses eksternal.** Begitu string diteruskan ke pustaka C atau argumen `exec.Command`, pemotongan gaya C berlaku lagi sepenuhnya.
+   - **Sistem hilir.** Nama yang Anda simpan ke basis data akan dibaca layanan lain — PHP, Python, Java, atau penyimpanan objek — yang belum tentu seketat Go.
+   - **Log dan tampilan.** NUL di tengah string memotong tampilan pada banyak alat, sehingga bukti serangan bisa hilang dari layar orang yang sedang menyelidikinya.
+
+   Jadi tolakannya tetap wajib (`strings.ContainsRune(input, '\x00')`), tetapi ketahuilah bahwa yang Anda lindungi adalah **tetangga hilir**, bukan pemanggilan berkas Go Anda sendiri.
 2. **Unicode Normalization bypass**: Karakter Unicode memiliki beberapa bentuk representasi. Misalnya, karakter huruf vokal dengan aksen bisa direpresentasikan dengan 1 *codepoint* (NFC) atau gabungan huruf + *modifier* (NFD). Attacker bisa menggunakan NFD untuk *bypass* filter atau WAF, sementara di backend lain data itu dinormalisasi kembali dan dieksekusi sebagai bahaya. **Lakukan normalisasi (misal: `golang.org/x/text/unicode/norm.NFC.String()`) sebelum melakukan regex/validasi**.
 3. **Mismatched Content-Type Parsing**: Pada eksekusi `r.ParseMultipartForm()`, jika file di-upload tapi ukurannya sangat besar, Go akan menaruh sisanya di *temporary files* (`/tmp`). Attacker bisa melakukan DoS pada disk dengan *upload* berbarengan. Selalu batas total ukuran payload dari request sebelum pemrosesan via `http.MaxBytesReader(w, r.Body, Limit)`.
 4. **Time of Check to Time of Use (TOCTOU)**: Terutama di OS file sistem. Anda memvalidasi path, memeriksa eksistensinya `os.Stat(path)`, dan jika aman, membacanya. Namun dalam seperseribu detik antara cek dan baca, attacker mengubah *symlink* file tersebut menuju `/etc/shadow`. Di Go, berhati-hatilah dengan fungsi yang mengandalkan file sistem; buka file *descriptor* (handle) secara langsung secepatnya lalu periksa fstat dari file deskriptor tersebut, bukan path string-nya.
@@ -169,15 +214,29 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
-	"path/filepath"
+	"path"
 	"strings"
-	"testing"
 	"unicode/utf8"
 
 	"github.com/go-playground/validator/v10"
 	"github.com/microcosm-cc/bluemonday"
 	"golang.org/x/text/unicode/norm"
+)
+
+// Galat sentinel, supaya pemanggil bisa memetakannya ke kode HTTP dengan
+// errors.Is. Pencocokan substring pesan adalah asersi yang diam-diam berhenti
+// bekerja begitu kalimatnya diubah sedikit — dan pada jalur keamanan, uji yang
+// diam-diam berhenti menguji lebih buruk daripada tidak ada uji.
+var (
+	ErrPayloadTidakValid = errors.New("payload tidak valid")
+	ErrPayloadBerbahaya  = errors.New("payload berbahaya")
+	ErrValidasiStruktur  = errors.New("validasi struktur gagal")
+	ErrJalurBerbahaya    = errors.New("upaya path traversal pada nama berkas")
+)
+
+const (
+	batasBodyProfil = 1 << 20 // 1 MiB
+	batasBio        = 500
 )
 
 // UserProfile merepresentasikan payload yang harus divalidasi dan disanitasi
@@ -206,54 +265,86 @@ func init() {
 	htmlSanitizer = bluemonday.UGCPolicy()
 }
 
-// ParseAndValidateProfile membaca input dari HTTP request, mencegah payload raksasa,
-// memeriksa encoding, sanitasi path dan XSS, lalu mengembalikan data bersih.
+// ParseAndValidateProfile membaca, membatasi, menormalkan, memvalidasi, dan
+// membersihkan payload profil.
 func ParseAndValidateProfile(ctx context.Context, body io.Reader) (*UserProfile, error) {
-	// Defensive: Pastikan context belum dibatalkan (timeout/closed connection)
 	if err := ctx.Err(); err != nil {
-		return nil, fmt.Errorf("context error before validation: %w", err)
+		return nil, fmt.Errorf("context batal sebelum validasi: %w", err)
 	}
 
 	var req UserProfile
-	
-	// Dekode JSON dengan ketat
-	decoder := json.NewDecoder(body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&req); err != nil {
-		return nil, fmt.Errorf("invalid json payload: %w", err)
+
+	// 0. BATAS UKURAN — lapis PERTAMA pada diagram §2, dan justru yang hilang
+	// dari versi sebelumnya: fungsi menerima io.Reader telanjang tanpa batas
+	// apa pun, sehingga satu body raksasa cukup untuk menghabiskan memori
+	// proses. Seluruh lapisan berikutnya baru berjalan setelah body dibaca.
+	//
+	// Di handler HTTP, http.MaxBytesReader tetap WAJIB dipasang JUGA: ia
+	// menghentikan pembacaan di lapisan server dan menutup koneksi dengan
+	// galat yang jelas, sedangkan LimitReader di sini memotong diam-diam
+	// (yang muncul sebagai galat sintaks JSON) dan hanya melindungi fungsi ini
+	// bila dipanggil dari tempat lain.
+	dec := json.NewDecoder(io.LimitReader(body, batasBodyProfil))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrPayloadTidakValid, err)
+	}
+	// Tolak apa pun SESUDAH dokumen JSON pertama. Decode hanya membaca satu
+	// nilai dan mengabaikan sisanya tanpa keluhan: `{...}{"is_admin":true}`
+	// lolos, dan perantara yang mem-parse dokumen KEDUA melihat isi yang
+	// sama sekali berbeda dari yang dilihat aplikasi ini.
+	if err := dec.Decode(new(json.RawMessage)); !errors.Is(err, io.EOF) {
+		return nil, fmt.Errorf("%w: ada data setelah objek JSON", ErrPayloadTidakValid)
 	}
 
-	// 1. Unicode Normalization (Canonicalization)
-	// Penting untuk memastikan karakter direpresentasikan dalam bentuk standar.
+	// 1. Canonicalization: normalisasi Unicode ke bentuk standar.
 	req.Username = norm.NFC.String(req.Username)
 	req.Email = norm.NFC.String(req.Email)
 	req.Bio = norm.NFC.String(req.Bio)
 	req.AvatarFile = norm.NFC.String(req.AvatarFile)
 
-	// 2. Fundamental Safety Check: Reject Null Bytes & Non-UTF8
-	if !isSafeString(req.Username) || !isSafeString(req.Email) || 
-	   !isSafeString(req.Bio) || !isSafeString(req.AvatarFile) {
-		return nil, errors.New("malicious payload: contains null bytes or invalid utf-8")
+	// 2. Tolak null byte dan UTF-8 tidak valid.
+	if !isSafeString(req.Username) || !isSafeString(req.Email) ||
+		!isSafeString(req.Bio) || !isSafeString(req.AvatarFile) {
+		return nil, fmt.Errorf("%w: null byte atau UTF-8 tidak valid", ErrPayloadBerbahaya)
 	}
 
-	// 3. Structural Validation (Validator library)
+	// 3. Validasi struktural.
 	if err := validate.Struct(req); err != nil {
-		return nil, fmt.Errorf("structural validation failed: %w", err)
+		return nil, fmt.Errorf("%w: %v", ErrValidasiStruktur, err)
 	}
 
-	// 4. Sanitization (XSS Prevention on Bio)
+	// 4. Sanitasi XSS.
+	//
+	// Perhatikan urutan dan akibatnya: sanitizer bisa MEMPERBESAR string —
+	// `<` menjadi `&lt;`, satu karakter jadi empat. Panjang yang baru saja
+	// lolos `max=500` bisa membengkak sampai empat kali lipat sesudahnya, dan
+	// bila kolom basis datanya `varchar(500)`, kegagalannya muncul jauh dari
+	// sini sebagai galat penyisipan yang membingungkan.
 	req.Bio = htmlSanitizer.Sanitize(req.Bio)
-
-	// 5. Canonicalization (Path Traversal Prevention on AvatarFile)
-	// filepath.Clean menormalisasi path (menghapus ../ dan ./)
-	cleanPath := filepath.Clean(req.AvatarFile)
-	// Jika file asal berbeda dengan base file-nya, berarti ada path structure yang dicoba diinput.
-	// misal: "dir/image.png" != "image.png"
-	if cleanPath != req.AvatarFile || filepath.Base(cleanPath) != cleanPath {
-		return nil, errors.New("malicious payload: path traversal attempt detected in filename")
+	if utf8.RuneCountInString(req.Bio) > batasBio {
+		return nil, fmt.Errorf("%w: bio melebihi batas setelah sanitasi", ErrValidasiStruktur)
 	}
 
-	// Di sini, req sudah aman dari injeksi dasar, XSS, dan Path traversal
+	// 5. Nama berkas.
+	//
+	// Dipakai `path`, BUKAN `path/filepath`: masukannya berasal dari HTTP dan
+	// selalu bersemantik garis miring depan, sedangkan filepath berperilaku
+	// berbeda di Windows (backslash sebagai pemisah) sehingga hasil
+	// pemeriksaan bergantung pada OS tempat kode dijalankan.
+	bersih := path.Clean(req.AvatarFile)
+	switch {
+	case bersih != req.AvatarFile: // ada yang berubah = ada struktur path
+		return nil, ErrJalurBerbahaya
+	case bersih != path.Base(bersih): // memuat direktori
+		return nil, ErrJalurBerbahaya
+	case strings.HasPrefix(bersih, "."):
+		// Menangkap "." dan ".." — keduanya LOLOS pemeriksaan Base di atas,
+		// karena path.Base("..") mengembalikan ".." apa adanya. Sekaligus
+		// menolak berkas tersembunyi semacam ".env".
+		return nil, ErrJalurBerbahaya
+	}
+
 	return &req, nil
 }
 
@@ -265,105 +356,133 @@ func isSafeString(s string) bool {
 	return utf8.ValidString(s)
 }
 
-// ==========================================
-// Unit Tests (Testing Security Boundaries)
-// ==========================================
+```
 
-func TestParseAndValidateProfile_SecurityBoundaries(t *testing.T) {
+```go
+package security
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"testing"
+)
+
+func TestParseAndValidateProfile_BatasKeamanan(t *testing.T) {
 	tests := []struct {
-		name      string
-		payload   string
-		expectErr bool
-		errString string // Substring expected in error
-		check     func(t *testing.T, res *UserProfile)
+		name    string
+		payload string
+		// Sentinel, bukan substring. Uji lama mencocokkan teks pesan — asersi
+		// yang berhenti bekerja tanpa suara begitu kalimatnya diubah sedikit,
+		// dan pada jalur keamanan itu lebih buruk daripada tidak ada uji.
+		mauGalat error
+		periksa  func(t *testing.T, res *UserProfile)
 	}{
 		{
-			name: "Valid input (Happy Path)",
+			name:    "jalur normal",
 			payload: `{"username": "johndoe", "email": "john@example.com", "bio": "Hello world", "avatar_file": "profile.png"}`,
-			expectErr: false,
-			check: func(t *testing.T, res *UserProfile) {
+			periksa: func(t *testing.T, res *UserProfile) {
 				if res.Username != "johndoe" {
-					t.Errorf("expected username johndoe, got %s", res.Username)
+					t.Errorf("Username = %q, mau johndoe", res.Username)
 				}
 			},
 		},
 		{
-			name: "Reflected XSS Sanitization Boundary",
-			// Attacker injects malicious JS and an iframe
+			name:    "sanitasi XSS",
 			payload: `{"username": "attacker", "email": "att@example.com", "bio": "<p>My Bio</p><script>alert(1)</script><iframe src='javascript:alert(1)'></iframe>", "avatar_file": "img.png"}`,
-			expectErr: false, // Disanitasi (diubah), bukan ditolak
-			check: func(t *testing.T, res *UserProfile) {
-				if strings.Contains(res.Bio, "<script>") || strings.Contains(res.Bio, "<iframe>") {
-					t.Errorf("XSS sanitization failed, dangerous tags persisted: %s", res.Bio)
+			periksa: func(t *testing.T, res *UserProfile) {
+				// Pencocokan TANPA kurung tutup. Uji lama mencari "<iframe>"
+				// sementara payload-nya berisi "<iframe src=..." — asersi itu
+				// tidak mungkin gagal, bahkan bila sanitizer sama sekali tidak
+				// menyentuh tag iframe.
+				rendah := strings.ToLower(res.Bio)
+				for _, dilarang := range []string{"<script", "<iframe", "javascript:", "onerror", "onclick"} {
+					if strings.Contains(rendah, dilarang) {
+						t.Errorf("sanitasi gagal, %q masih ada: %s", dilarang, res.Bio)
+					}
 				}
 				if !strings.Contains(res.Bio, "<p>My Bio</p>") {
-					t.Errorf("Sanitizer removed safe tags too aggressively: %s", res.Bio)
+					t.Errorf("tag aman ikut terhapus: %s", res.Bio)
 				}
 			},
 		},
 		{
-			name: "Path Traversal Boundary (Dot-Dot-Slash)",
-			payload: `{"username": "attacker", "email": "att@example.com", "bio": "Bio", "avatar_file": "../../../etc/passwd"}`,
-			expectErr: true,
-			errString: "path traversal attempt",
-			check: nil,
+			name:     "path traversal ../",
+			payload:  `{"username": "attacker", "email": "att@example.com", "bio": "Bio", "avatar_file": "../../../etc/passwd"}`,
+			mauGalat: ErrJalurBerbahaya,
 		},
 		{
-			name: "Path Traversal Boundary (Absolute Path)",
-			payload: `{"username": "attacker", "email": "att@example.com", "bio": "Bio", "avatar_file": "/var/www/secret.key"}`,
-			expectErr: true,
-			errString: "path traversal attempt",
-			check: nil,
+			name:     "path absolut",
+			payload:  `{"username": "attacker", "email": "att@example.com", "bio": "Bio", "avatar_file": "/var/www/secret.key"}`,
+			mauGalat: ErrJalurBerbahaya,
 		},
 		{
-			name: "Null Byte Injection (C-string bypass)",
+			// LOLOS pada versi lama: Clean("..") == ".." dan Base("..") == "..",
+			// jadi kedua pemeriksaannya sama-sama terpenuhi dan nilai diterima.
+			name:     "titik-titik telanjang",
+			payload:  `{"username": "attacker", "email": "att@example.com", "bio": "Bio", "avatar_file": ".."}`,
+			mauGalat: ErrJalurBerbahaya,
+		},
+		{
+			name:     "berkas tersembunyi",
+			payload:  `{"username": "attacker", "email": "att@example.com", "bio": "Bio", "avatar_file": ".env"}`,
+			mauGalat: ErrJalurBerbahaya,
+		},
+		{
+			name: "null byte",
 			payload: `{"username": "admin\u0000", "email": "att@example.com", "bio": "Bio", "avatar_file": "img.png"}`,
-			expectErr: true,
-			errString: "contains null bytes",
-			check: nil,
+			mauGalat: ErrPayloadBerbahaya,
 		},
 		{
-			name: "Structural Boundary (SQL Injection payload bypassed by length/type)",
-			// Username memiliki spasi dan quote (bukan alphanum), harusnya direject struct validation
-			payload: `{"username": "admin' OR 1=1--", "email": "att@example.com", "bio": "Bio", "avatar_file": "img.png"}`,
-			expectErr: true,
-			errString: "structural validation failed",
-			check: nil,
+			// Username memuat spasi dan kutip, jadi bukan alphanum — ditolak
+			// validasi struktur jauh sebelum menyentuh lapisan basis data.
+			name:     "muatan SQLi ditolak validasi struktur",
+			payload:  `{"username": "admin' OR 1=1--", "email": "att@example.com", "bio": "Bio", "avatar_file": "img.png"}`,
+			mauGalat: ErrValidasiStruktur,
 		},
 		{
-			name: "Unknown Fields Injection (Mass Assignment attempt)",
-			// Attacker mencoba mengubah is_admin
-			payload: `{"username": "johndoe", "email": "j@ex.com", "bio": "Hi", "avatar_file": "f.png", "is_admin": true}`,
-			expectErr: true,
-			errString: "invalid json payload", // due to DisallowUnknownFields
-			check: nil,
+			name:     "field tak dikenal (mass assignment)",
+			payload:  `{"username": "johndoe", "email": "j@ex.com", "bio": "Hi", "avatar_file": "f.png", "is_admin": true}`,
+			mauGalat: ErrPayloadTidakValid,
+		},
+		{
+			// Dokumen KEDUA sesudah yang pertama. Decode hanya membaca satu
+			// nilai dan mengabaikan sisanya tanpa keluhan — perantara yang
+			// mem-parse dokumen kedua melihat isi yang berbeda dari yang
+			// dilihat aplikasi ini.
+			name:     "data menyusul setelah objek JSON",
+			payload:  `{"username": "johndoe", "email": "j@ex.com", "bio": "Hi", "avatar_file": "f.png"}{"username": "evil"}`,
+			mauGalat: ErrPayloadTidakValid,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ctx := context.Background()
-			bodyReader := strings.NewReader(tt.payload)
-			
-			res, err := ParseAndValidateProfile(ctx, bodyReader)
-			if tt.expectErr {
-				if err == nil {
-					t.Errorf("Expected error but got nil")
-					return
+			res, err := ParseAndValidateProfile(context.Background(), strings.NewReader(tt.payload))
+			if tt.mauGalat != nil {
+				if !errors.Is(err, tt.mauGalat) {
+					t.Fatalf("galat = %v, mau %v", err, tt.mauGalat)
 				}
-				if !strings.Contains(err.Error(), tt.errString) {
-					t.Errorf("Expected error containing %q, got: %v", tt.errString, err)
-				}
-			} else {
-				if err != nil {
-					t.Errorf("Did not expect error but got: %v", err)
-					return
-				}
-				if tt.check != nil {
-					tt.check(t, res)
-				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("tidak mengharapkan galat: %v", err)
+			}
+			if tt.periksa != nil {
+				tt.periksa(t, res)
 			}
 		})
+	}
+}
+
+// Body raksasa WAJIB ditolak, bukan dibaca sampai habis. Tanpa batas ini,
+// lapis PERTAMA pada diagram §2 tidak ada sama sekali.
+func TestBodyRaksasaDitolak(t *testing.T) {
+	besar := `{"username":"abc","email":"a@b.co","bio":"` +
+		strings.Repeat("x", batasBodyProfil+1024) + `","avatar_file":"a.png"}`
+
+	if _, err := ParseAndValidateProfile(context.Background(), strings.NewReader(besar)); err == nil {
+		t.Fatal("body melebihi batas diterima; tidak ada pembatas ukuran")
 	}
 }
 ```
@@ -385,6 +504,9 @@ func TestParseAndValidateProfile_SecurityBoundaries(t *testing.T) {
 | Proses anak dijalankan dengan argumen tak terduga | `exec.Command` dengan shell | Command injection |
 | Lonjakan `400` dari satu sumber | payload yang ditolak | Ada yang sedang menguji batas validasi |
 | Panic pada input tertentu | apakah jalur itu di-fuzz | Ada bentuk input yang belum pernah dicoba |
+| Memori melonjak pada satu endpoint | ada tidaknya `MaxBytesReader` | Body tanpa batas dibaca utuh ke memori |
+| Penyisipan DB gagal padahal validasi lolos | panjang SESUDAH sanitasi | Sanitizer memperbesar string setelah `max` diperiksa |
+| Berkas terbaca padahal namanya polos | symlink di dalam direktori unggahan | Pemeriksaan string tidak menyentuh symlink |
 
 ```bash
 # gosec: G201/G202 SQL string, G204 subprocess, G304 path dari variabel
