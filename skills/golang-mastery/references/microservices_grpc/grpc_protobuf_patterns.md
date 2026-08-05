@@ -6,7 +6,14 @@
 Protocol Buffers (Protobuf) adalah mekanisme dari Google untuk serialisasi struktur data yang independen dari bahasa pemrograman dan platform. Dalam arsitektur microservices Go, Protobuf v3 (`proto3`) digunakan sebagai *Interface Definition Language* (IDL) tunggal bersama gRPC.
 
 Keunggulan dan konsep kritikal dalam `proto3`:
-- **Optional by Default**: Semua field dalam proto3 secara implisit opsional (kecuali jika diset `required` di proto2, yang sudah ditinggalkan). Ini sangat krusial untuk *backward/forward compatibility*.
+- **Tidak ada presence pada skalar — bukan "opsional"**: Ini sering disalahpahami dengan akibat yang mahal. Field skalar `proto3` **tidak menyimpan informasi apakah ia diisi**. `int32 umur = 1` yang tidak dikirim dan yang dikirim bernilai `0` menghasilkan byte yang **identik**; di Go keduanya menjadi `0`. Anda tidak bisa membedakan "tidak disetel" dari "disetel ke nol".
+
+  Ini penting justru pada operasi `Update`: payload dengan `umur: 0` bisa berarti "jangan sentuh umur" atau "set umur ke 0", dan server tidak punya cara mengetahuinya. Tiga jalan keluar:
+  - **kata kunci `optional`** (protobuf 3.15+) — memberi presence eksplisit, dan inilah pilihan bawaan sekarang;
+  - **wrapper types** (`google.protobuf.Int32Value`) — cara lama, masih dipakai di API yang sudah rilis;
+  - **`FieldMask`** — pemanggil menyebutkan field mana yang dimaksud, dan nilai nol menjadi tidak ambigu.
+
+  Yang benar-benar opsional adalah **kompatibilitasnya**: field yang tidak dikenal penerima diabaikan, sehingga versi lama dan baru bisa hidup berdampingan.
 - **Polymorphism dengan `oneof`**: Memungkinkan pendefinisian sekumpulan field di mana hanya salah satu yang bisa diisi pada satu waktu. Sangat ideal untuk *Domain-Driven Design* (DDD) seperti pattern `Result` (Success vs Error).
 - **Well-Known Types (WKT)**: Protobuf memiliki tipe bawaan yang canggih dari paket `google.protobuf`, seperti `Timestamp` (menggantikan int64 epoch time), `Duration`, `Struct` (untuk arbitrary JSON), dan *Wrappers* (seperti `Int32Value` untuk membedakan nilai `0` dan *null* / *unset*).
 - **Field Masks (`google.protobuf.FieldMask`)**: Digunakan secara ekstensif pada operasi `Update` (mirip PATCH di HTTP) untuk memberi tahu server field mana secara spesifik yang diubah, menghindari overwriting akibat *zero value* bawaan Go saat struct di-unmarshal.
@@ -146,11 +153,45 @@ func (s *myUserServer) UpdateUser(ctx context.Context, req *UpdateUserRequest) (
 		return nil, status.Error(codes.InvalidArgument, "user payload is required")
 	}
 
-	// Defensive check: Masking paths harus ada
+	// SATU KONTRAK GALAT, BUKAN DUA.
+	//
+	// Versi sebelumnya melaporkan "mask kosong" lewat oneof error DENGAN
+	// `nil` sebagai galat gRPC, tetapi melaporkan "path tidak valid" lewat
+	// status.Error. Dua cara untuk kelas kesalahan yang sama.
+	//
+	// Akibat yang lebih buruk daripada sekadar tidak konsisten: RPC yang
+	// mengembalikan nil error terlihat SUKSES bagi seluruh lapisan di
+	// atasnya. Interceptor metrik menghitungnya sebagai OK, tracing
+	// menandainya hijau, circuit breaker tidak melihat apa-apa. Kegagalan
+	// validasi menjadi tidak terlihat di dasbor mana pun.
+	//
+	// Aturannya: kegagalan yang disebabkan pemanggil -> status.Error dengan
+	// kode yang tepat. oneof Result dipakai untuk hasil BISNIS yang sah
+	// (mis. "ditolak karena kuota habis"), bukan untuk galat protokol.
 	if req.UpdateMask == nil || len(req.UpdateMask.Paths) == 0 {
-		return &UpdateUserResponse{
-			Result: &UpdateUserResponse_Error{Error: "update_mask is required for partial updates"},
-		}, nil
+		return nil, status.Error(codes.InvalidArgument,
+			"update_mask wajib diisi untuk pembaruan sebagian")
+	}
+
+	// VALIDASI SELURUH PATH LEBIH DULU, baru terapkan.
+	//
+	// Memvalidasi sambil menerapkan berarti path ke-3 yang tidak valid
+	// membatalkan permintaan SETELAH path 1 dan 2 sudah diubah. Di sini
+	// perubahannya masih di memori, tetapi pada repository yang menulis
+	// per-field, itu pembaruan sebagian yang tidak bisa ditarik kembali.
+	const (
+		fieldNama  = "name"
+		fieldEmail = "email"
+	)
+	for _, path := range req.UpdateMask.Paths {
+		switch path {
+		case fieldNama, fieldEmail:
+			// diizinkan
+		case "created_at", "id":
+			return nil, status.Errorf(codes.InvalidArgument, "field %q tidak bisa diubah", path)
+		default:
+			return nil, status.Errorf(codes.InvalidArgument, "field mask tidak dikenal: %q", path)
+		}
 	}
 
 	// Mock data yang sudah ada di database
@@ -161,17 +202,13 @@ func (s *myUserServer) UpdateUser(ctx context.Context, req *UpdateUserRequest) (
 		CreatedAt: timestamppb.Now(),
 	}
 
-	// Mengaplikasikan Masking secara selektif (Patch)
+	// Terapkan setelah SELURUH path terbukti sah.
 	for _, path := range req.UpdateMask.Paths {
 		switch path {
-		case "name":
+		case fieldNama:
 			existingUser.Name = req.User.Name
-		case "email":
+		case fieldEmail:
 			existingUser.Email = req.User.Email
-		case "created_at":
-			return nil, status.Error(codes.InvalidArgument, "field 'created_at' is immutable")
-		default:
-			return nil, status.Errorf(codes.InvalidArgument, "invalid field mask path: %s", path)
 		}
 	}
 

@@ -61,7 +61,30 @@ Urutan eksekusi interceptor adalah sangat krusial. Urutan yang direkomendasikan 
 ## Production-Ready Code & Testing
 Kode berikut mendemonstrasikan implementasi interceptor yang *production-ready* dengan `ChainUnaryInterceptor`, penanganan context, propagasi metadata, serta testing in-memory menggunakan `google.golang.org/grpc/test/bufconn`. 
 
-> **Catatan**: Dalam produksi, struktur `.proto` biasanya di-generate oleh `protoc`. Di sini kita mensimulasikan struct dan interface manual yang semirip mungkin dengan hasil *codegen* tersebut untuk tujuan testing mandiri.
+> ### ⚠ Batas simulasi ini — WAJIB dibaca sebelum menyalin
+>
+> Struct `PingRequest`/`PingResponse` di bawah adalah **struct Go biasa**, bukan `proto.Message`. Itu cukup untuk **membaca** dan memahami bentuk interceptor, tetapi **uji bufconn-nya tidak akan berjalan sebagaimana ditulis**.
+>
+> Alasannya di lapisan codec: codec bawaan `grpc-go` adalah codec protobuf, dan ia menolak apa pun yang bukan `proto.Message` —
+> ```
+> failed to marshal, message is *PingRequest, want proto.Message
+> ```
+> Transport gRPC yang sesungguhnya (termasuk lewat `bufconn`) tidak bisa mengangkut struct biasa.
+>
+> **Tiga jalan keluar, pilih sesuai kebutuhan:**
+>
+> 1. **Uji interceptor secara langsung, tanpa transport.** Ini yang paling tepat untuk menguji logika interceptor, dan paling cepat: interceptor hanyalah fungsi.
+>    ```go
+>    it := AuthInterceptor("rahasia")
+>    ctx := metadata.NewIncomingContext(context.Background(),
+>        metadata.Pairs("authorization", "Bearer rahasia"))
+>    _, err := it(ctx, &PingRequest{}, &grpc.UnaryServerInfo{FullMethod: "/x/Ping"},
+>        func(ctx context.Context, req any) (any, error) { return &PingResponse{}, nil })
+>    ```
+> 2. **Pakai proto hasil generate sungguhan** bila memang ingin menguji end-to-end lewat bufconn.
+> 3. Daftarkan codec kustom untuk uji — jalan yang paling merepotkan, dan jarang sepadan.
+>
+> Butir 1 hampir selalu jawabannya: interceptor tidak perlu jaringan untuk diuji, dan uji tanpa jaringan berjalan dalam mikrodetik.
 
 ```go
 package grpcinterceptors_test

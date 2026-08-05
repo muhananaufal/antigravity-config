@@ -1,6 +1,17 @@
-# gRPC-Gateway: Bridging REST dan gRPC
+# Lapisan HTTP di Depan gRPC: Middleware Stack & gRPC-Gateway
 
-> **Berlaku:** Go 1.22+ (`http.ServeMux` dengan pola metode) · `go-chi/chi` v5 · **Lihat juga:** `microservices_grpc/http_client_production.md` · `microservices_grpc/openapi_ogen_codegen.md` · `observability_resilience/rate_limiting_patterns.md` · `arch_patterns/clean_hexagonal_architecture.md`
+> **Berlaku:** Go 1.22+ (`http.ServeMux` dengan pola metode) · `grpc-gateway` v2 · `go-chi/chi` v5 · **Lihat juga:** `microservices_grpc/http_client_production.md` · `microservices_grpc/openapi_ogen_codegen.md` · `microservices_grpc/pagination_patterns.md` · `security_owasp/web_security_headers.md`
+
+> **Catatan cakupan.** Berkas ini dirutekan dari SKILL.md dengan kata kunci "REST, chi, middleware stack", tetapi isinya berfokus pada **gRPC-Gateway** — jembatan REST/JSON ke gRPC. Keduanya memang satu lapisan (HTTP di depan layanan), tetapi bila yang Anda cari adalah susunan middleware HTTP murni — CORS, CSRF, header keamanan, rate limit, pemetaan galat ke status — tempatnya:
+>
+> | Yang dicari | Berkas |
+> | :--- | :--- |
+> | CORS, CSRF, CSP, HSTS | `security_owasp/web_security_headers.md` |
+> | Rate limiting per rute | `observability_resilience/rate_limiting_patterns.md` |
+> | Pemetaan galat domain ke status HTTP | `arch_patterns/error_handling_strategy.md` |
+> | Cursor/offset pada endpoint daftar | `microservices_grpc/pagination_patterns.md` |
+>
+> Sejak Go 1.22, `http.ServeMux` bawaan sudah mendukung pola metode dan wildcard (`GET /pesanan/{id}`); untuk banyak layanan, router pihak ketiga tidak lagi diperlukan.
 
 ## Konsep dan Internals
 Dalam adopsi gRPC (*HTTP/2 + Protobuf*), masalah terbesar biasanya adalah berhadapan dengan *Legacy Clients* (seperti Browser lama atau eksternal Webhook) yang hanya mampu mengirim permintaan standar **RESTful (HTTP/1.1 + JSON)**. 
@@ -45,17 +56,30 @@ Faktor kunci pada transisi REST ke gRPC ini mencakup:
 ```
 
 ## Production-Ready Code & Testing
-Skrip lengkap di bawah membuktikan bagaimana Anda menyatukan `runtime.ServeMux` (Gateway HTTP) dengan `bufconn` (In-Memory gRPC), kemudian mengujinya sebagai klien HTTP JSON melalui modul `httptest` Go standar, yang memperlihatkan propagasi *Context Deadline* dan HTTP code.
+
+> ### ⚠ Kode di bawah ILUSTRATIF, bukan uji yang bisa dijalankan
+>
+> `UserRequest`/`UserResponse` adalah struct Go biasa, bukan `proto.Message`. Codec bawaan `grpc-go` menolaknya, sehingga `conn.Invoke` gagal sebelum menyentuh jaringan:
+> ```
+> failed to marshal, message is *UserRequest, want proto.Message
+> ```
+> Selain itu, `Handler` di `ServiceDesc` di bawah **tidak pernah memanggil `dec`** dan mengembalikan `Id: "123"` yang di-hardcode — sehingga uji "404" tidak akan pernah menerima `999`.
+>
+> Bacalah bagian ini sebagai **peta bentuk** gRPC-Gateway: bagaimana pola URL dipetakan, bagaimana `runtime.HTTPStatusFromCode` menerjemahkan kode gRPC ke status HTTP, dan di mana middleware HTTP membungkusnya. Untuk uji yang benar-benar berjalan, pakai proto hasil generate dan `*.pb.gw.go` yang sesungguhnya.
+
+Skrip di bawah menunjukkan bagaimana `runtime.ServeMux` (Gateway HTTP) disatukan dengan `bufconn` (gRPC in-memory), lalu diakses sebagai klien HTTP JSON lewat `httptest`.
 
 ```go
 package grpcgateway_test
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
@@ -65,6 +89,27 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 )
+
+// pesanAman memetakan kode gRPC ke pesan yang boleh dilihat klien.
+//
+// Satu tempat, bukan tersebar di tiap handler -- itulah yang mencegah
+// 404 dan 500 tertukar secara acak antar endpoint.
+func pesanAman(c codes.Code) string {
+	switch c {
+	case codes.NotFound:
+		return "Data yang diminta tidak ada."
+	case codes.InvalidArgument:
+		return "Permintaan tidak valid."
+	case codes.PermissionDenied:
+		return "Anda tidak punya akses ke sumber daya ini."
+	case codes.Unauthenticated:
+		return "Autentikasi diperlukan."
+	case codes.DeadlineExceeded:
+		return "Permintaan melebihi batas waktu."
+	default:
+		return "Terjadi kesalahan pada server."
+	}
+}
 
 // ==============================================================================
 // 1. SIMULASI PROTO-GENERATED CODE (WITH HTTP ANNOTATIONS)
@@ -107,15 +152,25 @@ func RegisterUserServiceHandlerClient(ctx context.Context, mux *runtime.ServeMux
 		resp := new(UserResponse)
 		err := conn.Invoke(req.Context(), "/api.v1.UserService/GetUser", &UserRequest{Id: idParam}, resp)
 		
-		// Jika error/sukses, format ulang ke JSON HTTP (diwakili fungsi internal runtime di production)
 		if err != nil {
 			st, _ := status.FromError(err)
-			http.Error(w, st.Message(), runtime.HTTPStatusFromCode(st.Code()))
+			// Pesan gRPC internal TIDAK diteruskan mentah ke klien: ia rutin
+			// menyebut nama tabel, host, atau nilai yang gagal. Yang menyeberang
+			// hanya kode status dan pesan yang aman.
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(runtime.HTTPStatusFromCode(st.Code()))
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"kode":  st.Code().String(),
+				"pesan": pesanAman(st.Code()),
+			})
 			return
 		}
-		
+
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"name":"` + resp.Name + `"}`))
+		// JANGAN merangkai JSON dengan penggabungan string. Satu tanda kutip
+		// atau backslash di dalam nilai menghasilkan JSON rusak -- dan bila
+		// nilainya berasal dari input pengguna, itu injeksi.
+		_ = json.NewEncoder(w).Encode(map[string]string{"name": resp.Name})
 	})
 	return nil
 }
@@ -195,9 +250,16 @@ func TestGRPCGateway_HTTPBridge(t *testing.T) {
 			t.Errorf("Expected 404 Not Found, got %d", resp.StatusCode)
 		}
 		
-		body, _ := io.ReadAll(resp.Body)
-		if string(body) != "user 999 not found in database\n" {
-			t.Errorf("Unexpected error body: %s", string(body))
+		// Uji memeriksa KODE, bukan kalimat internal. Meng-assert
+		// "user 999 not found in database" justru MENGUNCI kebocoran
+		// informasi sebagai perilaku yang diharapkan.
+		var badan struct{ Kode, Pesan string }
+		_ = json.NewDecoder(resp.Body).Decode(&badan)
+		if badan.Kode != codes.NotFound.String() {
+			t.Errorf("mau kode NotFound, dapat %q", badan.Kode)
+		}
+		if strings.Contains(badan.Pesan, "database") {
+			t.Errorf("detail internal bocor ke klien: %q", badan.Pesan)
 		}
 	})
 }
