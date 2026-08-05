@@ -85,10 +85,10 @@ Shrinking (fitur kunci rapid):
 package testingquality
 
 import (
-	"math"
-	"sort"
+	"errors"
+	"fmt"
+	"slices"
 	"testing"
-	"time"
 
 	"pgregory.net/rapid"
 )
@@ -96,92 +96,151 @@ import (
 // --- Domain: Inventory Price Calculator ---
 
 // DiscountTier merepresentasikan tier diskon berdasarkan quantity.
+//
+// Diskon dinyatakan dalam BASIS POIN (1/100 persen) bertipe int, bukan
+// float64. Alasannya bukan kerapian — lihat catatan pada Calculate.
 type DiscountTier struct {
-	MinQty   int
-	Discount float64 // 0.0 – 1.0 (0% – 100%)
+	MinQty      int
+	DiskonBasis int // 0–10000 basis poin = 0%–100%
 }
 
 // PriceCalculator menghitung harga total dengan diskon berbasis tier.
 type PriceCalculator struct {
-	tiers []DiscountTier // harus diurutkan ascending by MinQty
+	tiers []DiscountTier // selalu terurut menaik berdasarkan MinQty
 }
 
 // NewPriceCalculator membuat kalkulator baru dengan tier yang valid.
 func NewPriceCalculator(tiers []DiscountTier) (*PriceCalculator, error) {
 	if len(tiers) == 0 {
-		return nil, errors.New("at least one tier required")
+		return nil, errors.New("minimal satu tier diperlukan")
 	}
-	// Sort by MinQty
-	sort.Slice(tiers, func(i, j int) bool {
-		return tiers[i].MinQty < tiers[j].MinQty
-	})
+
+	// Divalidasi SEBELUM diurutkan, dan atas SALINAN.
+	//
+	// Versi sebelumnya mengurutkan slice milik PEMANGGIL di tempat, lalu
+	// menyimpan slice yang sama itu di dalam struct. Dua akibatnya:
+	//   - urutan slice pemanggil berubah sebagai efek samping tersembunyi;
+	//   - pemanggil tetap memegang slice yang sama, sehingga ia bisa
+	//     mengubahnya kapan saja dan MEMATAHKAN invarian terurut yang
+	//     diandalkan Calculate — tanpa memanggil satu pun metode.
+	// Kelas cacat seperti inilah yang paling sering ditemukan property test,
+	// dan berkas tentang property testing sebaiknya tidak memuatnya.
 	for _, t := range tiers {
-		if t.Discount < 0 || t.Discount > 1 {
-			return nil, fmt.Errorf("invalid discount %v: must be [0, 1]", t.Discount)
+		if t.DiskonBasis < 0 || t.DiskonBasis > 10_000 {
+			return nil, fmt.Errorf("diskon %d di luar rentang basis poin [0, 10000]", t.DiskonBasis)
 		}
 		if t.MinQty < 0 {
-			return nil, fmt.Errorf("invalid minQty %d: must be >= 0", t.MinQty)
+			return nil, fmt.Errorf("minQty %d tidak boleh negatif", t.MinQty)
 		}
 	}
-	return &PriceCalculator{tiers: tiers}, nil
+
+	salinan := slices.Clone(tiers)
+	slices.SortFunc(salinan, func(a, b DiscountTier) int { return a.MinQty - b.MinQty })
+	return &PriceCalculator{tiers: salinan}, nil
 }
 
-// Calculate menghitung total harga untuk quantity unit dengan harga per unit.
-func (c *PriceCalculator) Calculate(unitPrice float64, qty int) (float64, error) {
-	if unitPrice < 0 {
-		return 0, fmt.Errorf("unitPrice must be non-negative, got %v", unitPrice)
+// Calculate menghitung total dalam SATUAN MINOR (sen) dan mengembalikan int64.
+//
+// Ini bukan sekadar preferensi gaya. Versi sebelumnya bekerja dengan float64
+// lalu membulatkan dengan `math.Round(total*100)/100`, dan pembulatan itu
+// MEMATAHKAN properti yang diuji berkas ini sendiri:
+//
+//	unitPrice = 100.004
+//	qty 1 -> 100.004 -> dibulatkan 100.00 -> biaya per unit 100.000
+//	qty 2 -> 200.008 -> dibulatkan 200.01 -> biaya per unit 100.005
+//
+// Biaya per unit NAIK meski diskonnya sama. Uji propertinya memakai toleransi
+// tetap 0.001 yang lebih kecil dari galat itu, sehingga ia akan gagal begitu
+// rapid kebetulan membangkitkan nilai semacam ini — uji yang flaky karena
+// propertinya memang tidak benar, bukan karena kodenya salah. Dengan aritmetika
+// bilangan bulat, propertinya benar secara eksak dan toleransinya tidak perlu.
+func (c *PriceCalculator) Calculate(hargaSatuanSen int64, qty int) (int64, error) {
+	if hargaSatuanSen < 0 {
+		return 0, fmt.Errorf("harga satuan tidak boleh negatif: %d", hargaSatuanSen)
 	}
 	if qty <= 0 {
-		return 0, fmt.Errorf("qty must be positive, got %d", qty)
+		return 0, fmt.Errorf("qty harus positif: %d", qty)
 	}
 
-	discount := 0.0
-	for _, tier := range c.tiers {
+	diskon := 0
+	for _, tier := range c.tiers { // terurut menaik: yang terakhir cocok = tertinggi
 		if qty >= tier.MinQty {
-			discount = tier.Discount
+			diskon = tier.DiskonBasis
 		}
 	}
 
-	total := unitPrice * float64(qty) * (1 - discount)
-	// Round ke 2 desimal untuk harga uang
-	return math.Round(total*100) / 100, nil
+	kotor := hargaSatuanSen * int64(qty)
+	return kotor - (kotor*int64(diskon))/10_000, nil
 }
 
 // --- Unit Tests (Contoh yang Diketahui) ---
 
-func TestPriceCalculator_KnownCases(t *testing.T) {
-	tiers := []DiscountTier{
-		{MinQty: 1, Discount: 0.0},   // 0% untuk 1+ unit
-		{MinQty: 10, Discount: 0.10}, // 10% untuk 10+ unit
-		{MinQty: 50, Discount: 0.20}, // 20% untuk 50+ unit
+func tierUji() []DiscountTier {
+	return []DiscountTier{
+		{MinQty: 1, DiskonBasis: 0},     // 0% untuk 1+ unit
+		{MinQty: 10, DiskonBasis: 1000}, // 10% untuk 10+ unit
+		{MinQty: 50, DiskonBasis: 2000}, // 20% untuk 50+ unit
 	}
-	calc, err := NewPriceCalculator(tiers)
+}
+
+func TestPriceCalculator_KasusDiketahui(t *testing.T) {
+	calc, err := NewPriceCalculator(tierUji())
 	if err != nil {
 		t.Fatalf("NewPriceCalculator: %v", err)
 	}
 
 	tests := []struct {
-		name      string
-		unitPrice float64
-		qty       int
-		want      float64
+		nama    string
+		hargaSen int64
+		qty      int
+		mau      int64
 	}{
-		{"1 unit no discount", 100.0, 1, 100.00},
-		{"10 units 10% off", 100.0, 10, 900.00},
-		{"50 units 20% off", 100.0, 50, 4000.00},
-		{"100 units still 20% off", 10.0, 100, 800.00},
+		{"1 unit tanpa diskon", 10_000, 1, 10_000},
+		{"10 unit diskon 10%", 10_000, 10, 90_000},
+		{"50 unit diskon 20%", 10_000, 50, 400_000},
+		{"100 unit tetap 20%", 1_000, 100, 80_000},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := calc.Calculate(tt.unitPrice, tt.qty)
+		t.Run(tt.nama, func(t *testing.T) {
+			got, err := calc.Calculate(tt.hargaSen, tt.qty)
 			if err != nil {
 				t.Fatalf("Calculate: %v", err)
 			}
-			if math.Abs(got-tt.want) > 0.01 {
-				t.Errorf("Calculate(%v, %d) = %v, want %v", tt.unitPrice, tt.qty, got, tt.want)
+			// Perbandingan EKSAK. Toleransi tidak diperlukan lagi begitu
+			// perhitungannya memakai bilangan bulat — dan toleransi yang
+			// tidak diperlukan menyembunyikan kesalahan sebesar toleransinya.
+			if got != tt.mau {
+				t.Errorf("Calculate(%d, %d) = %d, mau %d", tt.hargaSen, tt.qty, got, tt.mau)
 			}
 		})
+	}
+}
+
+// Invarian terurut milik kalkulator TIDAK boleh bisa dipatahkan pemanggil.
+func TestTierPemanggilTidakMemengaruhiKalkulator(t *testing.T) {
+	tiers := tierUji()
+	calc, err := NewPriceCalculator(tiers)
+	if err != nil {
+		t.Fatalf("NewPriceCalculator: %v", err)
+	}
+
+	sebelum, err := calc.Calculate(10_000, 50)
+	if err != nil {
+		t.Fatalf("Calculate: %v", err)
+	}
+
+	// Pemanggil merusak slice-nya sendiri sesudah kalkulator dibuat.
+	for i := range tiers {
+		tiers[i].DiskonBasis = 9_999
+	}
+
+	sesudah, err := calc.Calculate(10_000, 50)
+	if err != nil {
+		t.Fatalf("Calculate: %v", err)
+	}
+	if sebelum != sesudah {
+		t.Fatalf("perubahan slice pemanggil mengubah hasil kalkulator: %d -> %d", sebelum, sesudah)
 	}
 }
 
@@ -190,36 +249,38 @@ func TestPriceCalculator_KnownCases(t *testing.T) {
 // TestProperty_HigherQtyNeverHigherUnitCost memverifikasi bahwa membeli lebih banyak
 // tidak pernah menghasilkan harga per unit yang lebih tinggi (monotonic discount).
 func TestProperty_HigherQtyNeverHigherUnitCost(t *testing.T) {
-	tiers := []DiscountTier{
-		{MinQty: 1, Discount: 0.0},
-		{MinQty: 10, Discount: 0.10},
-		{MinQty: 50, Discount: 0.20},
+	calc, err := NewPriceCalculator(tierUji())
+	if err != nil {
+		t.Fatalf("NewPriceCalculator: %v", err) // galat konstruktor jangan dibuang
 	}
-	calc, _ := NewPriceCalculator(tiers)
 
 	rapid.Check(t, func(t *rapid.T) {
-		// Generate dua quantity: qtyA < qtyB
 		qtyA := rapid.IntRange(1, 100).Draw(t, "qtyA")
 		qtyB := rapid.IntRange(qtyA, 200).Draw(t, "qtyB") // qtyB >= qtyA
-		unitPrice := rapid.Float64Range(0.01, 1000.0).Draw(t, "unitPrice")
+		hargaSen := rapid.Int64Range(1, 100_000).Draw(t, "hargaSen")
 
-		totalA, err := calc.Calculate(unitPrice, qtyA)
+		// Generator sudah menjamin masukan valid, jadi galat di sini berarti
+		// ada yang salah — bukan alasan untuk t.Skip. Versi sebelumnya
+		// memasang cabang Skip yang TIDAK PERNAH terjangkau, yang menyamarkan
+		// kegagalan sungguhan sebagai kasus yang dilewati.
+		totalA, err := calc.Calculate(hargaSen, qtyA)
 		if err != nil {
-			t.Skip() // skip invalid input
+			t.Fatalf("Calculate(%d, %d): %v", hargaSen, qtyA, err)
 		}
-		totalB, err := calc.Calculate(unitPrice, qtyB)
+		totalB, err := calc.Calculate(hargaSen, qtyB)
 		if err != nil {
-			t.Skip()
+			t.Fatalf("Calculate(%d, %d): %v", hargaSen, qtyB, err)
 		}
 
-		// Properti: harga per unit B tidak boleh lebih mahal dari A
-		unitCostA := totalA / float64(qtyA)
-		unitCostB := totalB / float64(qtyB)
-
-		if unitCostB > unitCostA+0.001 { // tolerance untuk floating point
-			t.Fatalf("unit cost increased with higher qty!\n"+
-				"  qty=%d unitCost=%.4f vs qty=%d unitCost=%.4f",
-				qtyA, unitCostA, qtyB, unitCostB)
+		// Properti: biaya per unit tidak pernah naik seiring kuantitas.
+		//
+		// Dibandingkan dengan perkalian silang, bukan pembagian: totalA/qtyA
+		// versus totalB/qtyB sebagai pecahan bilangan bulat, tanpa pembulatan
+		// dan tanpa toleransi. Perbandingan pecahan yang diubah menjadi float
+		// hanya memindahkan masalah yang baru saja dihilangkan.
+		if totalB*int64(qtyA) > totalA*int64(qtyB) {
+			t.Fatalf("biaya per unit NAIK: qty=%d total=%d vs qty=%d total=%d",
+				qtyA, totalA, qtyB, totalB)
 		}
 	})
 }
@@ -232,72 +293,79 @@ func TestProperty_TotalAlwaysNonNegative(t *testing.T) {
 		tiers := make([]DiscountTier, numTiers)
 		for i := range tiers {
 			tiers[i] = DiscountTier{
-				MinQty:   rapid.IntRange(0, 1000).Draw(t, fmt.Sprintf("minQty_%d", i)),
-				Discount: rapid.Float64Range(0, 1).Draw(t, fmt.Sprintf("discount_%d", i)),
+				MinQty:      rapid.IntRange(0, 1000).Draw(t, fmt.Sprintf("minQty_%d", i)),
+				DiskonBasis: rapid.IntRange(0, 10_000).Draw(t, fmt.Sprintf("diskon_%d", i)),
 			}
 		}
 
+		// Generator hanya menghasilkan konfigurasi yang sah, jadi galat di
+		// sini adalah kegagalan sungguhan.
 		calc, err := NewPriceCalculator(tiers)
 		if err != nil {
-			t.Skip() // invalid tier config — skip
+			t.Fatalf("NewPriceCalculator(%v): %v", tiers, err)
 		}
 
-		unitPrice := rapid.Float64Range(0, 10000).Draw(t, "unitPrice")
+		hargaSen := rapid.Int64Range(0, 1_000_000).Draw(t, "hargaSen")
 		qty := rapid.IntRange(1, 1000).Draw(t, "qty")
 
-		total, err := calc.Calculate(unitPrice, qty)
+		total, err := calc.Calculate(hargaSen, qty)
 		if err != nil {
-			t.Skip()
+			t.Fatalf("Calculate(%d, %d): %v", hargaSen, qty, err)
 		}
 
 		// Properti: total tidak pernah negatif
 		if total < 0 {
-			t.Fatalf("total price negative: %.4f (unitPrice=%.2f, qty=%d)", total, unitPrice, qty)
+			t.Fatalf("total negatif: %d (hargaSen=%d, qty=%d)", total, hargaSen, qty)
 		}
 
-		// Properti: total tidak melebihi tanpa diskon
-		maxPossible := unitPrice * float64(qty)
-		if total > maxPossible+0.01 {
-			t.Fatalf("total %.4f exceeds max possible %.4f", total, maxPossible)
+		// Properti: total tidak pernah melebihi harga tanpa diskon.
+		// Perbandingan eksak, tanpa toleransi +0.01 yang dulu diperlukan
+		// hanya untuk menutupi galat pembulatan float64.
+		maksimum := hargaSen * int64(qty)
+		if total > maksimum {
+			t.Fatalf("total %d melebihi harga tanpa diskon %d", total, maksimum)
 		}
 	})
 }
 
-// TestProperty_SortStable_ModelBased menggunakan pendekatan "oracle model":
-// bandingkan implementasi custom kita dengan referensi stdlib.
-func TestProperty_SortStable_ModelBased(t *testing.T) {
+// TestProperty_SortModelBased memakai pendekatan "oracle model": bandingkan
+// implementasi sendiri dengan referensi pustaka standar.
+//
+// Agar pendekatan ini berarti, yang diuji WAJIB implementasi yang berbeda
+// dari oracle-nya. Versi sebelumnya menulis `MyCustomSort` yang isinya hanya
+// memanggil `sort.Ints`, sementara oracle-nya juga `sort.Ints` — uji itu
+// membandingkan pustaka standar dengan dirinya sendiri dan TIDAK MUNGKIN
+// gagal, berapa pun kasus yang dibangkitkan rapid. Contoh unggulan
+// oracle-model di berkas tentang property testing sebaiknya benar-benar
+// menguji sesuatu.
+func TestProperty_SortModelBased(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
-		// Generate slice of int
 		input := rapid.SliceOf(rapid.IntRange(-1000, 1000)).Draw(t, "input")
 
-		// Oracle: stdlib sort
-		expected := make([]int, len(input))
-		copy(expected, input)
-		sort.Ints(expected)
+		harap := slices.Clone(input)
+		slices.Sort(harap) // oracle
 
-		// System under test: custom sort
-		actual := make([]int, len(input))
-		copy(actual, input)
-		MyCustomSort(actual)
+		got := slices.Clone(input)
+		UrutSisip(got) // implementasi yang diuji, BUKAN pembungkus oracle
 
-		// Properti 1: length preserved
-		if len(actual) != len(expected) {
-			t.Fatalf("length changed: %d → %d", len(expected), len(actual))
-		}
-
-		// Properti 2: semua elemen identik dengan oracle
-		for i := range actual {
-			if actual[i] != expected[i] {
-				t.Fatalf("sort differs at index %d: got %d, want %d\ninput: %v",
-					i, actual[i], expected[i], input)
-			}
+		if !slices.Equal(got, harap) {
+			t.Fatalf("hasil berbeda dari oracle\n  masukan: %v\n  dapat  : %v\n  mau    : %v",
+				input, got, harap)
 		}
 	})
 }
 
-// MyCustomSort adalah sort yang akan di-verify dengan PBT (contoh sederhana).
-func MyCustomSort(arr []int) {
-	sort.Ints(arr) // dalam produksi nyata, ini custom implementation
+// UrutSisip adalah insertion sort — implementasi nyata, bukan pembungkus.
+func UrutSisip(arr []int) {
+	for i := 1; i < len(arr); i++ {
+		nilai := arr[i]
+		j := i - 1
+		for j >= 0 && arr[j] > nilai {
+			arr[j+1] = arr[j]
+			j--
+		}
+		arr[j+1] = nilai
+	}
 }
 ```
 

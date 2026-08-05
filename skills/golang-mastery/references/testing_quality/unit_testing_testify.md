@@ -40,8 +40,10 @@ package testingquality
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"testing"
 	"testing/fstest"
 
@@ -95,25 +97,44 @@ func (p *ConfigParser) Parse(ctx context.Context, filename string) (*UserData, e
 // --- TestMain: Global Setup & Teardown ---
 
 // TestMain dieksekusi sebelum dan sesudah semua test di package ini.
-// Gunakan untuk: setup DB koneksi, start shared server, goleak check.
+//
+// Pemeriksaan kebocoran goroutine ditaruh DI SINI, bukan sebagai
+// `defer goleak.VerifyNone(t)` di dalam masing-masing test — alasannya di
+// bawah, dan itu perbedaan yang menentukan apakah pemeriksaannya berarti.
+//
+// Catatan `os.Exit`: sejak **Go 1.15** ia tidak lagi wajib — bila TestMain
+// kembali begitu saja, binary uji keluar dengan kode dari `m.Run()`. Yang
+// tetap penting adalah jebakannya: `os.Exit` **melewati seluruh `defer`**,
+// sehingga `defer db.Close()` di dalam TestMain tidak akan pernah berjalan.
+// Panggil teardown secara eksplisit sebelum keluar, atau jangan pakai
+// os.Exit sama sekali.
 func TestMain(m *testing.M) {
 	// Setup global: misal seed test database
 	// db := setupTestDB()
 
-	// Jalankan semua test
-	code := m.Run()
+	kode := m.Run()
 
-	// Teardown global
+	// Teardown global — WAJIB dipanggil eksplisit di sini, bukan lewat defer.
 	// db.Close()
 
-	os.Exit(code)
+	os.Exit(kode)
 }
 
 // --- Table-Driven Tests dengan Closure Variable Capture yang Benar ---
 
 func TestConfigParser_Parse(t *testing.T) {
-	// Deteksi goroutine leak: semua goroutine yang di-spawn test ini harus cleanup
-	defer goleak.VerifyNone(t)
+	// t.Cleanup, BUKAN defer.
+	//
+	// Ini perbedaan yang menentukan apakah pemeriksaannya berarti sama sekali.
+	// Subtest yang memanggil t.Parallel() langsung BERHENTI dan kembali ke
+	// induk; badan fungsi induk lalu selesai, dan `defer` induk berjalan saat
+	// itu juga — SEBELUM satu pun subtest paralel benar-benar dijalankan.
+	// goleak yang dipasang lewat defer memeriksa keadaan pada titik yang salah:
+	// ia tidak melihat goroutine yang belum lahir, dan justru bisa melaporkan
+	// subtest yang sedang tertahan sebagai kebocoran.
+	//
+	// t.Cleanup induk berjalan SESUDAH seluruh subtest paralel selesai.
+	t.Cleanup(func() { goleak.VerifyNone(t) })
 
 	mockFS := fstest.MapFS{
 		"valid.cfg":   {Data: []byte("admin:1:true")},
@@ -147,7 +168,10 @@ func TestConfigParser_Parse(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt // closure variable capture — wajib sebelum Go 1.22
+		// Tanpa `tt := tt`: sejak Go 1.22 variabel loop punya salinan per
+		// iterasi, dan berkas ini menyatakan Go 1.22+ di header. Menyalin
+		// ulang bukan salah, tetapi menyisakan baris yang menyiratkan
+		// keharusan yang sudah tidak ada. Lihat Anti-Pattern 2.
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel() // test-test ini aman dijalankan paralel
 
@@ -184,13 +208,25 @@ func TestConfigParser_Parse_ContextCancelled(t *testing.T) {
 	assert.ErrorIs(t, err, context.Canceled)
 }
 
-// TestConfigParser_Short contoh test yang di-skip saat -short flag aktif.
-// Gunakan untuk test yang butuh waktu lama (IO, network).
-func TestConfigParser_Short(t *testing.T) {
+// TestConfigParser_BerkasBesar di-skip saat -short aktif.
+func TestConfigParser_BerkasBesar(t *testing.T) {
 	if testing.Short() {
-		t.Skip("skipping slow integration test in -short mode")
+		t.Skip("melewati uji lambat pada mode -short")
 	}
-	// ... tes berat yang butuh waktu
+
+	// Uji yang benar-benar berjalan, bukan badan kosong: 10.000 berkas
+	// membuat biayanya nyata sehingga skip-nya punya alasan.
+	fsys := fstest.MapFS{}
+	for i := 0; i < 10_000; i++ {
+		fsys[fmt.Sprintf("cfg-%05d.cfg", i)] = &fstest.MapFile{Data: []byte("admin:1:true")}
+	}
+	parser := NewConfigParser(fsys)
+
+	for nama := range fsys {
+		got, err := parser.Parse(context.Background(), nama)
+		require.NoError(t, err)
+		require.NotNil(t, got)
+	}
 }
 
 // TestConfigParser_TempDir contoh pemakaian t.TempDir() untuk isolasi filesystem.
@@ -261,34 +297,52 @@ for _, tt := range tests {
 ### ❌ Anti-Pattern 3: Tidak Menggunakan `t.Cleanup` — Leak Resource Test
 
 ```go
-// BAD: jika test panic sebelum defer, resource tidak pernah dibersihkan
+// BAD: berjalan TERLALU CEPAT bila ada subtest paralel
 func TestWithDB(t *testing.T) {
     db := openTestDB()
-    defer db.Close() // tidak berjalan jika t.FailNow()/t.Fatal() dipanggil sebelum ini di subtest paralel
-
-// GOOD: t.Cleanup terdaftar di testing framework — SELALU dipanggil bahkan saat panic/Fatal
+    defer db.Close() // berjalan saat badan fungsi ini selesai --
+                     // yaitu SEBELUM subtest paralel dijalankan
+    for _, tt := range kasus {
+        t.Run(tt.nama, func(t *testing.T) { t.Parallel(); pakai(db) })
+    }
+}
+```
+```go
+// GOOD: t.Cleanup berjalan SESUDAH test dan seluruh subtest-nya selesai
 func TestWithDB(t *testing.T) {
     db := openTestDB()
-    t.Cleanup(func() {
-        db.Close() // dipanggil LIFO (last registered = first cleanup)
-    })
+    t.Cleanup(func() { db.Close() }) // LIFO: terdaftar terakhir, dijalankan pertama
+}
 ```
 
-**Kenapa berbahaya:** `defer` di test function yang memiliki `t.Parallel()` subtest tidak berjalan pada waktu yang tepat. `t.Cleanup` lebih aman karena dikelola oleh testing framework dan selalu dipanggil setelah test + semua subtest-nya selesai.
+**Alasan yang benar — dan yang sering dinyatakan keliru.** `defer` **tetap berjalan** saat `t.Fatal()` dipanggil: `t.FailNow` memakai `runtime.Goexit`, dan Goexit menjalankan seluruh deferred call sebelum menghentikan goroutine. Jadi "defer tidak berjalan saat Fatal" adalah mitos; kalau itu benar, seluruh kode Go yang mengandalkan `defer f.Close()` sudah lama bermasalah.
+
+Yang **sungguh** membedakan adalah **urutan terhadap subtest paralel**:
+
+```
+badan fungsi induk selesai
+  -> defer induk berjalan            <- DI SINI
+  -> testing menunggu subtest paralel
+  -> t.Cleanup induk berjalan        <- DI SINI
+```
+
+Sumber daya yang dipakai bersama subtest paralel karena itu WAJIB ditutup lewat `t.Cleanup`; ditutup lewat `defer`, ia lenyap tepat sebelum subtest-subtest itu mulai memakainya.
 
 ---
 
 ## 4. Edge Cases & Defensive Programming
 
-1. **`t.Parallel()` + `t.TempDir()` Isolation:** Setiap `t.Run` yang memanggil `t.Parallel()` harus memiliki `t.TempDir()` sendiri, bukan berbagi satu TempDir dari parent test. TempDir parent dihapus saat parent selesai, namun subtest paralel mungkin belum selesai.
+1. **`t.Parallel()` + `t.TempDir()` — alasannya isolasi, bukan penghapusan dini.** Setiap subtest paralel sebaiknya punya `t.TempDir()` sendiri. Tetapi alasan yang sering disebut — "TempDir induk dihapus saat induk selesai padahal subtest paralel belum" — **tidak benar**: `t.TempDir` mendaftarkan penghapusannya sebagai `t.Cleanup` induk, dan cleanup induk berjalan **sesudah** seluruh subtest paralel selesai. Direktorinya aman. Yang menjadi masalah adalah subtest-subtest itu **berbagi satu direktori** dan saling menimpa berkas satu sama lain — kegagalan yang muncul acak dan bergantung urutan penjadwalan.
 
-2. **Goroutine Leak Detection dengan `goleak`:** Gunakan `defer goleak.VerifyNone(t)` di awal test untuk memastikan tidak ada goroutine yang tertinggal setelah test selesai. Sangat kritis untuk test yang melibatkan channel, HTTP server, atau background worker.
+2. **`goleak` WAJIB lewat `t.Cleanup` atau `TestMain`, bukan `defer`.** `defer goleak.VerifyNone(t)` adalah pola yang paling banyak beredar, dan ia **tidak memeriksa apa pun** pada test yang punya subtest paralel: subtest yang memanggil `t.Parallel()` langsung berhenti dan kembali ke induk, badan fungsi induk selesai, dan `defer` berjalan sebelum satu pun subtest dijalankan. Yang benar `t.Cleanup(func() { goleak.VerifyNone(t) })` — atau `goleak.VerifyTestMain(m)` di `TestMain` untuk mencakup seluruh paket sekaligus.
 
 3. **`-count=N` untuk Deteksi Flakiness:** Test yang lulus satu kali belum tentu reliable. Jalankan `go test -count=10 -race` untuk mengekspos race condition dan timing-dependent behavior. Test yang flaky pada `count>1` biasanya menyembunyikan shared state atau improper goroutine management.
 
 4. **`t.Log` vs `t.Error` Visibility:** `t.Log()` hanya muncul saat test gagal atau `-v` flag aktif. Jangan gunakan `fmt.Println` dalam test — output tidak terikat dengan `t` dan tidak akan muncul dalam laporan test terstruktur.
 
-5. **`TestMain` Ordering:** `TestMain` mengontrol siklus hidup seluruh package test. Jika `os.Exit(m.Run())` tidak dipanggil, semua test di package tersebut tidak akan berjalan. Jangan lupa panggil `m.Run()` dan teruskan exit code-nya ke `os.Exit`.
+5. **`TestMain` — dua hal yang sering tertukar.** Yang wajib adalah memanggil **`m.Run()`**: TestMain yang tidak memanggilnya membuat seluruh test di paket itu tidak pernah berjalan, dan `go test` melaporkan PASS tanpa menjalankan apa pun — kegagalan paling menyesatkan yang bisa dihasilkan sebuah suite.
+
+   `os.Exit` adalah hal yang berbeda, dan sejak **Go 1.15 ia tidak lagi wajib**: bila TestMain kembali begitu saja, binary uji keluar dengan kode dari `m.Run()`. Yang tetap perlu diingat adalah jebakannya — **`os.Exit` melewati seluruh `defer`**, sehingga `defer db.Close()` di dalam TestMain tidak akan pernah berjalan. Panggil teardown secara eksplisit sebelum keluar, atau jangan memakai `os.Exit` sama sekali.
 
 ## Kapan JANGAN Pakai Ini
 
@@ -307,6 +361,9 @@ func TestWithDB(t *testing.T) {
 | Cakupan tinggi tapi bug tetap lolos | apa yang sebenarnya diuji | Getter dan konstruktor teruji, jalur galat tidak |
 | Suite makin lama tiap sprint | uji terlambat | `time.Sleep` dipakai sebagai sinkronisasi |
 | Uji menggantung sampai timeout CI | panic dari `-timeout` | Deadlock atau channel tanpa penerima |
+| `goleak` tidak pernah menemukan apa pun | `defer` vs `t.Cleanup` | Diperiksa sebelum subtest paralel berjalan |
+| Subtest paralel saling menimpa berkas | `t.TempDir()` di induk atau di subtest | Satu direktori dipakai bersama |
+| Paket melaporkan PASS tanpa uji berjalan | apakah `TestMain` memanggil `m.Run()` | Seluruh uji dilewati tanpa gejala |
 
 ```bash
 # -count=1 mematikan cache uji: WAJIB saat menyelidiki flaky
