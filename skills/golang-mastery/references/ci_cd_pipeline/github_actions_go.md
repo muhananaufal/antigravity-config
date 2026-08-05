@@ -1,5 +1,7 @@
 # Panduan Master-Level: CI/CD Pipeline Golang menggunakan GitHub Actions
 
+> **Berlaku:** Go 1.21+ · GitHub Actions · **Lihat juga:** `ci_cd_pipeline/security_scanning_ci.md` · `ci_cd_pipeline/monorepo_go_ci.md` · `cybersecurity_zerotrust/binary_signing_verification.md` · `testing_quality/govulncheck_security_scan.md`
+
 Dokumen ini adalah referensi mendalam (master-level) untuk merancang, mengimplementasikan, dan mengelola Continuous Integration dan Continuous Deployment (CI/CD) pipeline untuk proyek Golang menggunakan GitHub Actions. Pipeline yang dibangun akan scalable, aman, efisien secara performa, dan mencakup praktik terbaik dari industri.
 
 ---
@@ -470,3 +472,35 @@ Otentikasi selalu ke registry, atau gunakan *GitHub Container Registry (GHCR)* a
 
 ---
 *End of Document. Referensi ini diformat agar aplikatif langsung dalam skala production level system.*
+
+## Kapan JANGAN Pakai Ini
+
+- **Action pihak ketiga yang di-pin ke tag, bukan SHA.** Tag bisa dipindahkan oleh pemiliknya kapan saja. Pipeline Anda menjalankan kode yang berbeda dari yang pernah Anda tinjau — itu jalur supply chain yang paling mudah dieksploitasi dan paling sering diabaikan.
+- **`pull_request_target` yang men-checkout kode PR.** Kombinasi itu memberi rahasia repo kepada kode yang **belum di-review** dari fork mana pun. Ini kesalahan konfigurasi paling berbahaya di GitHub Actions.
+- **Cache yang di-key hanya pada sistem operasi.** Cache basi membuat build lolos dengan dependensi lama, dan kegagalan yang seharusnya muncul di CI baru muncul di produksi. Sertakan hash `go.sum`.
+- **Rahasia yang tersedia di langkah yang menjalankan kode pihak ketiga.** Setiap action yang berjalan di langkah itu bisa membacanya. Batasi rahasia ke langkah yang benar-benar membutuhkannya.
+- **Matriks besar dengan `fail-fast` yang tidak dipikirkan.** Dengan `true`, satu kegagalan membatalkan semuanya dan Anda kehilangan informasi tentang kombinasi lain; dengan `false`, biaya CI berlipat. Pilih sadar.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Pipeline berperilaku beda tanpa perubahan kode | pin action: tag atau SHA | Action hulu berubah di bawah tag yang sama |
+| Rahasia dipakai dari konteks tak terduga | log audit pemakaian rahasia | Rahasia tersedia terlalu luas |
+| Build lolos dengan dependensi lama | kunci cache | Cache tidak mencerminkan `go.sum` |
+| Uji lolos di CI, gagal di produksi | versi Go dan OS runner | Lingkungan CI berbeda dari produksi |
+| Waktu CI naik terus | ukuran matriks dan cache hit | Matriks tumbuh tanpa ditinjau |
+
+```bash
+# Action yang di-pin ke tag, bukan SHA -- setiap baris di sini adalah risiko
+grep -rn 'uses:' .github/workflows/ | grep -vE '@[0-9a-f]{40}'
+
+# Konfigurasi paling berbahaya di GitHub Actions
+grep -rn 'pull_request_target' .github/workflows/
+
+# Kunci cache harus memuat hash go.sum
+grep -rn -A3 'actions/cache' .github/workflows/ | grep -i 'key:'
+
+gh run list --limit 20 --json conclusion,name,createdAt \
+  | jq -r '.[] | "\(.conclusion) \(.name)"' | sort | uniq -c
+```

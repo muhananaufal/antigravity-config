@@ -6,6 +6,8 @@ tags: ["ci-cd", "golang", "goreleaser", "devops", "release", "supply-chain-secur
 
 # GoReleaser & Automated CI/CD Releases: Internals, Architecture, & Best Practices
 
+> **Berlaku:** Go 1.21+ · GoReleaser v2 · **Lihat juga:** `cli_tooling/binary_distribution_release.md` · `cybersecurity_zerotrust/binary_signing_verification.md` · `runtime_internals/build_system_linker.md` · `ci_cd_pipeline/github_actions_go.md`
+
 Dokumen ini adalah referensi komprehensif master-level untuk merancang, mengimplementasikan, dan mengelola pipeline rilis aplikasi Go kelas produksi. Ekosistem Go sangat unggul dalam kompilasi menjadi *static binary*, namun untuk mencapai standar produksi (distribusi, keamanan SLSA, integrasi registry), kita memerlukan alat bantu kokoh seperti **GoReleaser**, **Release Please** (Semantic Versioning), dan otomatisasi CI/CD tingkat lanjut.
 
 ---
@@ -487,3 +489,36 @@ build-release-local:
 ```
 
 Dengan mengadopsi dokumen referensi ini, pipeline CI/CD Golang akan sepenuhnya mematuhi standar enterprise: cross-platform, SLSA secured, Semantic Versioning terotomatisasi, dan sepenuhnya termonitor.
+
+## Kapan JANGAN Pakai Ini
+
+- **Rilis tanpa `-trimpath`.** Path absolut mesin build tertanam di biner, bocor ke stack trace pengguna, dan membuat build tidak bisa direproduksi.
+- **Checksum tanpa tanda tangan.** Checksum yang tidak ditandatangani melindungi dari **kerusakan transfer**, bukan dari **pemalsuan**. Siapa pun yang bisa mengganti biner bisa mengganti berkas checksum-nya juga.
+- **Membuat rilis dari branch, bukan tag.** Tidak ada titik yang bisa direproduksi, dan pertanyaan "versi mana yang berjalan di sana" menjadi tidak terjawab.
+- **Memperlakukan snapshot sebagai rilis.** Versi snapshot tidak stabil dan tidak berurutan. Ia untuk pengujian pipeline, bukan untuk didistribusikan.
+- **Rilis otomatis tanpa changelog yang bisa dibaca manusia.** Daftar commit mentah bukan changelog; pengguna butuh tahu apa yang berubah bagi mereka, bukan apa yang Anda ketik.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Path mesin build muncul di stack trace pengguna | `-trimpath` di konfigurasi | Flag tidak dipasang |
+| Dua build dari tag sama menghasilkan checksum beda | flag build di `go version -m` | Build tidak reproducible |
+| Tidak bisa memastikan biner asli | apakah checksum ditandatangani | Checksum tanpa tanda tangan |
+| Versi di `--version` tidak sesuai tag | ldflags dan sumber versi | Versi disuntikkan dari sumber yang salah |
+| Pengguna tidak tahu apa yang berubah | isi changelog | Changelog berisi commit mentah |
+
+```bash
+goreleaser check
+goreleaser release --snapshot --clean --skip=publish
+
+# Flag build yang BENAR-BENAR dipakai untuk biner rilis
+go version -m dist/app_linux_amd64_v1/app | head -20
+
+# Reproducibility: dua build dari commit yang sama harus identik
+sha256sum dist/*/app
+
+# Tanda tangan checksum
+cosign verify-blob --signature dist/checksums.txt.sig \
+  --certificate dist/checksums.txt.pem dist/checksums.txt
+```

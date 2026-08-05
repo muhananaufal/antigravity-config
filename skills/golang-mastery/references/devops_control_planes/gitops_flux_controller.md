@@ -1,5 +1,7 @@
 # GitOps Flux Controller Architecture
 
+> **Berlaku:** Go 1.21+ · Flux v2 · **Lihat juga:** `devops_control_planes/crossplane_composition.md` · `ci_cd_pipeline/deployment_strategies_go.md` · `security_owasp/secret_management_vault.md` · `cloud_native_k8s_operators/controller_runtime_reconciler.md`
+
 ## Konsep Utama
 Dalam lanskap DevOps modern, *GitOps* (dipopulerkan oleh Weaveworks dan dieksekusi melalui Flux atau ArgoCD) adalah paradigma di mana Git bertindak sebagai "Single Source of Truth" absolut untuk status deklaratif infrastruktur. 
 
@@ -263,3 +265,34 @@ cmd := &cobra.Command{
 3. **Pemisahan Namespace (*Cross-Namespace Access*)**:
    *Edge Case*: Kustomization di *Namespace* `prod` berusaha mengakses Artifact GitRepository di `flux-system`.
    *Defensive*: Flux mengimplementasikan skema `CrossNamespaceObjectReference`. Namun ini rentan terhadap celah keamanan ekskalasi hak istimewa (Privilege Escalation). Validasi harus memastikan bahwa Namespace target (prod) secara eksplisit memberikan label izin kepada `flux-system` untuk membaca secret dan me-render manifes di lingkungan tersebut.
+
+## Kapan JANGAN Pakai Ini
+
+- **Untuk hal yang berubah lebih cepat daripada siklus rekonsiliasi.** Jumlah replika yang diatur autoscaler dan rahasia yang dirotasi tiap jam tidak cocok tinggal di git — controller dan autoscaler akan saling menimpa.
+- **Rahasia mentah di repo GitOps.** Repo GitOps dibaca lebih banyak orang daripada yang Anda kira. Butuh SOPS, Sealed Secrets, atau external secrets operator sejak hari pertama.
+- **Sambil tetap mengizinkan perubahan manual di cluster.** Controller akan mengembalikannya, dan orang yang mengubah tidak akan tahu kenapa perubahannya hilang. Bila perubahan manual diperlukan, itu harus jadi keputusan sadar dengan pengecualian yang tercatat.
+- **Satu repo untuk seluruh cluster tanpa pemisahan izin.** Siapa pun yang bisa merge bisa mengubah produksi. Pemisahan repo atau path dengan CODEOWNERS bukan formalitas.
+- **Tanpa memantau status rekonsiliasi.** Manifest yang gagal diterapkan akan diam-diam tidak berlaku, sementara git tampak seperti sumber kebenaran — padahal cluster tidak mengikutinya.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Cluster tidak sesuai git | status rekonsiliasi | Penerapan gagal tanpa ada yang melihat |
+| Perubahan manual hilang berulang | siapa yang mengubah apa | Dua sumber kebenaran bersaing |
+| Replika berubah-ubah sendiri | autoscaler vs manifest | Nilai yang dikelola autoscaler dikunci di git |
+| Rahasia terlihat di riwayat repo | apakah dienkripsi | Rahasia mentah pernah ter-commit |
+| Rekonsiliasi berjalan tapi tidak berefek | drift detection | Sumber daya diabaikan atau selector salah |
+
+```bash
+# Status semua sumber daya Flux -- kolom READY adalah yang menentukan
+flux get all -A
+flux get kustomizations -A --status-selector ready=false
+
+# Kenapa gagal
+flux logs --level=error --since=1h
+kubectl describe kustomization <nama> -n flux-system | tail -30
+
+# Drift antara git dan cluster
+flux diff kustomization <nama> --path ./clusters/produksi
+```

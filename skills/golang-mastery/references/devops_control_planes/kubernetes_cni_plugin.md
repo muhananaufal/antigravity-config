@@ -1,5 +1,7 @@
 # Kubernetes CNI Plugin Architecture
 
+> **Berlaku:** Go 1.21+ · CNI spec 1.0 · **Lihat juga:** `system_programming_linux/cgroups_v2_namespaces.md` · `system_programming_linux/unix_domain_socket.md` · `cybersecurity_zerotrust/network_security_scanning.md` · `devops_control_planes/docker_container_go.md`
+
 ## Konsep Utama
 Dalam ekosistem *Cloud Native*, Kubernetes tidak mengelola jaringan kontainer (IP, routing, interface veth) secara mandiri. Ia melegasikan tugas ini pada **Container Network Interface (CNI)**. CNI adalah spesifikasi standar dan seperangkat kakas (*tooling*) yang mengatur pemetaan jaringan Linux.
 
@@ -291,3 +293,36 @@ func (p *CNIPlugin) cmdDel(args *skel.CmdArgs) error {
 3. **Versi CNI Mismatch**:
    *Edge Case*: Daemon K8s tua mengoper *cniVersion="0.3.1"* ke konfigurasi, sedangkan CNI *binary* Anda hanya mendukung "1.0.0". Format kolom balasan JSON berbeda.
    *Defensive*: CNI harus selalu memparsing variabel `cniVersion` dan jika tidak berada dalam rentang versi *SupportedVersions* dari library `cni/pkg/skel`, CNI harus seketika berhenti. Jangan mencoba merender struktur struct Golang ke versi yang salah karena Kubelet akan salah membacanya dan *Pod* tidak dapat merutekan DNS.
+
+## Kapan JANGAN Pakai Ini
+
+- **Menulis plugin CNI sendiri kecuali ada kebutuhan jaringan yang benar-benar tidak terpenuhi.** Kegagalan CNI berarti **seluruh node tidak bisa menjalankan pod**. Radius kerusakannya jauh lebih besar daripada layanan aplikasi mana pun.
+- **Tanpa membuat `ADD` dan `DEL` idempoten.** Kubelet akan mengulang keduanya. `ADD` yang tidak idempoten membocorkan alamat IP; `DEL` yang tidak idempoten membuat pembersihan gagal dan pod tersangkut di `Terminating`.
+- **IPAM yang tidak tahan restart.** Alamat yang sudah dialokasikan harus tetap dikenali setelah plugin atau node di-restart, kalau tidak akan terjadi alamat ganda.
+- **Menguji hanya di kind atau minikube.** Perilaku jaringan berbeda nyata di lingkungan cloud — MTU, routing overlay, dan interaksi dengan security group tidak muncul di lingkungan lokal.
+- **Menulis log ke stdout.** CNI berkomunikasi dengan runtime lewat **stdout dalam bentuk JSON**. Satu baris log di sana merusak protokol, dan kegagalannya tampak sebagai galat parsing yang membingungkan.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Pod tersangkut `ContainerCreating` | log kubelet untuk plugin CNI | `ADD` gagal atau menggantung |
+| Pod tersangkut `Terminating` | jalur `DEL` | Pembersihan gagal dan tidak idempoten |
+| Alamat IP habis padahal pod sedikit | catatan IPAM | Alamat bocor karena `ADD` diulang |
+| Galat parsing JSON dari CNI | apakah plugin menulis ke stdout | Log mencemari kanal protokol |
+| Paket besar hilang | MTU pada antarmuka pod | MTU overlay tidak diperhitungkan |
+
+```bash
+# Kubelet adalah tempat pertama melihat kegagalan CNI
+journalctl -u kubelet --since '30 min ago' | grep -i cni | tail -30
+
+# Konfigurasi dan biner plugin yang benar-benar dipakai node
+ls -la /etc/cni/net.d/ /opt/cni/bin/
+cat /etc/cni/net.d/*.conflist | jq
+
+# Pod yang tersangkut di kedua arah
+kubectl get pods -A --field-selector status.phase!=Running | head -20
+
+# MTU yang benar-benar berlaku di dalam pod
+kubectl exec <pod> -- ip link show eth0
+```

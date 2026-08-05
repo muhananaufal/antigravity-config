@@ -1,5 +1,7 @@
 # Master-Level GitLab CI/CD untuk Golang (Internals & Best Practices)
 
+> **Berlaku:** Go 1.21+ · GitLab CI · **Lihat juga:** `ci_cd_pipeline/github_actions_go.md` · `ci_cd_pipeline/security_scanning_ci.md` · `ci_cd_pipeline/deployment_strategies_go.md` · `devops_control_planes/docker_container_go.md`
+
 Dokumen ini adalah referensi definitif untuk merancang, mengoptimalkan, dan mengamankan pipeline GitLab CI/CD untuk aplikasi Golang skala enterprise. Referensi ini menggali *internals* dari eksekusi runner, strategi caching tingkat lanjut, dan migrasi menuju sistem build tanpa *privileged mode*.
 
 ## 1. Arsitektur Pipeline CI/CD
@@ -338,3 +340,33 @@ variables:
 ```
 
 Dengan mengimplementasikan `include` pada *snippet* di atas, pipeline Anda akan secara otomatis terpadu dengan standar pertahanan keamanan siber kelas dunia, menganalisis statis, dinamis, hingga *supply chain* tanpa membutuhkan instalasi alat sekuritas yang rumit dari awal.
+
+## Kapan JANGAN Pakai Ini
+
+- **`image: golang:latest`.** Build tidak bisa direproduksi, dan versi Go bisa berubah di tengah sprint tanpa satu pun commit. Sematkan versi minor lengkap.
+- **Runner bersama untuk job yang menyentuh rahasia produksi.** Runner bersama menjalankan pekerjaan proyek lain di mesin yang sama. Untuk deploy produksi, runner khusus dengan tag bukan kemewahan.
+- **Cache antar-job tanpa kunci yang mencerminkan `go.sum`.** Cache yang tidak sinkron menghasilkan build yang lolos dengan dependensi yang bukan seharusnya.
+- **`rules` yang tumpang tindih tanpa urutan yang jelas.** Aturan pertama yang cocok yang menang; tumpang tindih membuat job berjalan atau tidak secara tidak terduga, dan debugging-nya menghabiskan waktu yang tidak perlu.
+- **Deploy produksi langsung dari pipeline tanpa jeda persetujuan.** Satu merge yang salah menjadi insiden produksi tanpa satu pun manusia yang sempat melihat.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Build gagal tanpa perubahan kode | tag image yang dipakai | `latest` menarik versi Go baru |
+| Job berjalan pada branch yang tidak diharapkan | urutan `rules` | Aturan tumpang tindih |
+| Dependensi lama lolos ke rilis | kunci cache | Cache tidak mencerminkan `go.sum` |
+| Rahasia produksi terpakai di job lain | tag runner dan lingkup variabel | Variabel tidak dibatasi ke lingkungan |
+| Deploy terjadi tanpa disadari | `when: manual` pada job produksi | Tidak ada gerbang persetujuan |
+
+```bash
+# Versi image dan aturan yang benar-benar dipakai
+grep -nE '^\s*image:' .gitlab-ci.yml
+grep -n -A4 'rules:' .gitlab-ci.yml | head -40
+
+# Variabel yang terbuka untuk semua lingkungan adalah temuan
+glab variable list 2>/dev/null | head
+
+# Job produksi tanpa gerbang manual
+grep -n -B3 -A5 'environment: *production' .gitlab-ci.yml
+```

@@ -1,5 +1,7 @@
 # Helm Chart Go Testing (Terratest)
 
+> **Berlaku:** Go 1.21+ · Helm v3 · **Lihat juga:** `devops_control_planes/gitops_flux_controller.md` · `ci_cd_pipeline/deployment_strategies_go.md` · `arch_patterns/config_management.md` · `devops_control_planes/docker_container_go.md`
+
 ## 1. Konsep Utama & Internals
 
 Bagi pengembang *Cloud Native K8s Operator*, mendistribusikan sistem biasanya dilakukan via **Helm Charts** (Paket manajer *de facto* untuk Kubernetes). Masalahnya, Helm Chart hanyalah sekumpulan YAML *templates* berbasis bahasa *Go Text Template* yang sangat *fragile* (rapuh). Salah spasi 2 indentasi, atau kurang tanda kutip pada suatu variabel bisa mengakibatkan *syntax error* atau lebih buruk: salah konfigurasi di Cluster Production!
@@ -254,3 +256,35 @@ require.NoError(t, err, "Terjadi kesalahan saat mengeksekusi helm template")
    require.NoError(t, err, "Gagal mengunduh helm dependencies sebelum test")
    ```
    Langkah ini wajib untuk skenario *cold-start* di pipeline CI.
+
+## Kapan JANGAN Pakai Ini
+
+- **Untuk manifest sederhana yang tidak perlu diparameterisasi.** Kustomize atau manifest biasa lebih mudah dibaca, di-diff, dan didebug. Helm membayar dirinya ketika chart yang sama dipasang di banyak tempat dengan nilai berbeda.
+- **Template dengan percabangan yang dalam.** Template Go yang bercabang lima tingkat tidak bisa dinalar, tidak bisa diuji dengan meyakinkan, dan galatnya muncul sebagai YAML yang tidak valid di tempat yang jauh dari penyebabnya.
+- **Chart tanpa `values.schema.json`.** Nilai yang salah menghasilkan manifest yang salah, dan galatnya baru muncul di API server — bukan di `helm`, tempat orang sebenarnya bisa memperbaikinya.
+- **`helm upgrade` tanpa `--atomic` di produksi.** Upgrade yang gagal separuh meninggalkan rilis dalam keadaan campur: sebagian sumber daya versi baru, sebagian lama.
+- **Menyimpan rahasia di `values.yaml`.** Ia sering ikut repo, **dan** tersimpan di dalam objek rilis Helm di cluster — dua tempat yang lebih mudah dibaca daripada yang diperkirakan.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Rilis berstatus `pending-upgrade` | riwayat rilis | Upgrade gagal tanpa rollback otomatis |
+| Manifest berbeda dari yang diharapkan | keluaran `helm template` | Logika template terlalu rumit untuk dinalar |
+| Galat baru muncul di API server | ada tidaknya schema values | Validasi nilai tidak dilakukan di sisi Helm |
+| Rahasia terbaca dari objek rilis | isi secret rilis Helm | Rahasia ada di `values.yaml` |
+| Rollback tidak mengembalikan keadaan | sumber daya di luar chart | Ada objek yang dikelola di luar Helm |
+
+```bash
+helm list -A --all                      # termasuk rilis yang gagal
+helm history <rilis> -n <ns>
+
+# Manifest yang BENAR-BENAR dihasilkan -- baca ini sebelum apply
+helm template <rilis> ./chart -f values-produksi.yaml | kubectl apply --dry-run=server -f -
+
+helm lint ./chart --strict
+
+# Rahasia yang tersimpan di objek rilis Helm
+kubectl get secret -l owner=helm -o json \
+  | jq -r '.items[].metadata.name' | head
+```

@@ -1,5 +1,7 @@
 # Zero-Touch Greenfield Bootstrap: Modular 3-Tier Container Topology
 
+> **Berlaku:** Go 1.21+ · Docker Compose v2 · **Lihat juga:** `devops_control_planes/docker_container_go.md` · `testing_quality/testcontainers_integration.md` · `observability_resilience/health_check_readiness.md` · `db_sqlc/connection_pool_tuning.md`
+
 Arsitektur sistem backend Golang yang tangguh untuk skenario production tidak bisa hanya mengandalkan kode biner Go yang berjalan sendiri. Untuk memastikan kesiapan dari hari pertama (Day 0), pendekatan *Zero-Touch Greenfield Bootstrap* mewajibkan kita membangun fondasi kontainerisasi 3 lapis (3-Tier). Pendekatan ini memastikan lingkungan *development* dan *staging* langsung siap mengukur kinerja, resiliensi, dan metrik aplikasi tanpa intervensi manual yang rumit. 
 
 ## 1. Konsep Arsitektur 3-Tier Topology
@@ -344,3 +346,32 @@ Penerapan *topology* ini di produksi atau skala beban tinggi berpotensi menabrak
 
 3. **Loki OOM Kill Akibat Disk I/O Bottleneck:**
    Jika simulasi stress test sangat bising hingga memproduksi >10,000 log per detik, agent Docker yang mengirimkan log ke container Loki dapat mengalami antrean panjang, dan menyebabkan Loki kehabisan memori atau CPU throttling akibat lambatnya flush ke local disk. **Mitigasinya:** Konfigurasikan max-size pada logging driver (seperti contoh yaml di atas) dan gunakan chunking/batching pada Loki untuk mengurai beban *ingestion*.
+
+## Kapan JANGAN Pakai Ini
+
+- **Untuk proyek kecil.** Compose tiga tingkat lengkap dengan observability stack dan harness beban untuk skrip 100 baris adalah pelanggaran KISS yang nyata — dan biaya perawatannya dibayar setiap kali ada yang mencoba menjalankannya.
+- **`depends_on` tanpa `condition: service_healthy`.** Container yang sudah "start" belum tentu menerima koneksi. Aplikasi akan gagal saat boot dengan galat koneksi yang tampak acak.
+- **Bind mount untuk data yang penting.** Kepemilikan berkas dan izin berbeda antar host dan antar OS. Named volume menghindarkan seluruh kelas masalah ini.
+- **Menyalin konfigurasi produksi ke Compose.** Compose adalah alat pengembangan lokal. Produksi punya orkestrator dengan semantik berbeda untuk health check, restart, dan jaringan.
+- **Menjadikan seluruh stack sebagai syarat kontribusi.** Semakin berat stack lokalnya, semakin sering orang melewatinya — dan uji yang dilewati sama saja dengan uji yang tidak ada.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Aplikasi gagal saat start di CI | `condition` pada `depends_on` | Dependensi dianggap siap terlalu cepat |
+| Berjalan di satu laptop, gagal di laptop lain | bind mount dan izin berkas | Ketergantungan pada tata letak host |
+| Kontributor melewati uji lokal | waktu dan sumber daya untuk start | Stack terlalu berat |
+| Perilaku beda antara Compose dan produksi | health check dan restart policy | Semantik orkestrator berbeda |
+| Data hilang setelah `docker compose down` | volume yang dipakai | Data di bind mount atau anonymous volume |
+
+```bash
+docker compose config                 # konfigurasi setelah interpolasi
+docker compose ps --format json | jq -r '.[] | "\(.Service) \(.State) \(.Health)"'
+
+# Health check yang benar-benar terpasang
+docker inspect --format '{{.Name}} {{.State.Health.Status}}' $(docker compose ps -q)
+
+# Waktu start seluruh stack: angka ini menentukan orang memakainya atau tidak
+time docker compose up -d --wait
+```

@@ -1,5 +1,7 @@
 # Custom Resource Definitions (CRD) & Kubebuilder Markers
 
+> **Berlaku:** Go 1.21+ · Kubernetes 1.28+ · **Lihat juga:** `cloud_native_k8s_operators/controller_runtime_reconciler.md` · `cloud_native_k8s_operators/admission_webhooks.md` · `devops_control_planes/crossplane_composition.md` · `microservices_grpc/api_versioning_strategy.md`
+
 ## 1. Konsep Utama & Internals
 
 Di Kubernetes, *Custom Resource Definition* (CRD) adalah mekanisme ekstensi fundamental yang memungkinkan kita membuat objek API kustom (seperti `Database`, `AppDeployment`, atau `MessageQueue`) layaknya objek bawaan (Pods, Services, Deployments). 
@@ -395,3 +397,35 @@ type WebSpec struct {
 }
 ```
 **Penjelasan:** Mengizinkan "Unknown Fields" di Custom Resources adalah liabilitas sekuriti yang masif. K8s dirancang sebagai *Declarative Typed API*. Setiap field yang diizinkan harus dideskripsikan strukturnya dengan jelas (`string`, `bool`, object spesifik) sehingga K8s dapat menolak payload berbahaya / salah ketik (typo) di *admission phase*, jauh sebelum ia menyentuh etcd atau Controller Go Anda.
+
+## Kapan JANGAN Pakai Ini
+
+- **Untuk data yang berubah sangat sering.** etcd bukan basis data aplikasi. Setiap pembaruan status ditulis ke etcd dan direplikasi ke seluruh control plane; CRD yang diperbarui tiap detik akan membebani cluster untuk semua orang.
+- **CRD tanpa skema validasi (`x-kubernetes-validations` atau OpenAPI).** Objek yang tidak valid diterima API server, dan controller yang harus menghadapinya — di tempat yang jauh dari orang yang membuat kesalahannya.
+- **Mengubah makna atau tipe field pada versi yang sudah dipakai.** Itu memerlukan versi baru dan conversion webhook. Mengubahnya di tempat akan merusak setiap objek yang sudah tersimpan.
+- **Menulis ke `spec` dari controller.** `spec` adalah keinginan pengguna; `status` adalah pengamatan controller. Controller yang menulis ke `spec` memicu rekonsiliasi berikutnya dan menciptakan loop.
+- **Objek CRD berukuran besar.** Ada batas ukuran objek etcd (sekitar 1,5 MB), dan objek besar memperlambat `list`/`watch` untuk semua klien di cluster.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| etcd melambat untuk seluruh cluster | laju penulisan CRD | Status diperbarui terlalu sering |
+| Controller menangani objek yang tidak masuk akal | skema validasi CRD | Validasi diserahkan ke controller |
+| Objek lama gagal dibaca setelah upgrade | versi dan conversion webhook | Field berubah tanpa versi baru |
+| Rekonsiliasi tidak pernah berhenti | siapa yang menulis `spec` | Controller memodifikasi keinginan pengguna |
+| `list` CRD sangat lambat | ukuran objek dan jumlahnya | Objek terlalu besar untuk pola akses ini |
+
+```bash
+kubectl get crd -o custom-columns='NAMA:.metadata.name,VERSI:.spec.versions[*].name'
+
+# Ukuran objek: yang mendekati batas etcd akan menimbulkan masalah untuk semua
+kubectl get <crd-plural> -A -o json | jq -r '.items[] | "\(.metadata.name) \(. | tostring | length)"' \
+  | sort -k2 -rn | head
+
+# Apakah skema validasi benar-benar ada?
+kubectl get crd <nama> -o jsonpath='{.spec.versions[0].schema.openAPIV3Schema.properties.spec}' | jq 'keys'
+
+# Laju penulisan ke etcd dari CRD ini
+kubectl get --raw /metrics | grep -E 'etcd_request_duration_seconds_count' | head -5
+```

@@ -1,5 +1,7 @@
 # Docker Container Standards untuk Go Service (Startup Grade)
 
+> **Berlaku:** Go 1.21+ · Docker / OCI · distroless · **Lihat juga:** `runtime_internals/build_system_linker.md` · `system_programming_linux/cgroups_v2_namespaces.md` · `cli_tooling/binary_distribution_release.md` · `observability_resilience/health_check_readiness.md`
+
 ## 1. Konsep Utama & Internals
 
 Docker container untuk Go service di startup besar (Tokopedia, Shopee, Gojek) mengikuti prinsip **minimal, secure, reproducible**. Go sangat ideal untuk containerisasi karena menghasilkan single static binary tanpa runtime dependency — berbeda dengan JVM atau Python yang butuh runtime tebal.
@@ -552,3 +554,37 @@ Makefile
 4. **Platform Build (ARM vs AMD64):** Di CI/CD berbasis Apple Silicon (M1/M2 runner) atau saat build untuk K8s node ARM (AWS Graviton), `docker build` default ke platform host. Gunakan `docker buildx build --platform linux/amd64,linux/arm64` untuk multi-arch manifest. Tanpa ini, image yang di-push ke registry bisa tidak bisa dijalankan di node production yang berbeda arsitektur.
 
 5. **`depends_on` Tidak Cukup untuk DB Ready:** `depends_on: postgres` di docker-compose hanya menunggu container *start*, bukan menunggu DB *siap menerima koneksi*. PostgreSQL butuh beberapa detik inisialisasi setelah container up. Solusi: gunakan `depends_on.condition: service_healthy` dengan `healthcheck` yang benar (`pg_isready`), atau implementasikan retry loop dengan exponential backoff di app saat startup connection ke DB.
+
+## Kapan JANGAN Pakai Ini
+
+- **`FROM golang` sebagai image runtime.** Ia membawa seluruh toolchain, kompilator, dan puluhan paket sistem — semuanya menjadi permukaan serangan tanpa satu pun dipakai saat aplikasi berjalan. Multi-stage build ke `distroless` atau `scratch` yang benar.
+- **Tag `latest` pada base image.** Build hari ini dan bulan depan menghasilkan isi berbeda. Itu bukan build yang bisa direproduksi, dan saat ada insiden Anda tidak bisa membuktikan apa yang berjalan.
+- **`CGO_ENABLED=0` dipasang membabi buta lalu memakai `scratch`.** Beberapa paket beralih ke implementasi Go murni yang **perilakunya berbeda**, dan `scratch` juga tidak punya sertifikat CA maupun basis data zona waktu — TLS dan `time.LoadLocation` akan gagal dengan pesan yang membingungkan.
+- **Shell form pada `ENTRYPOINT`.** `ENTRYPOINT ./app` menjalankan aplikasi di bawah `sh`, dan **SIGTERM tidak sampai ke aplikasi**. Graceful shutdown yang sudah Anda tulis tidak akan pernah berjalan, dan setiap deploy berakhir dengan SIGKILL.
+- **Berjalan sebagai root.** Bahkan di dalam container, root memperbesar dampak setiap escape dan melanggar hampir semua kebijakan admission yang layak.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Pod selalu berakhir dengan exit code 137 | bentuk `ENTRYPOINT` | SIGTERM tidak sampai; shell form menahannya |
+| `x509: certificate signed by unknown authority` | apakah CA bundle ada di image | `scratch` tanpa `ca-certificates` |
+| `time.LoadLocation` gagal di produksi | basis data zona waktu di image | `scratch` tanpa `tzdata` |
+| Image besar tanpa alasan | `docker history` | Stage build ikut terbawa |
+| Banyak CVE pada image | base image dan tag | Base image tebal atau tidak pernah diperbarui |
+
+```bash
+# Lapisan mana yang membuat image besar
+docker history --no-trunc --format '{{.Size}}\t{{.CreatedBy}}' registri/api:1.4.2 | head
+
+# Kerentanan pada image yang BENAR-BENAR dirilis
+trivy image --severity HIGH,CRITICAL registri/api:1.4.2
+
+# Apakah SIGTERM sampai ke proses utama? PID 1 harus aplikasinya, bukan sh.
+kubectl exec <pod> -- ps -ef | head -3
+kubectl get pod <pod> -o jsonpath='{.status.containerStatuses[0].lastState.terminated.exitCode}'
+# 137 = 128+9 SIGKILL, 143 = 128+15 SIGTERM
+
+# Konteks keamanan yang benar-benar berlaku
+kubectl get pod <pod> -o jsonpath='{.spec.securityContext}{.spec.containers[0].securityContext}' | jq
+```

@@ -1,5 +1,7 @@
 # Master-Level CI/CD Pipeline untuk Golang Monorepo
 
+> **Berlaku:** Go 1.21+ · Go workspaces · **Lihat juga:** `arch_patterns/modular_monolith_go.md` · `ci_cd_pipeline/github_actions_go.md` · `ci_cd_pipeline/deployment_strategies_go.md` · `testing_quality/unit_testing_testify.md`
+
 Ekosistem Golang modern secara progresif bergerak menuju arsitektur monorepo berkat fitur **Go Workspaces (`go.work`)** yang diperkenalkan pada Go 1.18. Monorepo menyelesaikan masalah manajemen dependensi `replace` yang sangat rumit ketika banyak modul saling bergantungan, namun memperkenalkan tantangan CI/CD baru: **Pipeline Bloat**. Tanpa desain pipeline yang presisi, perubahan sekecil apa pun dapat memicu siklus *build* dan *test* pada seluruh servis, menghabiskan resource komputasi dan memblokir kecepatan *deployment*.
 
 Dokumen referensi ini menguraikan arsitektur CI/CD tingkat mahir untuk Golang monorepo, mencakup deteksi servis yang terdampak, optimisasi *build cache*, paralelisasi tingkat lanjut, serta penanganan *edge cases* kritis.
@@ -443,3 +445,35 @@ func TestGolangCILintConfig(t *testing.T) {
 ## 9. Kesimpulan
 
 Membangun infrastruktur CI/CD untuk Golang monorepo menuntut kedisiplinan tingkat dewa. Kombinasi yang benar antara **Go Workspaces (`go.work`)**, **Path Filtering**, **Isolation melalui DI**, dan **Build Cache** dapat memangkas waktu *feedback loop* dari puluhan menit menjadi detik. Pengalaman membuktikan bahwa investasi pada *build tooling* dan *dynamic pipeline matrix* selalu sepadan dengan pengurangan *developer frustration* seiring dengan berkembangnya tim dan basis kode.
+
+## Kapan JANGAN Pakai Ini
+
+- **Menjalankan seluruh uji untuk setiap perubahan.** Waktu CI naik sebanding ukuran repo. Ketika menunggu CI lebih lama daripada menulis kodenya, orang berhenti menunggu — dan kualitas gerbangnya runtuh dengan sendirinya.
+- **Deteksi perubahan berbasis path saja.** Perubahan pada paket bersama mempengaruhi banyak modul yang path-nya tidak tersentuh. Yang dibutuhkan graf dependensi, bukan pencocokan direktori.
+- **Satu `go.mod` untuk modul yang benar-benar independen** — dan sebaliknya, banyak `go.mod` untuk modul yang selalu berubah bersama. Keduanya menghasilkan kerja koordinasi yang tidak perlu, ke arah yang berlawanan.
+- **Versi tunggal untuk semua layanan.** Merilis satu layanan memaksa menaikkan versi semuanya, dan changelog berhenti bermakna.
+- **Cache CI dengan kunci yang tidak mencerminkan modul yang berubah.** Cache yang terlalu luas menyembunyikan kegagalan; yang terlalu sempit membuang seluruh manfaatnya.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Waktu CI naik terus tiap kuartal | apa yang dijalankan per perubahan | Seluruh uji berjalan untuk perubahan kecil |
+| Perubahan paket bersama lolos tanpa uji | dasar deteksi perubahan | Berbasis path, bukan graf dependensi |
+| Rilis satu layanan menaikkan versi semua | strategi versioning | Versi tunggal untuk repo |
+| Uji lolos padahal dependensi berubah | cakupan kunci cache | Cache tidak mencerminkan perubahan |
+| Orang melewati CI dan merge langsung | durasi CI | Gerbang terlalu lambat untuk dipatuhi |
+
+```bash
+# Modul yang terpengaruh perubahan -- berbasis GRAF, bukan path
+go list -deps ./... | grep "$(go list -m)" | sort -u
+git diff --name-only origin/main... | xargs -r -n1 dirname | sort -u
+
+# Paket yang bergantung pada paket yang berubah
+go list -f '{{.ImportPath}} {{join .Deps " "}}' ./... | grep 'internal/bersama'
+
+# Uji terlambat -- kandidat untuk dipisah atau ditandai
+go test ./... -json | jq -r 'select(.Action=="pass") | "\(.Elapsed) \(.Package)"' | sort -rn | head -15
+
+go work sync && go build ./...
+```

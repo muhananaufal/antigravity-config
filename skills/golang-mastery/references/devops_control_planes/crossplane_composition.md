@@ -1,5 +1,7 @@
 # Crossplane Composition & Custom Providers di Go
 
+> **Berlaku:** Go 1.21+ · Crossplane v1 · **Lihat juga:** `devops_control_planes/gitops_flux_controller.md` · `devops_control_planes/custom_terraform_provider.md` · `cloud_native_k8s_operators/custom_resource_definition.md` · `cloud_native_k8s_operators/controller_runtime_reconciler.md`
+
 Crossplane mengubah Kubernetes menjadi Universal Control Plane. Infrastruktur cloud (S3, RDS, VPC) dikelola seperti pod — via YAML deklaratif dan Kubernetes API. Custom Providers ditulis dalam Go menggunakan `crossplane-runtime`, mengimplementasikan reconcile loop yang idempotent.
 
 ---
@@ -425,3 +427,32 @@ func (e *BucketExternalClient) Create(ctx context.Context, mg resource.Managed) 
 4. **Large ResourceVersion Conflict di Kubernetes:** Saat provider melakukan `Update` ke Kubernetes object (untuk menyimpan status), bisa terjadi conflict jika ada concurrent update. Gunakan `retry.RetryOnConflict(retry.DefaultRetry, ...)` dari `k8s.io/client-go/util/retry` untuk handle optimistic concurrency conflict secara graceful.
 
 5. **Observing Resource di Deletion State:** Saat resource di-delete dari Kubernetes (`DeletionTimestamp` ter-set), Crossplane memanggil `Delete()`. Tapi cloud mungkin membutuhkan waktu untuk hapus resource. Observe berikutnya mungkin masih menemukan resource di cloud — return `ResourceExists: true` selama cloud masih ada, dan track deletion progress di `status.atProvider.deletionProgress`.
+
+## Kapan JANGAN Pakai Ini
+
+- **Untuk infrastruktur yang jarang berubah dan tidak butuh self-service.** Terraform yang dijalankan tim platform jauh lebih sederhana. Crossplane membayar dirinya ketika tim produk benar-benar menyediakan infrastruktur sendiri.
+- **Composition tanpa versioning.** Perubahan pada composition berlaku ke **semua** claim yang ada, termasuk yang produksi, tanpa satu pun tinjauan per-claim.
+- **Tanpa memikirkan penghapusan sejak awal.** Menghapus claim bisa menghapus database sungguhan beserta datanya. Deletion policy dan proteksi bukan penyempurnaan belakangan.
+- **Sebagai abstraksi yang menyembunyikan seluruh detail.** Ketika terjadi masalah, tim tetap harus memahami apa yang dibuat atas nama mereka. Abstraksi yang tidak bisa dibuka adalah kotak hitam saat insiden.
+- **Tanpa rencana pemulihan control plane.** Crossplane memegang state seluruh infrastruktur yang dikelolanya; hilangnya adalah kejadian yang harus dilatih, bukan diharapkan tidak terjadi.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Sumber daya cloud berubah tanpa perubahan claim | versi composition | Composition diubah dan berlaku ke semua claim |
+| Database terhapus saat claim dihapus | deletion policy | Tidak ada proteksi penghapusan |
+| Claim `Ready=False` berkepanjangan | status managed resource | Provider gagal menyediakan; pesannya di lapisan bawah |
+| Tim tidak bisa mendiagnosis sendiri | keterbukaan abstraksi | Detail tersembunyi sepenuhnya |
+| Kredensial provider bocor lintas tim | ProviderConfig per namespace | Satu kredensial dipakai semua |
+
+```bash
+kubectl get claim -A
+kubectl get managed -A | grep -v 'True.*True'     # yang belum siap atau belum tersinkron
+
+# Kenapa sebuah claim tidak siap -- jawabannya biasanya di managed resource di bawahnya
+kubectl describe <jenis-claim> <nama> | tail -30
+
+kubectl get compositions -o custom-columns='NAMA:.metadata.name,REVISI:.metadata.generation'
+kubectl get compositionrevisions
+```

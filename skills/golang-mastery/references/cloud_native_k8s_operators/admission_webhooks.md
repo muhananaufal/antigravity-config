@@ -1,5 +1,7 @@
 # Cloud Native K8s Operators: Admission Webhooks
 
+> **Berlaku:** Go 1.21+ · Kubernetes 1.28+ · **Lihat juga:** `cloud_native_k8s_operators/custom_resource_definition.md` · `cloud_native_k8s_operators/controller_runtime_reconciler.md` · `cybersecurity_zerotrust/binary_signing_verification.md` · `security_owasp/mtls_certificate_rotation.md`
+
 ## 1. Konsep Utama & Internals
 
 Di Kubernetes, *Admission Webhooks* adalah pagar pengaman kustom (interceptor) pada sisi API Server (Control Plane). Sebelum sebuah Custom Resource (atau Pod standar) benar-benar ditulis/dimutasi ke *etcd storage*, request dari klien `kubectl` akan melewati filter *Mutating* dan *Validating* webhook.
@@ -285,3 +287,34 @@ webhooks:
 3. **Versioning CRD yang Berantakan di Decoder (Conversion Webhook)**
    Ketika Anda men-upgrade versi CRD dari `v1alpha1` ke `v1beta1`, user yang mengeksekusi *apply* bisa saja memakai YAML lama v1alpha1. Saat diterima Webhook, objek berbentuk versi lama yang tidak cocok dengan struct Golang v1beta1 terbaru.
    *Defensive Check:* Kubernetes juga punya fitur **Conversion Webhook**. Pisahkan logic. Paksa conversion webhook merubah `v1alpha1` menjadi `v1beta1` mutakhir DULU. Webhook *Validating/Mutating* utama Anda hanya perlu di-set untuk memantau spesifik API *Version* `v1beta1` demi mempertahankan kebersihan fungsi Go di parameter `obj runtime.Object`.
+
+## Kapan JANGAN Pakai Ini
+
+- **Tanpa memikirkan `failurePolicy` secara sadar.** `Fail` berarti cluster **berhenti menerima objek** ketika webhook mati — termasuk objek yang dibutuhkan untuk memperbaiki webhook itu. `Ignore` berarti kebijakan Anda bisa dilewati persis saat sedang paling rapuh. Keduanya adalah keputusan, bukan default.
+- **Webhook yang memanggil layanan eksternal.** Setiap operasi API di cluster jadi bergantung pada latensi dan ketersediaan layanan itu. Muat datanya lebih dulu.
+- **Tanpa mengecualikan namespace webhook itu sendiri.** Webhook yang memvalidasi namespace-nya sendiri bisa mengunci diri: ia mati, dan Anda tidak bisa men-deploy penggantinya.
+- **Mutating webhook yang tidak idempoten.** Ia bisa dipanggil beberapa kali untuk satu objek dalam satu permintaan. Mutasi yang menambah tanpa memeriksa akan menumpuk.
+- **Timeout bawaan 10 detik dibiarkan.** Setiap operasi API membayar itu saat webhook lambat. Untuk webhook yang sehat, satu atau dua detik lebih dari cukup.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Seluruh cluster menolak pembuatan objek | `failurePolicy: Fail` + webhook mati | Webhook menjadi titik kegagalan tunggal |
+| Operasi `kubectl` lambat di seluruh cluster | latensi webhook | Setiap permintaan menunggu webhook |
+| Kebijakan tidak berlaku sesekali | `failurePolicy: Ignore` | Webhook mati dan permintaan lolos |
+| Anotasi menumpuk berkali-kali | idempotensi mutating webhook | Mutasi dipanggil ulang tanpa pemeriksaan |
+| Webhook tidak bisa di-deploy ulang | pengecualian namespace | Webhook mengunci dirinya sendiri |
+
+```bash
+kubectl get validatingwebhookconfigurations,mutatingwebhookconfigurations \
+  -o custom-columns='NAMA:.metadata.name,KEBIJAKAN:.webhooks[*].failurePolicy,TIMEOUT:.webhooks[*].timeoutSeconds'
+
+# Latensi dan tingkat penolakan webhook dari sisi API server
+kubectl get --raw /metrics | grep -E 'apiserver_admission_webhook_(rejection_count|admission_duration_seconds_count)' | head
+
+# Apakah webhook mengecualikan namespace-nya sendiri?
+kubectl get validatingwebhookconfiguration <nama> -o jsonpath='{.webhooks[*].namespaceSelector}' | jq
+
+kubectl logs -l app=webhook --since=1h | grep -ciE 'timeout|context deadline'
+```

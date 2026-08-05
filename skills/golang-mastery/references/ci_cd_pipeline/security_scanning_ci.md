@@ -1,5 +1,7 @@
 # Panduan Master: Security Scanning dalam CI/CD Golang
 
+> **Berlaku:** Go 1.21+ · Trivy / govulncheck / gitleaks · **Lihat juga:** `testing_quality/govulncheck_security_scan.md` · `cybersecurity_zerotrust/binary_signing_verification.md` · `ci_cd_pipeline/github_actions_go.md` · `devops_control_planes/docker_container_go.md`
+
 Dokumen ini merupakan panduan komprehensif tingkat master untuk mengintegrasikan pengujian keamanan (Security Scanning) ke dalam pipeline CI/CD aplikasi Golang. Praktik keamanan modern mewajibkan *Shift-Left Security*, di mana pemindaian kerentanan dilakukan seawal mungkin dalam siklus hidup pengembangan perangkat lunak (SDLC).
 
 ## 1. Arsitektur & Analisis Internals
@@ -305,4 +307,38 @@ func containsGlobalNosec(code string) bool {
     import "strings"
     return strings.Contains(code, "/* #nosec */")
 }
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **Memindai kode tapi tidak memindai image yang benar-benar dirilis.** Yang berjalan di produksi adalah image, bukan repo. Kerentanan di base image tidak akan pernah muncul pada pemindaian sumber.
+- **Gerbang yang memblokir berdasarkan severity, bukan eksploitabilitas.** Banyak CVE "HIGH" tidak berlaku untuk cara Anda memakai paketnya. `govulncheck` yang menganalisis jalur panggilan jauh lebih layak memblokir daripada pemindai berbasis versi.
+- **Pengecualian tanpa tanggal kedaluwarsa.** Pengecualian permanen menjadi lubang permanen, dan tidak ada yang akan meninjaunya lagi. Setiap pengecualian WAJIB punya tanggal dan pemilik.
+- **Menjalankan seluruh pemindai pada setiap commit.** Waktu CI membengkak dan orang mencari jalan memintas. Pemindaian cepat di setiap PR, pemindaian dalam terjadwal.
+- **Hasil pemindaian yang tidak masuk ke tempat yang dilihat orang.** Laporan di artefak CI yang tidak pernah diunduh sama saja dengan tidak ada pemindaian — hanya lebih mahal.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| CVE ditemukan audit eksternal, bukan CI | apa yang dipindai | Image rilis tidak ikut dipindai |
+| Daftar pengecualian terus bertambah | tanggal dan pemilik pengecualian | Pengecualian jadi permanen |
+| Tim menambahkan pengecualian secara refleks | rasio temuan yang benar-benar relevan | Gerbang memblokir berdasarkan severity saja |
+| Rahasia ter-commit dan lolos | apakah ada pemindai rahasia | Tidak ada gerbang untuk kredensial |
+| Waktu CI didominasi pemindaian | durasi tiap langkah | Semua pemindai berjalan di setiap commit |
+
+```bash
+# Yang berjalan di produksi adalah IMAGE -- pindai itu, bukan hanya repo
+trivy image --severity HIGH,CRITICAL --exit-code 1 registri/api:1.4.2
+trivy fs --scanners vuln,secret,misconfig .
+
+# Eksploitabilitas, bukan sekadar keberadaan versi rentan
+govulncheck ./...
+govulncheck -mode=binary ./dist/app
+
+# Rahasia di riwayat, bukan hanya di working tree
+gitleaks detect --source . --redact --log-opts='--all'
+
+# Pengecualian tanpa tanggal kedaluwarsa
+grep -rn 'ignore\|exception' .trivyignore .golangci.yml 2>/dev/null | grep -v '20[0-9][0-9]-'
 ```

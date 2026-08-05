@@ -1,5 +1,7 @@
 # Custom Terraform Provider (Terraform Plugin Framework)
 
+> **Berlaku:** Go 1.21+ · Terraform Plugin Framework · **Lihat juga:** `devops_control_planes/crossplane_composition.md` · `cloud_provider_sdk/aws_sdk_go_v2.md` · `security_owasp/secret_management_vault.md` · `cli_tooling/config_precedence_viper.md`
+
 Custom Terraform Provider memungkinkan tim platform mengekspos infrastruktur internal (private cloud, internal API, CMDB) sebagai Terraform resources. Sejak SDKv2 deprecated, `hashicorp/terraform-plugin-framework` adalah standar dengan model data yang type-safe dan support `null`/`unknown` states.
 
 ---
@@ -379,3 +381,31 @@ func (p *ExampleProvider) Configure(ctx context.Context, req provider.ConfigureR
 4. **Schema Evolution dan State Migration:** Jika schema berubah (misal rename attribute atau ubah tipe), state lama yang tersimpan tidak kompatibel → `terraform plan` error. Implementasikan `StateUpgraders` di resource untuk migrate state dari versi lama ke baru secara otomatis. Bump `resource.SchemaVersion` saat ada breaking schema change.
 
 5. **Parallel Resource Operations:** Terraform mengeksekusi beberapa resources secara parallel (`-parallelism=10` default). Provider harus thread-safe. API client yang di-share antara goroutines harus aman untuk concurrent use (atau buat instance per operation jika API client tidak thread-safe).
+
+## Kapan JANGAN Pakai Ini
+
+- **Untuk API yang sudah punya provider resmi.** Pemeliharaannya berlaku selamanya, mengikuti setiap perubahan API hulu, dan bebannya jatuh ke tim Anda — bukan ke vendor.
+- **Provider tanpa dukungan impor state.** Sumber daya yang sudah ada tidak bisa diadopsi, dan pengguna terpaksa menghapus lalu membuat ulang. Pada database produksi, itu bukan opsi.
+- **Operasi non-idempoten di `Create`/`Update`.** Terraform akan memanggil ulang setelah kegagalan sebagian atau timeout. Setiap operasi WAJIB aman diulang.
+- **Menyimpan rahasia di state tanpa menandainya sensitif.** State Terraform sering berada di bucket yang lebih banyak orang bisa baca daripada yang diperkirakan, dan nilainya tersimpan dalam bentuk polos.
+- **Provider tanpa retry dan penghormatan rate limit.** `terraform apply` menjalankan operasi secara paralel; provider yang naif akan menabrak kuota API dan menghasilkan kegagalan yang tampak acak.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| `apply` gagal acak pada rencana besar | paralelisme vs rate limit API | Provider tidak menghormati kuota |
+| Sumber daya duplikat setelah kegagalan | idempotensi `Create` | Operasi diulang dan membuat dua objek |
+| Rahasia terbaca di file state | penandaan `Sensitive` | Nilai tersimpan polos di state |
+| Sumber daya yang ada tidak bisa dikelola | dukungan `ImportState` | Tidak ada jalur adopsi |
+| `plan` selalu menunjukkan perubahan | pemetaan API ke state | Field yang diisi server tidak diabaikan |
+
+```bash
+TF_LOG=DEBUG terraform apply 2>&1 | grep -iE 'rate|throttl|429' | head
+terraform plan -detailed-exitcode   # exit 2 = ada perubahan; selalu 2 berarti drift palsu
+
+# Rahasia di state
+terraform show -json | jq -r '.. | .values? // empty' | grep -iE 'password|secret|token' | head
+
+terraform providers schema -json | jq '.provider_schemas | keys'
+```

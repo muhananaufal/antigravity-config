@@ -1,5 +1,7 @@
 # Operator Lifecycle Manager (OLM) & Bundle
 
+> **Berlaku:** Go 1.21+ · OLM v0 · **Lihat juga:** `cloud_native_k8s_operators/controller_runtime_reconciler.md` · `cloud_native_k8s_operators/custom_resource_definition.md` · `ci_cd_pipeline/deployment_strategies_go.md` · `devops_control_planes/gitops_flux_controller.md`
+
 ## 1. Konsep Utama & Internals
 
 Bila Operator (`controller-runtime`) adalah perangkat lunaknya (Binary program), maka OLM (Operator Lifecycle Manager) adalah *Google Play Store / App Store* bagi Kubernetes (sangat populer pada lingkungan OpenShift dan K8s Enterprise).
@@ -227,3 +229,33 @@ spec:
 3. **Multiarch Bundle Base Image (AMD64 vs ARM64)**
    Dalam era cloud hibrida (AWS Graviton ARM64 / Mac M1 lokal dan VM klasik Intel AMD64). OLM secara diam-diam mem-pull `Bundle Image` Docker.
    *Defensive Check:* File Dockerfile Bundle Anda (Bukan Dockerfile Aplikasi murni Go Anda, tapi *Bundle Image OLM*) biasanya sangat minim `FROM scratch`. Anda *wajib* membangunnya menggunakan `docker buildx build --platform linux/amd64,linux/arm64` untuk *Manifest List Indexing* Quay.io. Jika Bundle Image ini didorong *single-architecture AMD64*, admin yang memakai K8s ARM64 Raspberry/Graviton akan mendapati pod *CatalogSource* OLM K8s masuk ke state `CrashLoopBackOff (exec format error)`, macet fatal yang tidak bisa dideteksi oleh lint tools.
+
+## Kapan JANGAN Pakai Ini
+
+- **OLM untuk satu operator internal.** Ongkos katalog, subscription, channel, dan bundle tidak sebanding. Manifest biasa atau Helm sudah cukup sampai Anda benar-benar mendistribusikan operator ke cluster yang bukan milik Anda.
+- **Upgrade otomatis di produksi.** Operator yang berubah bisa mengubah perilaku terhadap sumber daya yang dikelolanya — termasuk database dan volume. Upgrade harus menjadi keputusan, bukan kejadian.
+- **Tanpa menguji jalur upgrade dari versi yang benar-benar berjalan.** Upgrade dari versi terbaru ke terbaru tidak membuktikan apa pun. Yang perlu diuji adalah lompatan dari versi yang ada di produksi.
+- **Izin cluster-wide padahal namespace cukup.** Operator dengan izin luas menjadi target eskalasi hak akses yang menarik, dan kompromi terhadapnya berarti kompromi terhadap seluruh cluster.
+- **Tanpa memahami apa yang terjadi ketika CRD dihapus.** Menghapus CRD **menghapus seluruh objeknya**, dan pada operator yang mengelola infrastruktur, itu bisa berarti menghapus sumber daya sungguhan.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Operator berubah versi tanpa ada yang memutuskan | `installPlanApproval` | Upgrade otomatis aktif |
+| Upgrade gagal di produksi tapi lolos di staging | versi awal saat pengujian | Jalur upgrade nyata tidak pernah diuji |
+| Objek CR hilang massal | apakah CRD pernah dihapus | Penghapusan CRD menghapus semua objeknya |
+| Operator bisa membaca rahasia namespace lain | cakupan izin | Izin cluster-wide tanpa kebutuhan |
+| `InstallPlan` menggantung | status subscription | Dependensi katalog tidak terpenuhi |
+
+```bash
+kubectl get subscription -A \
+  -o custom-columns='NS:.metadata.namespace,NAMA:.metadata.name,CHANNEL:.spec.channel,APPROVAL:.spec.installPlanApproval'
+
+kubectl get installplan -A | grep -v Complete
+kubectl get csv -A -o custom-columns='NS:.metadata.namespace,NAMA:.metadata.name,FASE:.status.phase'
+
+# Izin yang benar-benar dimiliki operator
+kubectl get clusterrole -o name | grep -i operator \
+  | xargs -I{} kubectl describe {} | grep -A5 'PolicyRule' | head -30
+```

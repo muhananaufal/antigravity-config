@@ -1,5 +1,7 @@
 # Platform Engineering: Backstage Custom Catalog Provider (Go)
 
+> **Berlaku:** Go 1.21+ · Backstage · **Lihat juga:** `engineering_practice/adr_decision_records.md` · `engineering_practice/technical_design_doc.md` · `devops_control_planes/gitops_flux_controller.md` · `engineering_practice/slo_error_budget.md`
+
 Backstage adalah Internal Developer Portal (IDP) terpopuler. Meskipun ditulis TypeScript/Node.js, backend heavylifting — sinkronisasi CMDB, policy enforcement, scaffolding workflow — sebaiknya didelegasikan ke microservice Go. Go backend bertindak sebagai **Custom Entity Provider** yang menyuplai entitas ke Backstage via pull-based HTTP API.
 
 ---
@@ -443,3 +445,31 @@ func ServeEntities(w http.ResponseWriter, r *http.Request) {
 4. **TechDocs Path Resolution:** Anotasi `backstage.io/techdocs-ref: "dir:."` memberitahu Backstage untuk cari `mkdocs.yml` di root repo. Jika `mkdocs.yml` tidak ada, TechDocs akan menampilkan error dan halaman dokumentasi kosong. Go backend sebaiknya verifikasi keberadaan file ini di GitHub API sebelum menambahkan anotasi TechDocs.
 
 5. **Backstage Entity Refresh Rate vs Cache TTL:** Backstage refresh catalog setiap 5-10 menit. Jika Go backend cache TTL terlalu pendek (misal 30 detik) tapi CMDB lambat, ada window dimana cache kosong saat Backstage pull → 0 entities returned → semua service hilang dari catalog sementara. Set cache TTL minimal 2x interval Backstage refresh.
+
+## Kapan JANGAN Pakai Ini
+
+- **Membangun portal internal sebelum ada yang mau memakainya.** Platform tanpa pengguna adalah proyek, bukan produk. Mulai dari satu masalah yang benar-benar menyakitkan bagi tim lain, bukan dari portalnya.
+- **Katalog yang diisi manual.** Ia akan basi dalam dua bulan, dan katalog yang basi lebih berbahaya daripada tidak ada katalog — orang mengambil keputusan berdasarkan informasi yang salah. Isi dari sumber yang sudah dipelihara: repo, manifest, registry.
+- **Template yang menghasilkan kode yang tidak bisa diperbarui.** Proyek hasil generate akan menyimpang, dan perbaikan pada template tidak pernah sampai ke mereka. Rencanakan jalur pembaruan sejak template pertama.
+- **Backstage sebagai pengganti dokumentasi yang dipelihara.** Portal hanya menampilkan apa yang ada. Ia tidak membuat dokumentasi yang buruk menjadi baik.
+- **Memaksa adopsi lewat mandat.** Platform yang dipakai karena wajib tidak menghasilkan umpan balik jujur, dan Anda kehilangan satu-satunya sinyal yang menunjukkan apakah ia benar-benar berguna.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Katalog tidak mencerminkan kenyataan | sumber pengisian entitas | Diisi manual dan sudah basi |
+| Portal jarang dibuka | metrik pemakaian per tim | Tidak menyelesaikan masalah nyata |
+| Proyek hasil template menyimpang jauh | mekanisme pembaruan template | Tidak ada jalur pembaruan |
+| Informasi kepemilikan salah | siapa yang memperbaruinya | Kepemilikan tidak terhubung ke sumber yang hidup |
+| Tim membuat portal sendiri | apa yang kurang | Platform tidak menjawab kebutuhan nyata |
+
+```bash
+# Entitas katalog dan sumbernya -- yang diisi manual akan terlihat di sini
+curl -s "$BACKSTAGE/api/catalog/entities?limit=1000" \
+  | jq -r '.[] | "\(.kind) \(.metadata.name) \(.metadata.annotations["backstage.io/managed-by-location"] // "MANUAL")"' \
+  | grep MANUAL | head -20
+
+# Entitas tanpa pemilik: sumber kebingungan saat insiden
+curl -s "$BACKSTAGE/api/catalog/entities" | jq -r '.[] | select(.spec.owner == null) | .metadata.name'
+```

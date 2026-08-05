@@ -1,5 +1,7 @@
 # Cloud Native K8s Operators: Controller Runtime Reconciler
 
+> **Berlaku:** Go 1.21+ · `controller-runtime` v0.17+ · **Lihat juga:** `cloud_native_k8s_operators/custom_resource_definition.md` · `cloud_native_k8s_operators/k8s_client_go_informers.md` · `cloud_native_k8s_operators/admission_webhooks.md` · `distributed_patterns_resilience/idempotency_key_engine.md`
+
 ## 1. Konsep Utama & Internals
 
 Dalam ekosistem Kubernetes Operator yang dibangun dengan framework `controller-runtime`, `Reconciler` adalah *jantung* atau inti dari arsitektur *control loop*. Tugas utamanya adalah secara kontinu menerapkan pola *level-based reconciliation*: membaca **Desired State** (kondisi yang diinginkan pengguna, biasanya didefinisikan dalam spec Custom Resource Definition / CRD), kemudian membandingkannya dengan **Actual State** (kondisi dunia nyata saat ini dari resource K8s atau infrastruktur cloud eksternal), dan melakukan mutasi untuk menyeimbangkan keduanya.
@@ -295,3 +297,34 @@ if !isValidCRDFormat(dbResource.Spec) {
 3. **Orphaned External Resources (Finalizer Edge Case)**
    Pengguna men-delete namespace, yang memaksa K8s untuk me-delete ribuan resource di dalamnya seketika secara brutal. Jika Finalizer operator Anda memiliki bug/hang (misalnya Cloud API time-out tak berujung karena kurangnya batas Context Timeout K8s), resource di Kubernetes tersangkut di kondisi *Terminating*, membuat *namespace deletion* macet permanen.
    *Defensive Check:* Selalu *wrap* fungsi eksternal ke cloud (AWS/GCP) menggunakan `context.WithTimeout`. Jika menghapus resource eksternal memakan waktu melampaui 20 detik, *return error* agar fungsi gagal *fail-fast*, melonggarkan requeue, dan mencatat peringatan di Event Recorder, dibanding membuat goroutine nyangkut permanen di memori menunggu respons cloud yang mati.
+
+## Kapan JANGAN Pakai Ini
+
+- **`Reconcile` yang tidak idempoten.** Ia akan dipanggil berkali-kali untuk keadaan yang sama — itu bukan anomali, itu **desainnya**. Setiap efek samping WAJIB aman diulang tanpa batas.
+- **Menyimpan state di memori controller.** Controller bisa restart kapan saja, dan pemimpin bisa berpindah. Satu-satunya kebenaran ada di cluster; apa pun yang hanya ada di memori akan hilang tanpa peringatan.
+- **Operasi berjalan lama di dalam `Reconcile`.** Ia memblokir worker dan menahan seluruh antrean. Yang benar: catat kemajuan di status, lalu `RequeueAfter`.
+- **Membandingkan objek dengan `DeepEqual` terhadap objek dari API server.** Field yang diisi server — `resourceVersion`, `creationTimestamp`, nilai default — akan **selalu** berbeda, dan controller masuk loop pembaruan tak berujung yang membanjiri API server.
+- **`Owns`/`Watches` yang tidak lengkap.** Controller yang tidak menerima event untuk sumber daya yang dikelolanya akan tampak bekerja dengan baik sampai sesuatu berubah tanpa sepengetahuannya — lalu drift bertahan sampai rekonsiliasi periodik berikutnya.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| API server dibanjiri permintaan dari controller | laju rekonsiliasi per objek | Loop pembaruan; kemungkinan `DeepEqual` pada field server |
+| Antrean rekonsiliasi menumpuk | durasi `Reconcile` | Operasi panjang memblokir worker |
+| Objek duplikat dibuat | idempotensi `Reconcile` | Efek samping diulang |
+| Drift bertahan sampai rekonsiliasi periodik | konfigurasi `Owns`/`Watches` | Event tidak sampai ke controller |
+| State hilang setelah controller restart | di mana kemajuan disimpan | State disimpan di memori |
+
+```bash
+# Laju rekonsiliasi dan panjang antrean -- dua metrik paling menentukan
+curl -s localhost:8080/metrics | grep -E 'controller_runtime_reconcile_(total|errors_total|time_seconds)'
+curl -s localhost:8080/metrics | grep -E 'workqueue_(depth|adds_total|retries_total)'
+
+# Rekonsiliasi yang berulang untuk objek yang sama = loop
+kubectl logs -l control-plane=controller-manager --since=10m \
+  | grep -oE '"name":"[^"]+"' | sort | uniq -c | sort -rn | head
+
+# Throttling klien: tanda controller terlalu sering memanggil API server
+kubectl logs -l control-plane=controller-manager --since=1h | grep -ci 'client-side throttling'
+```

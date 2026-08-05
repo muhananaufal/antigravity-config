@@ -1,5 +1,7 @@
 # Client-Go & Informers (Kubernetes Controller Foundations)
 
+> **Berlaku:** Go 1.21+ · `k8s.io/client-go` v0.29+ · **Lihat juga:** `cloud_native_k8s_operators/controller_runtime_reconciler.md` · `cloud_native_k8s_operators/custom_resource_definition.md` · `concurrency/data_race_detection.md` · `runtime_internals/gc_mark_sweep_internals.md`
+
 ## 1. Konsep Utama & Internals
 
 Sebelum framework modern seperti `controller-runtime` mengabstraksi segalanya, dasar dari arsitektur ekosistem Operator (dan kontroler K8s pada umumnya) ditenagai murni oleh library `k8s.io/client-go`. Memahami `client-go` berarti memahami fondasi (urat nadi) mengapa Kubernetes sangat cepat bereaksi, namun sangat irit I/O disk (etcd).
@@ -284,3 +286,34 @@ informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 3. **Informer Resync Period Membanjiri Queue (Thundering Herd)**
    Saat `informers.NewSharedInformerFactory(clientset, 10*time.Minute)`, K8s secara periodik akan mereset dan mem-*flush* SELURUH CACHE, merilis ratusan event `UpdateFunc` PALSU (bukan dari K8s server sungguhan, tapi re-sync routine lokal) walau resource tidak berubah apapun. Ini gunanya untuk men-*heal* data yang mungkin terlewat.
    *Defensive Check:* (Diperagakan di kode `UpdateFunc` atas). Wajib memeriksa `if oldPod.ResourceVersion == newPod.ResourceVersion { return }`. Versi resource K8s HANYA berubah jika etcd server benar-benar bermutasi. Jika versi sama, itu artinya sekadar Notifikasi Event Resync Periodik Hantu dari client-go; ABAIKAN SAJA, jangan antrikan membanjiri WorkQueue agar CPU idle santai!
+
+## Kapan JANGAN Pakai Ini
+
+- **`List` dalam loop alih-alih informer.** Setiap `List` membebani API server dan etcd untuk seluruh cluster. Pola ini tidak menskala melewati beberapa klien, dan efeknya dirasakan tim lain sebelum dirasakan Anda.
+- **Memodifikasi objek yang diambil dari cache informer.** Objeknya **dibagi** dengan seluruh konsumen di proses yang sama. Menulisnya adalah data race yang merusak controller lain secara diam-diam. `DeepCopy()` dulu, tanpa kecuali.
+- **Informer untuk semua namespace bila hanya butuh satu.** Memori klien sebanding dengan jumlah objek yang di-cache; pada cluster besar itu bisa gigabyte.
+- **Mengandalkan cache untuk keputusan yang butuh kesegaran mutlak.** Cache selalu tertinggal sedikit dari API server. Untuk pemeriksaan yang harus akurat pada saat itu juga, baca langsung dengan `APIReader`.
+- **Bekerja sebelum `WaitForCacheSync`.** Cache yang belum terisi tampak seperti cluster kosong, dan controller akan mengambil keputusan menghapus atau membuat berdasarkan itu.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| API server melambat untuk semua tim | laju `List` dari klien Anda | Polling alih-alih watch |
+| Data race yang melibatkan objek Kubernetes | apakah `DeepCopy` dipakai | Objek cache dimodifikasi |
+| Memori controller sangat besar | cakupan namespace informer | Meng-cache seluruh cluster |
+| Keputusan salah tepat setelah start | `WaitForCacheSync` | Bekerja dengan cache kosong |
+| Keputusan berdasarkan data usang | cache vs `APIReader` | Kesegaran cache tidak memadai untuk kasus ini |
+
+```bash
+# Throttling sisi klien = terlalu banyak permintaan ke API server
+kubectl logs -l control-plane=controller-manager --since=1h | grep -ci 'client-side throttling'
+
+curl -s localhost:8080/metrics | grep -E 'rest_client_requests_total|rest_client_request_duration'
+
+# Memori controller dan apa yang mengisinya
+kubectl top pod -l control-plane=controller-manager
+go tool pprof -sample_index=inuse_space -top http://localhost:6060/debug/pprof/heap | head -20
+
+go test -race -count=5 ./controllers/...
+```

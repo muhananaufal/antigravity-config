@@ -1,5 +1,7 @@
 # Master-Level CI/CD: Deployment Strategies & Zero-Downtime di Golang Kubernetes
 
+> **Berlaku:** Go 1.21+ · Kubernetes 1.28+ · **Lihat juga:** `observability_resilience/graceful_shutdown_drain.md` · `observability_resilience/health_check_readiness.md` · `db_sqlc/zero_downtime_migrations.md` · `engineering_practice/slo_error_budget.md`
+
 Dokumen referensi ini menguraikan strategi deployment tingkat lanjut untuk aplikasi Golang di Kubernetes (K8s). Strategi yang dibahas dirancang untuk meminimalkan waktu henti (zero-downtime), mengurangi risiko, dan memastikan integritas data melalui mekanisme rollout yang terkendali.
 
 ## 1. Rolling Update (K8s Native)
@@ -445,4 +447,36 @@ if [ "$SURGE" == "100%" ]; then
     exit 1
 fi
 echo "✅ CI/CD Validation Passed!"
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **Blue-green untuk aplikasi dengan migrasi skema yang tidak kompatibel dua arah.** Dua versi berjalan bersamaan terhadap satu database. Bila skemanya hanya cocok untuk salah satu, salah satunya akan rusak — dan biasanya yang lama, tepat ketika Anda membutuhkannya untuk rollback.
+- **Canary tanpa metrik yang bisa membedakan versi.** Tanpa label versi pada metrik, canary hanya deploy bertahap tanpa dasar keputusan apa pun. Anda tetap menebak, hanya lebih lambat.
+- **Rolling update tanpa readiness probe yang benar.** Trafik masuk ke pod yang belum siap, dan pengguna melihat galat yang tidak akan pernah muncul di uji mana pun.
+- **Rollback sebagai rencana utama untuk perubahan skema.** Kode bisa di-rollback; skema dan data yang sudah tertulis tidak. Yang dibutuhkan adalah expand-contract, bukan tombol rollback.
+- **Deploy otomatis ke produksi tanpa kemampuan menghentikan cepat.** Otomasi tanpa rem hanya mempercepat penyebaran masalah ke seluruh armada.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Galat melonjak tiap rollout | readiness probe dan drain | Trafik masuk sebelum siap, atau keluar sebelum selesai |
+| Canary tidak bisa dinilai | label versi pada metrik | Tidak ada dasar untuk memutuskan lanjut atau batal |
+| Rollback tidak memperbaiki keadaan | perubahan skema di rilis itu | Data sudah berubah bentuk |
+| Dua versi saling merusak data | kompatibilitas skema dua arah | Blue-green tanpa expand-contract |
+| Masalah menyebar ke semua pod dalam hitungan detik | `maxSurge`/`maxUnavailable` | Rollout terlalu agresif |
+
+```bash
+kubectl rollout status deployment/api --timeout=5m
+kubectl rollout history deployment/api
+
+# Galat per versi -- tanpa label versi, canary tidak bisa dinilai
+curl -s localhost:9090/metrics | grep -E 'http_requests_total.*versi='
+
+# Jendela rollout vs lonjakan galat gateway
+kubectl get events --field-selector reason=ScalingReplicaSet --sort-by=.lastTimestamp | tail
+kubectl logs -l app=ingress --since=30m | grep -cE ' 50[234] '
+
+kubectl get deployment api -o jsonpath='{.spec.strategy}' | jq
 ```
