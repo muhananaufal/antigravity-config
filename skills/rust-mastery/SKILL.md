@@ -34,6 +34,9 @@ Domain fondasi yang hampir selalu relevan, apa pun bentuk tasknya:
 | :--- | :--- |
 | `async`/`await`, Tokio runtime, `select!`, cancellation safety, `spawn_blocking` | `references/async_tokio_concurrency/` |
 | Axum/Actix handler, middleware, extractor, REST API, state sharing | `references/web_microservices/` |
+| Database Postgres, SQLx compile-time queries, connection pool, SeaORM | `references/db_persistence_sqlx/` |
+| Tracing, OpenTelemetry, OTLP, Datadog, Prometheus, structured JSON logs | `references/observability_telemetry_tracing/` |
+| Apalis background queue workers, Transactional Outbox pattern, Distributed Saga compensating rollback, DLQ | `references/background_jobs_saga/` |
 | gRPC/tonic, protobuf, QUIC, WebSocket, protokol biner kustom | `references/networking_protocols_grpc/` |
 | Latensi mikrodetik, zero-alloc, SIMD, cache line, order book, HFT | `references/high_performance_hft/` |
 | Raft, etcd, LSM tree, WAL, sled/RocksDB, replikasi & konsensus | `references/distributed_consensus_storage/` |
@@ -61,7 +64,6 @@ Agent WAJIB mencocokkan nature of task ke domain berikut **secara proaktif**:
 | AWS SDK for Rust (`aws-sdk-s3`/`sqs`/`sns`/`secretsmanager`), Cargo Lambda serverless <10ms cold start | `references/cloud_provider_sdk_serverless/` |
 | moka L1 RAM cache, fred/redis Valkey cluster, Singleflight stampede locks, ETag CDN edge headers | `references/caching_strategy_cdn/` |
 | Governor GCRA API rate limiting, casbin RBAC/ABAC policy, OIDC JWT token vaults, SOC2 HMAC audit ledger | `references/zero_trust_enterprise_security/` |
-| Apalis background queue workers, Transactional Outbox pattern, Distributed Saga compensating rollback, DLQ | `references/background_jobs_saga/` |
 | SIMD fast image resizing, Apache Parquet/CSV 10M streaming, ffmpeg-next video HLS, headless_chrome PDF | `references/media_asset_pipeline/` |
 | CI/CD acceleration via cargo-nextest, sccache AWS S3 cloud cache, cargo-zigbuild cross compile, cargo-deny SBOM | `references/ci_cd_pipeline_cargo/` |
 | Unicode ICU4X zero-alloc engine, Mozilla Project Fluent localization, Axum locale routing, zero-copy formatting | `references/i18n_localization_icu/` |

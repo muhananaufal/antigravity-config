@@ -23,12 +23,10 @@ Agent WAJIB mencocokkan nature of task ke domain berikut **secara proaktif**:
 | Jika task melibatkan... | Otomatis baca |
 | :--- | :--- |
 | Payment, transaksi, ledger, refund, wallet, checkout | `fintech_reliability/` |
-| Job async, queue, email/notif worker, scheduled task, cron | `background_jobs_worker/` |
 | Kafka, NATS, WebSocket, real-time, event stream, pub/sub | `realtime_networking/` |
 | AWS, GCP, S3, Lambda, SQS, Secrets Manager, cloud | `cloud_provider_sdk/` |
 | K8s, Helm, CRD, Operator, cluster, pod, deployment manifest | `cloud_native_k8s_operators/` |
 | CI/CD, GitHub Actions, GitLab CI, release, deploy pipeline | `ci_cd_pipeline/` |
-| Cache Redis, in-memory cache, stampede, TTL, invalidation | `caching_strategy/` (full) |
 | Saga, outbox, CQRS, event sourcing, distributed tx | `distributed_patterns_resilience/` (full) |
 | Performance, profiling, pprof, GC pressure, memory leak | `runtime_internals/` |
 | Search, vector, AI/ML inference, embedding, ONNX | `ai_data_infra/` |
@@ -58,6 +56,8 @@ Domain yang hampir selalu relevan untuk Go service manapun:
 | **Observability** | `references/observability_resilience/` | semua |
 | **Security** | `references/security_owasp/` | semua |
 | **Testing** | `references/testing_quality/` | semua |
+| **Background Jobs** | `references/background_jobs_worker/` | semua |
+| **Caching Strategy** | `references/caching_strategy/` | semua |
 | **Architecture** | `references/arch_patterns/` | semua |
 | **Docker & Deploy** | `references/devops_control_planes/` | `docker_container_go.md`, `kubernetes_deployment_go.md`, `modular_3tier_container_topology.md` |
 | **Resilience Patterns** | `references/distributed_patterns_resilience/` | `retry_backoff_jitter.md`, `idempotency_key_engine.md`, `bulkhead_isolation.md` |

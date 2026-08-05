@@ -52,6 +52,7 @@ Cocokkan tugas ke domain di bawah, lalu baca rujukannya. Taksonomi 3-Tier, akses
 | **File Storage & Object CDN** | `references/file_storage_object_cdn/` | S3 R2 Presigned Direct Upload, Multipart Chunked Resumable Streams, Sharp Image Worker Pipeline, Secure ACL Expiring Document Links |
 | **Omnichannel Notifications** | `references/omnichannel_notifications_mail/`| Email Engine Resend SES DKIM, FCM APNs Push Notifications Batching, WhatsApp Twilio SMS OTP Fallback, In-App Notification Center Inbox |
 | **Concurrency & Runtime**| `references/concurrency_runtime_internals/`| V8 Libuv Event Loop Phases, Worker Threads Piscina Offloading, Bun Runtime Dual-Compat, OOM Heap Snapshot Memory Leak Hunting |
+| **Background Jobs Queues** | `references/background_jobs_queues/` | BullMQ Advanced Queue Workers, Distributed Lock Cron Scheduling, Exponential Backoff Retry DLQ Strategy, Queue Job Observability Arena |
 | **Docker Container Standards** | `references/docker_container_standards/`| modular_3tier_container_topology.md, Multi-Stage Distroless Alpine, Non-Root User SIGTERM Hooks, Corepack Pnpm Docker Caching, K8s Terminus Health Probes |
 
 ### Tier II: Distributed Systems, Async & Cloud Scale (13 Domain)
@@ -62,7 +63,6 @@ Cocokkan tugas ke domain di bawah, lalu baca rujukannya. Taksonomi 3-Tier, akses
 | **Message Brokers Event Stream** | `references/message_brokers_event_streaming/`| Kafka Consumer Groups & Commit Offset, RabbitMQ AMQP DLQ Topic Routing, NATS JetStream Distributed Persistence, Redis Streams Event Sourcing Log |
 | **API GraphQL Federation** | `references/api_graphql_federation/`| Code-First vs Schema-First GraphQL, Apollo Federation v2 Subgraph, DataLoader N+1 Mitigation |
 | **Realtime WebSocket SSE** | `references/realtime_websocket_sse/` | WebSocket Gateway WsGuard Security, Server-Sent Events SSE AI Streaming, Redis PubSub Ws Adapter Cluster, Heartbeat Ping Pong Connection Harvesting |
-| **Background Jobs Queues** | `references/background_jobs_queues/` | BullMQ Advanced Queue Workers, Distributed Lock Cron Scheduling, Exponential Backoff Retry DLQ Strategy, Queue Job Observability Arena |
 | **CQRS Event Sourcing** | `references/cqrs_event_sourcing/` | NestJS CQRS Command/Query Bus Setup, EventStoreDB Append Events Stream, Read Model Projection Denormalization |
 | **Search Engine & Catalog Sync**| `references/search_engine_catalog_indexing/`| Meilisearch Faceted Catalog Engine, Elasticsearch OpenSearch Aggregation, CDC Debezium Zero-Downtime Sync, Synonyms Prominence Scoring |
 | **API Gateway & Versioning** | `references/api_versioning_gateway_routing/`| Enterprise API Versioning Strategies, API Gateway Reverse Proxy Upstream, Tenant Quota Metered Billing Redis |

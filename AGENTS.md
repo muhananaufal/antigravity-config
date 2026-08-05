@@ -83,8 +83,9 @@ Brief minim = risiko merencanakan sistem yang salah dengan rapi. Sebelum menulis
    - Sudah merah sejak awal → sebutkan; DILARANG dihitung sebagai kerusakan Anda.
    - Tidak ada test sama sekali → katakan apa adanya + rekomendasikan harness.
 5. Task menyentuh domain bermastery (Go / Rust / Laravel / NestJS) → WAJIB baca SELURUH referensi domain terkait di `references/<domain>/` sampai tuntas. Mekanisme riset ada di §7.
-6. Referensi mastery berada di `~/.gemini/config/skills/<stack>-mastery/references/`.
-7. Pencarian web DILARANG sebelum referensi lokal habis dibedah.
+6. **Master Decision Tree:** Jika task adalah perancangan arsitektur sistem baru, pemilihan tech-stack, atau pembuatan proyek dari nol → WAJIB baca `~/.gemini/config/master_decision_tree.md` terlebih dahulu. DILARANG langsung memilih bahasa/framework sebelum melewati pohon keputusan. Berlaku juga untuk fitur besar di Brownfield yang membutuhkan keputusan arsitektur baru (misal: menambahkan message broker, memilih strategi caching, atau memecah monolit).
+7. Referensi mastery berada di `~/.gemini/config/skills/<stack>-mastery/references/`.
+8. Pencarian web DILARANG sebelum referensi lokal habis dibedah.
 
 ## 4. Challenger Procedure (Anti-Yes-Man)
 

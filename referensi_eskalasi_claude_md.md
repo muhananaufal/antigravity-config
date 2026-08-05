@@ -141,26 +141,26 @@ Setiap berkas `.md` yang dieskalasi di masa depan **WAJIB MENGIKUTI STRUKTUR 5 L
 
 ---
 
-## 5. PROTOKOL EKSEKUSI ESKALASI DI MASA DEPAN
+## 5. PROTOKOL EKSEKUSI ESKALASI SURGICAL DI MASA DEPAN
 
-Ketika user memutuskan untuk mengeksekusi peningkatan pada domain-domain di atas, ikuti **Protokol 4 Langkah Baku**:
+Ketika user memutuskan untuk mengeksekusi peningkatan pada domain-domain di atas, **DILARANG KERAS** melakukan "Blanket Rewrite" (menulis ulang dari nol yang berisiko menghapus kedalaman arsitektur asli). Ikuti **Protokol 4 Langkah Surgical Baku**:
 
 ```
-[ Langkah 1: Subagent Research Swarm ]
-  - Pindai domain target (misal: rust-mastery/references/high_performance_hft)
-  - Identifikasi kelemahan, kode usang, atau string berbahasa non-Inggris
+[ Langkah 1: Full Context Loading ]
+  - Pindai dan muat *seluruh* isi file asli (yang biasanya berukuran 15KB-30KB) ke dalam memori agen.
+  - Dilarang keras merangkum atau memotong penjelasan teoritis yang sudah ada.
 
-[ Langkah 2: Claude Opus 20x Max Thinking Processing ]
-  - Terapkan 5-Layer Reference Anatomy secara mendalam
-  - formulasikan model matematika, memory layout, dan edge-case failure matrix
+[ Langkah 2: Opus 20x Gap Analysis ]
+  - Analisis bagian mana dari 5-Layer Anatomy yang masih kurang (biasanya Edge-Case Matrix atau High-Assurance Testing).
+  - Identifikasi string/log/error dalam blok kode yang masih berbahasa Indonesia.
 
-[ Langkah 3: Top 1% Code Generation & Sanitization ]
-  - Buat kode 100% Bahasa Inggris, zero-allocation, type-safe
-  - Pastikan string error, logging, dan query sudah berstandar global
-
-[ Langkah 4: Verification & Ratchet Gate Enforcement ]
-  - Verifikasi integritas format Markdown dan ketepatan teknis
-  - Pastikan lolos quality gate (nol TODO, nol credential hardcode)
+[ Langkah 3: Surgical Injection & Sanitization ]
+  - Suntikkan materi tambahan (Math models, failure matrix) ke bagian yang relevan TANPA menghapus teks asli.
+  - Ubah blok kode menjadi 100% Bahasa Inggris murni.
+  
+[ Langkah 4: Verification & Anti-Truncation Gate ]
+  - Pastikan ukuran file hasil (output) HARUS SAMA BESAR ATAU LEBIH BESAR dari file asli. Jika menyusut, batalkan!
+  - Pastikan lolos quality gate (nol TODO, nol credential hardcode).
 ```
 
 ---
@@ -171,21 +171,25 @@ Gunakan format prompt berikut saat memicu proses eskalasi per domain:
 
 ```markdown
 Kamu adalah Principal Systems Architect & Performance Engineer (Top 1% Global Standard).
-Tugasmu adalah meningkatkan berkas referensi pada domain: `<DOMAIN_PATH>`.
+Tugasmu adalah melakukan "Surgical Enhancement" pada berkas referensi di domain: `<DOMAIN_PATH>`.
+
+🚨 ATURAN MUTLAK (ANTI-TRUNCATION):
+File asli memiliki kedalaman teknis yang luar biasa (berkisar 15KB-30KB). KAMU DILARANG MERINGKAS, MEMOTONG, ATAU MENULIS ULANG DARI NOL! Tugasmu adalah MEMPERTAHANKAN 100% narasi asli, lalu MENAMBAHKAN kedalaman dan MENSANITASI kodenya. Hasil akhirmu HARUS lebih panjang dan padat dari aslinya.
 
 PERSYARATAN WAJIB (OPUS 20X MAX THINKING BLUEPRINT):
-1. Ikuti Struktur 5-Lapisan:
+1. Lengkapi Struktur 5-Lapisan (jika ada yang kurang pada file asli):
    - Layer 1: Fundamental Law & Mechanical Sympathy (Kernel/Memory/Math)
    - Layer 2: Top 1% Production Architecture
    - Layer 3: Failure & Edge-Case Anomaly Matrix
    - Layer 4: High-Assurance Testing (Property-Based, Deterministic, Zero-Alloc)
    - Layer 5: Anti-Patterns & "When NOT to Use" Matrix (≥3 Pros, ≥3 Cons)
 2. Aturan Bahasa:
-   - SELURUH blok kode (Identifier, Struct, Error String, Log String, Queries) WAJIB 100% Bahasa Inggris.
+   - SELURUH blok kode (Identifier, Struct, Error String, Log String, Queries) WAJIB 100% Bahasa Inggris murni.
    - Narasi penjelasan Markdown dan komentar kode menggunakan Bahasa Indonesia teknis mendalam.
 3. Standar Kualitas:
    - Nol `// TODO`, nol placeholder, nol untyped bypasses.
-   - Sertakan mitigasi race condition, memory leak, dan anomali konkurensi.
+
+Gunakan tool `multi_replace_file_content` untuk mengubah blok kode secara presisi tanpa merusak markdown di sekitarnya. Jika menggunakan `write_to_file`, pastikan seluruh teks asli disertakan! Laporkan selesai setelah diverifikasi. Gasskan!
 ```
 
 ---

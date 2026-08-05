@@ -31,9 +31,11 @@ Domain fondasi yang hampir selalu relevan, apa pun bentuk tasknya:
 | Konteks / Keyword | Baca Referensi |
 | :--- | :--- |
 | Queue worker, Horizon, race condition, atomic lock, concurrency | `references/concurrency/` |
+| Distributed Saga transaction rollback, Idempotency ledger, background workers | `references/background_jobs_saga/` |
 | Octane state leak, opcache/JIT, memory footprint, internals PHP 8 | `references/php_runtime_internals/` |
 | Repo lawas, migrasi bertahap, strangler fig, skema DB warisan | `references/legacy_refactoring/` |
 | Service mesh, komunikasi antar-service, gRPC/HTTP internal, sidecar | `references/microservices_mesh/` |
+| Caching L1 Octane RAM + L2 Redis, Cache Stampede dogpile protection | `references/caching_strategy_cdn/` |
 
 ## 🔍 Auto-Detect Niche Domain (Scan dari Task)
 
@@ -49,9 +51,7 @@ Agent WAJIB mencocokkan nature of task ke domain berikut **secara proaktif**:
 | Filament v3 Admin panel, Laravel Prompts CLI tools, Precognition real-time form validation | `references/ecosystem_firstparty/` |
 | Spatie packages: Permission roles, Media Library, Query Builder, Spatie Data DTOs, Health probes | `references/ecosystem_extended/` |
 | Real-time eventing, Reverb WebSockets Pub/Sub, Laravel Echo client, Server-Sent Events (SSE) | `references/realtime_eventing/` |
-| Caching L1 Octane RAM + L2 Redis, Cache Stampede dogpile protection, CDN Cloudflare edge invalidation | `references/caching_strategy_cdn/` |
 | AWS S3 presigned direct uploads, SQS/SNS event pub/sub, AWS Secrets Manager injection, Vapor serverless | `references/cloud_provider_aws_vapor/` |
-| Distributed Saga transaction rollback, Idempotency ledger, memory-leak proof custom artisan daemons | `references/background_jobs_saga/` |
 | OWASP API Top 10 hardening, GDPR PII Tokenization vault, mTLS workload identity, SOC2 HMAC audit ledger | `references/zero_trust_enterprise_security/` |
 | Prometheus / Grafana metrics scraping, Monolog ELK / Datadog non-blocking JSON pipeline, Sentry scrubbing | `references/observability_apm/` |
 | Streaming Excel 1 Juta baris tanpa OOM (OpenSpout), libvips JIT Image resizing, FFmpeg video HLS transcoding | `references/media_asset_pipeline/` |
