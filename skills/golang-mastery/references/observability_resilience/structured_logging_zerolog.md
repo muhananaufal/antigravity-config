@@ -44,6 +44,48 @@ Context Propagation:
 
 ---
 
+## Diagram ASCII
+
+```text
+   KENAPA ZEROLOG NOL ALOKASI -- dan kapan itu batal
+
+   log.Info().Str("k","v").Int("n",1).Msg("pesan")
+        |         |            |          |
+        |         |            |          `-- serialisasi & tulis, lalu
+        |         |            |              buffer DIKEMBALIKAN ke pool
+        |         |            `-- append ke buffer byte, tanpa alokasi
+        |         `-- append langsung sebagai JSON, tanpa refleksi
+        `-- ambil Event dari sync.Pool
+
+   YANG MEMBATALKANNYA:
+     .Msgf("%s gagal", nama)        -> fmt.Sprintf mengalokasikan
+     .Interface("obj", struct{}{})  -> refleksi mengalokasikan
+     lupa .Msg()/.Send()            -> Event TIDAK kembali ke pool  (bocor)
+
+   ---------------------------------------------------------------
+
+   LEVEL SEBAGAI GERBANG BIAYA
+
+   log.Debug().Str("besar", hitungMahal()).Msg("x")
+                    ^^^^^^^^^^^^^^^^^^^^
+        hitungMahal() TETAP DIPANGGIL walau level Debug mati.
+        Gerbang level hanya melewatkan PENULISAN, bukan argumennya.
+
+   Yang benar:
+     if e := log.Debug(); e.Enabled() { e.Str("besar", hitungMahal()).Msg("x") }
+
+   ---------------------------------------------------------------
+
+   JALUR LOG DI PRODUKSI -- di mana biayanya muncul
+
+   aplikasi --> stdout --> runtime container --> agen --> penyimpanan
+      ~1us       buffer        rotasi berkas    jaringan    $/GB/bulan
+                                                            ^^^^^^^^^^
+   Biaya terbesar observabilitas di banyak tim ada di ujung kanan,
+   dan yang menentukannya adalah keputusan di ujung KIRI:
+   level yang aktif dan berapa field per baris.
+```
+
 ## 2. Kode Go Production-Ready
 
 ```go

@@ -42,6 +42,52 @@ Timeline yang benar:
 
 ---
 
+## Diagram ASCII
+
+```text
+   URUTAN SHUTDOWN -- kenapa jeda di awal menentukan segalanya
+
+   t=0     Kubernetes kirim SIGTERM
+           DAN mulai melepas endpoint dari Service
+           (dua hal ini ASINKRON -- tidak ada jaminan mana duluan)
+             |
+   t=0      | aplikasi tandai /readyz = NOT READY
+             |
+   t=0..5s  | JEDA. Endpoint masih terdaftar beberapa detik;
+             | trafik baru MASIH datang. Menutup listener di sini
+             | menghasilkan 502 di sisi pengguna.
+             |
+   t=5s     | server.Shutdown(ctx) -- berhenti menerima koneksi BARU,
+             | permintaan yang sedang berjalan diselesaikan
+             |
+   t=5..25s | drain: tunggu permintaan aktif selesai (DENGAN batas waktu)
+             | tutup konsumer antrean, flush buffer, tutup pool DB
+             |
+   t=25s    | proses keluar bersih
+             |
+   t=30s    Kubernetes kirim SIGKILL  <-- terminationGracePeriodSeconds
+
+   HUBUNGAN YANG WAJIB DIPEGANG:
+     jeda + timeout drain  <  terminationGracePeriodSeconds
+     Bila lebih besar, SIGKILL datang di tengah drain dan seluruh
+     kerapihan yang ditulis tidak pernah terpakai.
+
+   ---------------------------------------------------------------
+
+   URUTAN PENUTUPAN SUMBER DAYA -- dari luar ke dalam
+
+   listener HTTP  ditutup PERTAMA  (berhenti menerima pekerjaan baru)
+        |
+   permintaan aktif  diselesaikan
+        |
+   konsumer antrean  dihentikan   (jangan ambil pesan baru)
+        |
+   pool database     ditutup TERAKHIR
+
+   Membalik urutan ini = permintaan yang sedang berjalan kehilangan
+   koneksi database di tengah transaksi.
+```
+
 ## 2. Kode Go Production-Ready
 
 ```go

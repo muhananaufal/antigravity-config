@@ -1,8 +1,8 @@
-# Golang Database Migration: Zero-Downtime, Tooling, & Best Practices
+# Golang Database Migration: Tooling, Runner, & Operasional
 
 > **Berlaku:** Go 1.21+ · `golang-migrate` / `goose` / `atlas` · **Lihat juga:** `db_sqlc/zero_downtime_migrations.md` · `db_sqlc/database_locking_strategies.md` · `db_sqlc/sharding_partitioning.md` · `testing_quality/testcontainers_integration.md`
 
-Dokumen ini adalah referensi komprehensif (Top 1%) tentang manajemen migrasi database di Go, mencakup *tooling* modern, strategi zero-downtime, pengujian, dan penanganan edge-case di production environment.
+**Pembagian dengan berkas tetangga.** Berkas ini membahas **alat, runner, dan operasional**: memilih tooling, menjalankan migrasi di Kubernetes, rollback, pengujian, dan multi-tenant. **Pola skema zero-downtime** — expand-contract, `CONCURRENTLY`, `NOT VALID`, backfill bertahap, `lock_timeout` — berada di `db_sqlc/zero_downtime_migrations.md` dan tidak diulang di sini.
 
 ---
 
@@ -106,55 +106,20 @@ func downComplexDataTx(ctx context.Context, tx *sql.Tx) error {
 
 ---
 
-## 2. Zero-Downtime Migration Strategies
+## 2. Yang Dibutuhkan Runner dari Pola Zero-Downtime
 
-Melakukan migrasi tanpa downtime memerlukan *backward* dan *forward compatibility* dengan kode aplikasi yang sedang berjalan.
+Pola skemanya ada di `db_sqlc/zero_downtime_migrations.md`. Yang relevan **di sini** hanyalah kemampuan yang WAJIB dimiliki runner agar pola itu bisa dijalankan sama sekali:
 
-### a. Expand-Contract Pattern
-Pola ini digunakan saat ingin mengubah struktur tabel (misal memisahkan kolom, atau rename) secara aman dalam beberapa tahap deployment.
+| Kebutuhan pola | Yang WAJIB didukung runner |
+| :--- | :--- |
+| `CREATE INDEX CONCURRENTLY` | **Eksekusi di luar transaksi.** Perintah ini menolak berjalan di dalam `BEGIN…COMMIT`. Goose: `-- +goose NO TRANSACTION`. golang-migrate: berkas terpisah tanpa pembungkus transaksi. |
+| Backfill bertahap | Migrasi berbasis Go (`goose.AddMigrationContext`), karena batching dengan jeda tidak bisa dinyatakan dalam satu pernyataan SQL |
+| `lock_timeout` sebelum DDL | Runner harus mengizinkan `SET` di awal berkas migrasi, dan **tidak** mengulang otomatis saat timeout |
+| Urutan deploy expand → backfill → contract | Migrasi harus bisa dipisah menjadi beberapa rilis, bukan satu berkas besar |
 
-**Diagram ASCII: Expand-Contract Lifecycle**
-```text
-           [Database]                  [Application]
-State 1: | name        | <--------> V1 (reads/writes 'name')
-         
-           --- Expand ---
-State 2: | name | first | <-------- V2 (reads 'name', writes to BOTH 'name' & 'first')
-           (backfill first)
+Runner yang membungkus **setiap** migrasi dalam transaksi tampak lebih aman, tetapi justru membuat sebagian pola zero-downtime mustahil dijalankan. Periksa perilaku ini sebelum memilih alat, bukan sesudah.
 
-           --- Transition ---
-State 3: | name | first | <-------- V3 (reads/writes ONLY 'first')
-
-           --- Contract ---
-State 4: | first        | <-------- V3 (runs safely)
-           (drop 'name')
-```
-*Langkah:*
-1. **Expand**: Tambah kolom baru (`first_name`), deploy app yang write ke kedua kolom.
-2. **Migrate/Backfill**: Jalankan background worker untuk sinkronisasi data lama.
-3. **Transition**: Deploy app yang hanya read/write kolom baru.
-4. **Contract**: Hapus kolom lama.
-
-### b. Non-Blocking Index Creation
-Secara default `CREATE INDEX` mengunci table untuk write. Di PostgreSQL, gunakan `CONCURRENTLY`.
-```sql
--- DOWNTIME (Table locked for writes)
-CREATE INDEX idx_users_email ON users(email);
-
--- ZERO DOWNTIME
-CREATE INDEX CONCURRENTLY idx_users_email ON users(email);
-```
-*Catatan:* `CREATE INDEX CONCURRENTLY` tidak bisa di dalam blok `BEGIN ... COMMIT` (transaction). Migrasi tool harus mendukung eksekusi non-transaksional untuk step ini (misal di Goose: tambahkan `-- +goose NO TRANSACTION`).
-
-### c. Rename Column via View Trick
-Merename kolom secara langsung akan menyebabkan downtime karena aplikasi lama masih mengakses nama kolom lama.
-1. Rename tabel asli (`users` -> `users_table`).
-2. Buat View `users` yang map nama kolom lama ke baru.
-3. Update App.
-4. Drop View dan restore nama table saat sudah aman.
-
-### d. Foreign Key Deferrable
-Saat membuat relasi FK yang kompleks secara melingkar, gunakan `DEFERRABLE INITIALLY DEFERRED` sehingga constraint check dilakukan di akhir transaksi, bukan setiap baris.
+**`DEFERRABLE INITIALLY DEFERRED`** layak disebut di sini karena ia keputusan tingkat runner: untuk relasi melingkar, pemeriksaan constraint ditunda ke akhir transaksi sehingga urutan penyisipan dalam satu migrasi tidak lagi menentukan.
 
 ---
 

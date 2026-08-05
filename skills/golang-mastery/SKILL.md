@@ -5,7 +5,7 @@ description: Gunakan skill ini ketika merancang arsitektur, konkurensi, DB/SQLC,
 
 # Golang Mastery
 
-SSOT arsitektur & rekayasa sistem Golang enterprise & high-throughput (30 Domain, 215 File Mahakarya).
+SSOT arsitektur & rekayasa sistem Golang enterprise & high-throughput (30 Domain, 218 File Mahakarya).
 
 ## 🚦 Protokol Eksekusi (WAJIB dibaca sesuai situasi)
 
@@ -43,6 +43,8 @@ Agent WAJIB mencocokkan nature of task ke domain berikut **secara proaktif**:
 | QUIC, WireGuard, DNS, MQTT, raw TCP protocol | `advanced_networking_protocols/` |
 | Streaming Excel 1 Juta baris (`excelize`), govips JIT image, FFmpeg video HLS, chromedp PDF | `media_asset_pipeline/` |
 | Katalog dinamis `x/text`, format uang/mata uang ICU, propagasi zona waktu Context, multi-region router | `i18n_localization/` |
+| Insiden, postmortem, on-call, SLO, error budget, ADR, design doc, standar code review | `engineering_practice/` |
+| Login, SSO, OAuth2, OIDC, CORS, CSRF, CSP, session cookie | `security_owasp/` |
 
 ## 📦 Core References (WAJIB Baca Setiap Project)
 
@@ -72,6 +74,9 @@ Domain yang hampir selalu relevan untuk Go service manapun:
 | Insiden produksi, postmortem, severity, MTTD/MTTM, on-call | `references/engineering_practice/incident_postmortem.md` |
 | Melakukan code review, menyusun standar review, linter kustom tim | `references/engineering_practice/code_review_go.md` |
 | Menulis design doc / RFC fitur besar sebelum implementasi | `references/engineering_practice/technical_design_doc.md` |
+| Merancang error: sentinel vs tipe, `%w`, memetakan galat ke status, klasifikasi retry | `references/arch_patterns/error_handling_strategy.md` |
+| Login SSO, authorization code + PKCE, verifikasi ID token, refresh token | `references/security_owasp/oauth2_oidc_flow.md` |
+| CORS, preflight, CSRF, `SameSite`, CSP, HSTS, header keamanan respons | `references/security_owasp/web_security_headers.md` |
 | Query lambat, membaca `EXPLAIN ANALYZE`, memilih index komposit, `Seq Scan` | `references/db_sqlc/index_design_explain_analyze.md` |
 | Read replica, replication lag, read-after-write, routing baca/tulis | `references/db_sqlc/read_replica_routing.md` |
 | Sharding, shard key, partisi tabel, fan-out query, rebalancing | `references/db_sqlc/sharding_partitioning.md` |

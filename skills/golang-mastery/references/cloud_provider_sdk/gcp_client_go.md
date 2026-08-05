@@ -20,6 +20,42 @@ Di GKE, WI mengikat Kubernetes Service Account (KSA) ke Google Service Account (
 
 ---
 
+## Diagram ASCII
+
+```text
+   RANTAI ADC -- urutan yang BENAR-BENAR dicoba, dari atas ke bawah
+
+   1. GOOGLE_APPLICATION_CREDENTIALS  --> berkas kunci JSON
+        |                                  (hindari: kredensial berumur panjang)
+        v (tidak ada)
+   2. gcloud auth application-default  --> kredensial pengembang
+        |                                  (hanya untuk laptop, bukan produksi)
+        v (tidak ada)
+   3. Metadata server GKE/GCE          --> Workload Identity  <-- YANG DIINGINKAN
+        |                                  tidak ada berkas, otomatis dirotasi
+        v (tidak ada)
+   4. GAGAL: "could not find default credentials"
+
+   Jebakan: langkah 1 MENANG atas langkah 3. Satu berkas kunci yang
+   tertinggal di image membuat Workload Identity tidak pernah terpakai,
+   dan tidak ada galat apa pun yang memberi tahu Anda.
+
+   ---------------------------------------------------------------
+
+   SIKLUS HIDUP CLIENT -- kenapa Close() penting
+
+   client.New(ctx)  --> buka koneksi gRPC berumur panjang
+        |                + goroutine pemantau + pool
+        |
+   dipakai ...
+        |
+   client.Close()   --> tutup koneksi, hentikan goroutine
+
+   Client yang dibuat per permintaan TANPA Close():
+     goroutine menumpuk -> koneksi menumpuk -> kehabisan fd
+   Gejalanya muncul berjam-jam kemudian, jauh dari penyebabnya.
+```
+
 ## 1. Google Cloud Storage (GCS)
 
 Client GCS sangat efisien karena dirancang berbasis streaming / `io.Reader` dan `io.Writer`.

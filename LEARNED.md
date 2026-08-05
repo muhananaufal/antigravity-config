@@ -39,6 +39,7 @@ Pelajaran yang sudah dibayar mahal. WAJIB dibaca sebelum task teknis (§3.1 `AGE
 - Berkas `.md` WAJIB **UTF-8 tanpa BOM**. `Set-Content`/`Out-File` bawaan merusaknya; pakai `[IO.File]::WriteAllText` + `UTF8Encoding($false)`.
 - **Kutip ganda di pesan `git commit -m`** dipecah jadi argumen terpisah. Pakai `git commit -F <berkas>`.
 - Glob `*_protocol*` ikut mencocoki `networking_protocols_grpc`. Periksa hasil filter path sebelum menulis massal.
+- **Operator `&&` tidak valid** di PowerShell 5.1 → error "The token '&&' is not a valid statement separator". Pakai `;` atau jalankan perintah secara terpisah.
 
 ## Proses
 

@@ -29,6 +29,56 @@ Shrinking (fitur kunci rapid):
 
 ---
 
+## Diagram ASCII
+
+```text
+   UJI CONTOH vs UJI PROPERTI -- menjawab pertanyaan berbeda
+
+   UJI CONTOH                        UJI PROPERTI
+   Encode("abc") == "YWJj"           untuk SEMUA s:
+        |                              Decode(Encode(s)) == s
+        `-- mendokumentasikan               |
+            perilaku yang dimaksud          `-- memverifikasi INVARIAN
+                                                pada input yang tidak
+   Anda yang memilih inputnya.               terpikirkan siapa pun.
+
+   Keduanya diperlukan. Properti menemukan yang tidak Anda bayangkan;
+   contoh menjelaskan apa yang seharusnya terjadi.
+
+   ---------------------------------------------------------------
+
+   SIKLUS RAPID: hasilkan -> uji -> PERKECIL
+
+   seed --> generator --> input acak --> properti
+                              |             |
+                              |          GAGAL
+                              |             |
+                              |             v
+                              |        SHRINKING: kecilkan input
+                              |        sambil tetap gagal
+                              |             |
+                              |        "abc\x00\xff!!" (400 byte)
+                              |             v  perkecil
+                              |        "\x00"          (1 byte)
+                              v             v
+                        LULUS n kali    laporkan kasus MINIMAL + seed
+
+   Nilai terbesar rapid bukan menemukan kegagalan -- tapi
+   memperkecilnya sampai penyebabnya jelas.
+
+   ---------------------------------------------------------------
+
+   GENERATOR SEMPIT = UJI YANG MENIPU DIRI SENDIRI
+
+   rapid.IntRange(0, 10)     -> 11 nilai. Uji TERLIHAT menyeluruh,
+                                kenyataannya memeriksa 11 kasus.
+   rapid.Int()               -> seluruh rentang, termasuk MinInt/MaxInt
+                                tempat overflow benar-benar terjadi.
+
+   Ruang input yang sempit adalah cara paling halus membuat
+   laporan "1000 checks passed" yang tidak berarti apa-apa.
+```
+
 ## 2. Kode Go Production-Ready
 
 ```go
