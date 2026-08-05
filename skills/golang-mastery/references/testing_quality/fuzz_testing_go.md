@@ -56,9 +56,11 @@ Replay corpus tanpa fuzzer (di CI):
 package testingquality
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"unicode/utf8"
 )
@@ -86,18 +88,36 @@ func ParseJSONRecord(data []byte) (*JSONRecord, error) {
 		return nil, fmt.Errorf("unmarshal: %w", err)
 	}
 	if rec.ID <= 0 {
-		return nil, errors.New("id must be positive")
+		return nil, errors.New("id harus positif")
 	}
-	if !utf8.ValidString(rec.Name) {
-		return nil, errors.New("name contains invalid UTF-8")
+	// CATATAN: pemeriksaan `!utf8.ValidString(rec.Name)` yang ada di versi
+	// sebelumnya adalah CABANG MATI dan sengaja dihapus.
+	//
+	// `encoding/json` mengganti byte UTF-8 tidak valid dengan U+FFFD saat
+	// men-decode ke `string`, sehingga `rec.Name` SELALU UTF-8 valid dan
+	// cabang itu tidak pernah bisa menyala. Ironinya pas: fuzzing adalah
+	// alat yang paling mudah membuktikannya — laporan cakupan menunjukkan
+	// baris itu tidak pernah tersentuh berapa lama pun fuzzer berjalan.
+	//
+	// Bila yang ingin ditolak adalah masukan yang MEMUAT byte rusak,
+	// periksa `data`-nya, bukan hasil decode-nya:
+	if bytes.ContainsRune(data, utf8.RuneError) && !bytes.Contains(data, []byte("�")) {
+		return nil, errors.New("masukan memuat byte UTF-8 tidak valid")
 	}
 	if rec.Score < 0 || rec.Score > 100 {
-		return nil, fmt.Errorf("score %v out of range [0, 100]", rec.Score)
+		return nil, fmt.Errorf("score %v di luar rentang [0, 100]", rec.Score)
 	}
 	return &rec, nil
 }
 
-// RoundTripJSON memverifikasi bahwa Marshal(Unmarshal(data)) == data (round-trip property).
+// RoundTripJSON memeriksa properti NORMALISASI, bukan round-trip byte.
+//
+// Nama dan komentar lama menyatakan "Marshal(Unmarshal(data)) == data" —
+// properti yang BUKAN yang diperiksa kode ini, dan yang memang TIDAK BENAR:
+// spasi, urutan kunci, dan format angka semuanya berubah setelah satu putaran.
+// Yang benar-benar berlaku adalah idempotensi setelah normalisasi pertama:
+// sekali data melewati Unmarshal→Marshal, putaran berikutnya tidak lagi
+// mengubah apa pun.
 func RoundTripJSON(data []byte) (bool, error) {
 	var v any
 	if err := json.Unmarshal(data, &v); err != nil {
@@ -157,6 +177,15 @@ func TestParseJSONRecord_KnownCases(t *testing.T) {
 			input:   `{broken`,
 			wantErr: true,
 		},
+		{
+			// Batas 1 MB adalah satu-satunya penjaga terhadap OOM di fungsi
+			// ini, dan sebelumnya tidak punya satu pun kasus uji. Penjaga
+			// yang tidak diuji adalah penjaga yang bisa hilang saat refactor
+			// tanpa ada yang menyadarinya.
+			name:    "melebihi batas 1 MB",
+			input:   `{"id":1,"name":"` + strings.Repeat("a", 1<<20) + `"}`,
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -191,10 +220,35 @@ func FuzzParseJSONRecord(f *testing.F) {
 	f.Add([]byte(nil))
 
 	f.Fuzz(func(t *testing.T, data []byte) {
-		// Invariant: ParseJSONRecord tidak boleh PERNAH panic.
-		// Error diizinkan (invalid input) — panic tidak.
-		// Tidak perlu recover() karena testing.F sudah handle panic.
-		_, _ = ParseJSONRecord(data)
+		rec, err := ParseJSONRecord(data)
+
+		// Membuang kedua nilai kembalian dengan `_, _ =` — seperti versi
+		// sebelumnya — membuat target ini hanya menangkap PANIC. Itu lantai
+		// terendah fuzzing, dan menyia-nyiakan seluruh pekerjaan fuzzer:
+		// ia mengeksplorasi ribuan masukan lalu tidak ada satu pun asersi
+		// yang bisa gagal selain crash.
+		//
+		// Yang diperiksa di bawah adalah POSTCONDITION fungsi terhadap
+		// dirinya sendiri: apa pun masukannya, hasilnya tidak boleh pernah
+		// melanggar aturan yang fungsi itu klaim tegakkan.
+		if err != nil {
+			if rec != nil {
+				t.Fatalf("galat DAN record non-nil sekaligus: %+v", rec)
+			}
+			return
+		}
+		if rec == nil {
+			t.Fatal("galat nil tetapi record juga nil")
+		}
+		if rec.ID <= 0 {
+			t.Fatalf("record diterima dengan ID tidak valid: %d", rec.ID)
+		}
+		if rec.Score < 0 || rec.Score > 100 {
+			t.Fatalf("record diterima dengan score di luar rentang: %v", rec.Score)
+		}
+		if !utf8.ValidString(rec.Name) {
+			t.Fatalf("record diterima dengan nama bukan UTF-8: %q", rec.Name)
+		}
 	})
 }
 
@@ -232,11 +286,17 @@ go test -run=FuzzParseJSONRecord ./...
 # Generate corpus dari file yang ada
 go test -fuzz=FuzzParseJSONRecord -fuzztime=10m -parallel=8 ./...
 
-# View saved corpus
+# Lihat corpus tersimpan
 ls testdata/fuzz/FuzzParseJSONRecord/
 
-# Reproduksi specific crash
-go test -run=FuzzParseJSONRecord/testdata/fuzz/FuzzParseJSONRecord/<crash-hash>
+# Reproduksi satu crash: -run mencocokkan NAMA UJI, bukan path berkas.
+# Yang dipakai hanya NAMA BERKAS-nya (basename), bukan path lengkapnya —
+# bentuk lama `-run=FuzzX/testdata/fuzz/FuzzX/<hash>` tidak cocok dengan
+# apa pun dan diam-diam menjalankan NOL uji, yang terbaca seperti lulus.
+go test -run='FuzzParseJSONRecord/771e938e4458e983'
+
+# Pastikan sesuatu benar-benar berjalan: -v menampilkan nama uji yang cocok
+go test -run='FuzzParseJSONRecord/771e938e4458e983' -v
 ```
 
 ---

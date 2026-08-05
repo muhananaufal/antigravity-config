@@ -99,8 +99,19 @@ func BuildStrings(parts []string) string {
 	return sb.String()
 }
 
-// --- Variabel Sink (Mencegah Dead-Code Elimination) ---
-// Wajib: variabel global agar compiler tidak menghapus loop benchmark.
+// --- Variabel Sink ---
+//
+// TIDAK LAGI WAJIB bila memakai b.Loop() (Go 1.24+), dan menyebutnya wajib
+// di berkas yang justru memakai b.Loop() adalah kontradiksi.
+//
+// Seluruh alasan b.Loop() ditambahkan adalah menghapus upacara ini: ia
+// menjaga panggilan di dalam loop beserta argumen dan hasilnya tetap hidup,
+// sehingga kompilator tidak boleh membuang badan loop. Sink global masih
+// diperlukan pada bentuk LAMA `for i := 0; i < b.N; i++`, dan itu satu-satunya
+// tempatnya sekarang.
+//
+// Dipertahankan di sini hanya sebagai rujukan bentuk lama; benchmark di bawah
+// tidak lagi menugaskan ke variabel ini.
 var (
 	globalBytes []byte
 	globalStr   string
@@ -119,55 +130,65 @@ var sampleProfile = &UserProfile{
 
 // BenchmarkSerialize membandingkan dua metode serialisasi JSON.
 func BenchmarkSerialize(b *testing.B) {
+	// SetBytes diukur dari KELUARAN NYATA, sekali, di luar loop.
+	//
+	// Versi sebelumnya memakai `len(Name) + len(Email)` — 34 byte, sementara
+	// JSON yang benar-benar dihasilkan jauh lebih besar karena memuat ID,
+	// Tags, IsActive, dan seluruh struktur JSON-nya. Angka MB/s yang
+	// dilaporkan karena itu bukan sekadar tidak akurat: ia dibagi dengan
+	// penyebut yang mengada-ada, sehingga throughput terlihat beberapa kali
+	// lipat lebih tinggi dari yang sebenarnya, dan perbandingan antar-varian
+	// menjadi tidak berarti.
+	//
+	// Pekerjaan persiapan di sini TIDAK terhitung: b.Loop() mengecualikan
+	// segala sesuatu sebelum iterasi pertama dari pengukuran waktu.
+	contoh, err := SerializeJSONMarshal(sampleProfile)
+	if err != nil {
+		b.Fatalf("siapkan contoh: %v", err)
+	}
+	ukuran := int64(len(contoh))
+
 	b.Run("Encoder", func(b *testing.B) {
 		b.ReportAllocs()
-		b.SetBytes(int64(len(sampleProfile.Name) + len(sampleProfile.Email)))
-		var (
-			result []byte
-			err    error
-		)
-		for b.Loop() { // Go 1.24+: b.Loop() menggantikan `i < b.N` idiom
-			result, err = SerializeJSON(sampleProfile)
+		b.SetBytes(ukuran)
+		// Tanpa sink global: b.Loop() sudah menjaga panggilan beserta
+		// hasilnya tetap hidup, jadi kompilator tidak boleh membuangnya.
+		for b.Loop() {
+			SerializeJSON(sampleProfile)
 		}
-		globalBytes = result
-		globalErr = err
 	})
 
 	b.Run("Marshal", func(b *testing.B) {
 		b.ReportAllocs()
-		b.SetBytes(int64(len(sampleProfile.Name) + len(sampleProfile.Email)))
-		var (
-			result []byte
-			err    error
-		)
+		b.SetBytes(ukuran)
 		for b.Loop() {
-			result, err = SerializeJSONMarshal(sampleProfile)
+			SerializeJSONMarshal(sampleProfile)
 		}
-		globalBytes = result
-		globalErr = err
 	})
 }
 
 // BenchmarkStringConcat membandingkan concatenation vs Builder.
 func BenchmarkStringConcat(b *testing.B) {
 	parts := []string{"alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta"}
+	ukuran := 0
+	for _, p := range parts {
+		ukuran += len(p)
+	}
 
 	b.Run("PlusOperator", func(b *testing.B) {
 		b.ReportAllocs()
-		var s string
+		b.SetBytes(int64(ukuran))
 		for b.Loop() {
-			s = ConcatStrings(parts)
+			ConcatStrings(parts)
 		}
-		globalStr = s
 	})
 
 	b.Run("Builder", func(b *testing.B) {
 		b.ReportAllocs()
-		var s string
+		b.SetBytes(int64(ukuran))
 		for b.Loop() {
-			s = BuildStrings(parts)
+			BuildStrings(parts)
 		}
-		globalStr = s
 	})
 }
 

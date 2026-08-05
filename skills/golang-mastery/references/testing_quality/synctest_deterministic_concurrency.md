@@ -130,6 +130,23 @@ type Client struct {
 var ErrHabisPercobaan = errors.New("retryclient: percobaan habis")
 
 // backoff menghitung jeda untuk percobaan ke-n (0-indexed), dibatasi MaxDelay.
+//
+// TIDAK ADA JITTER di sini, dan itu keputusan sadar yang perlu dinyatakan —
+// bukan kelalaian. Backoff eksponensial murni membuat seluruh klien yang
+// gagal pada detik yang sama mencoba lagi pada detik yang sama pula:
+// hilir yang baru pulih langsung dihantam serentak dan jatuh kembali. Untuk
+// produksi, jitter WAJIB (lihat `distributed_patterns_resilience/retry_backoff_jitter.md`).
+//
+// Yang menarik justru interaksinya dengan berkas ini: begitu jitter masuk,
+// asersi `elapsed == 300ms` di uji tidak lagi mungkin. Cara mempertahankan
+// determinisme adalah MENYUNTIKKAN sumber acaknya —
+//
+//	type Config struct { ...; Jitter func(time.Duration) time.Duration }
+//
+// — lalu memberi fungsi identitas di dalam gelembung. Jam palsu synctest
+// menghapus ketergantungan pada waktu; sumber acak yang disuntikkan
+// menghapus ketergantungan pada keberuntungan. Keduanya diperlukan untuk
+// uji yang benar-benar deterministik.
 func (c Client) backoff(attempt int) time.Duration {
 	d := time.Duration(float64(c.Cfg.BaseDelay) * math.Pow(2, float64(attempt)))
 	if d > c.Cfg.MaxDelay {
@@ -181,6 +198,21 @@ func (c Client) Get(ctx context.Context, url string) (*http.Response, error) {
 			continue
 		}
 		return resp, nil
+	}
+
+	// Context yang sudah dibatalkan WAJIB dilaporkan sebagai pembatalan,
+	// bukan sebagai "percobaan habis".
+	//
+	// Tanpa pemeriksaan ini ada satu celah sempit yang mahal: bila
+	// pembatalan datang saat percobaan TERAKHIR sedang berjalan, loop
+	// selesai tanpa pernah menyentuh cabang <-ctx.Done() — dan pemanggil
+	// menerima ErrHabisPercobaan. Akibatnya `errors.Is(err, context.Canceled)`
+	// bernilai false, sehingga lapisan di atas memperlakukan pembatalan
+	// pengguna sebagai kegagalan hilir: ia mencatatnya sebagai galat,
+	// menghitungnya ke error rate, dan bisa membuka circuit breaker karena
+	// pengguna menutup tab.
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("batal setelah %d percobaan: %w", c.Cfg.MaxAttempts, err)
 	}
 	return nil, fmt.Errorf("%w setelah %d percobaan: %v", ErrHabisPercobaan, c.Cfg.MaxAttempts, lastErr)
 }
@@ -236,6 +268,7 @@ func TestGet_RetrySampaiBerhasil(t *testing.T) {
 		if err != nil {
 			t.Fatalf("tak terduga: %v", err)
 		}
+		defer resp.Body.Close() // body respons SUKSES juga wajib ditutup
 		if resp.StatusCode != 200 {
 			t.Fatalf("mau 200, dapat %d", resp.StatusCode)
 		}
