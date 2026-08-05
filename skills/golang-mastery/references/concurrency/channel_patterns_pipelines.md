@@ -12,7 +12,7 @@ Sebuah pipeline umumnya terdiri dari sekumpulan tahapan (stages). Setiap tahap a
 
 Pola-pola penting dalam pipeline concurrency:
 - **Generator**: Pola di mana sebuah fungsi memproduksi sequence data (misalnya dari database atau stream) dan memancarkannya lewat channel ke pipeline.
-- **Fan-out**: Banyak goroutine membaca dari satu channel yang sama, secara efektif mendistribusikan beban kerja secara seimbang ke beberapa worker (load balancing).
+- **Fan-out**: Banyak goroutine membaca dari satu channel yang sama. Yang terjadi adalah **work-stealing alami**: worker yang lebih dulu selesai mengambil item berikutnya. Ini **bukan** round-robin dan **bukan** distribusi merata — runtime tidak menjamin urutan penerima, dan worker yang lebih cepat akan memproses lebih banyak. Sifat itu justru diinginkan (beban mengikuti kapasitas), tetapi jangan mengharapkan pembagian yang rata bila Anda mengukurnya.
 - **Fan-in**: Satu goroutine membaca dari banyak channel yang berbeda dan menggabungkannya kembali ke dalam satu channel output tunggal.
 - **Done Channel (Cancellation)**: Menggunakan satu channel broadcast (biasanya `chan struct{}`) atau `context.Context` untuk memberi sinyal terminasi ke semua goroutine sekaligus agar berhenti bekerja dan merapikan resource (prevent goroutine leak).
 
@@ -38,9 +38,9 @@ package concurrency
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"go.uber.org/goleak"
 )
@@ -79,21 +79,35 @@ func (m *MathTransformer) Transform(val int) (int, error) {
 	return val * val, nil
 }
 
-// Process melakukan pekerjaan pada setiap data yang diterima dari hulu. 
+// Hasil membawa nilai ATAU galat. Pipeline yang menelan galat diam-diam
+// akan menghasilkan keluaran yang lebih sedikit dari masukan tanpa ada
+// yang tahu penyebabnya -- dan itu baru terlihat berbulan-bulan kemudian
+// sebagai "data kadang hilang".
+type Hasil struct {
+	Nilai int
+	Err   error
+}
+
+// Process melakukan pekerjaan pada setiap data yang diterima dari hulu.
 // Ini mewakili satu stage worker dalam Fan-out.
-func Process(ctx context.Context, in <-chan int, transformer Transformer) <-chan int {
-	out := make(chan int)
+//
+// Galat DITERUSKAN ke hilir, tidak dibuang. Konsumer yang memutuskan
+// apakah satu kegagalan berarti seluruh batch gagal, atau cukup dicatat.
+func Process(ctx context.Context, in <-chan int, transformer Transformer) <-chan Hasil {
+	out := make(chan Hasil)
 	go func() {
 		defer close(out)
 		for n := range in {
-			// Menggunakan transformer (bisa berupa mock di unit test)
-			result, err := transformer.Transform(n)
+			nilai, err := transformer.Transform(n)
+			h := Hasil{Nilai: nilai, Err: err}
 			if err != nil {
-				continue // Skip error untuk simulasi pipeline (real world: send to err chan)
+				// Konteks item WAJIB ikut, kalau tidak galatnya tidak bisa
+				// ditelusuri kembali ke masukan yang menyebabkannya.
+				h.Err = fmt.Errorf("transform %d: %w", n, err)
 			}
-			
+
 			select {
-			case out <- result:
+			case out <- h:
 			case <-ctx.Done():
 				return
 			}
@@ -104,12 +118,12 @@ func Process(ctx context.Context, in <-chan int, transformer Transformer) <-chan
 
 // Merge melakukan pola Fan-in: membaca dari sejumlah channel 'in' 
 // secara concurrent dan menggabungkannya ke satu channel 'out'.
-func Merge(ctx context.Context, cs ...<-chan int) <-chan int {
+func Merge(ctx context.Context, cs ...<-chan Hasil) <-chan Hasil {
 	var wg sync.WaitGroup
-	out := make(chan int)
+	out := make(chan Hasil)
 
 	// Fungsi penolong untuk membaca satu channel spesifik
-	output := func(c <-chan int) {
+	output := func(c <-chan Hasil) {
 		defer wg.Done()
 		for n := range c {
 			select {
@@ -155,8 +169,12 @@ func TestPipeline(t *testing.T) {
 	out := Merge(ctx, w1, w2, w3)
 
 	var results []int
-	for n := range out {
-		results = append(results, n)
+	for h := range out {
+		if h.Err != nil {
+			t.Errorf("tidak diharapkan ada galat: %v", h.Err)
+			continue
+		}
+		results = append(results, h.Nilai)
 	}
 
 	if len(results) != 6 {
@@ -219,27 +237,42 @@ func TestPipeline_WithMockError(t *testing.T) {
 	defer cancel()
 
 	mock := &MockTransformer{}
-	in := Generate(ctx, 1, 2, 3, 4) // 2 and 4 will fail
+	in := Generate(ctx, 1, 2, 3, 4) // 2 dan 4 akan gagal
 	w := Process(ctx, in, mock)
 	out := Merge(ctx, w)
 
-	var results []int
-	for n := range out {
-		results = append(results, n)
+	var sukses []int
+	var galat []error
+	for h := range out {
+		if h.Err != nil {
+			galat = append(galat, h.Err)
+			continue
+		}
+		sukses = append(sukses, h.Nilai)
 	}
 
-	if len(results) != 2 {
-		t.Fatalf("expected 2 successful results, got %d", len(results))
+	// Jumlah keluaran WAJIB sama dengan jumlah masukan. Pipeline yang
+	// menelan galat akan menghasilkan 2, dan tidak ada yang tahu 2 lainnya
+	// ke mana -- itulah yang diuji baris ini.
+	if len(sukses)+len(galat) != 4 {
+		t.Fatalf("setiap masukan wajib menghasilkan tepat satu keluaran; dapat %d", len(sukses)+len(galat))
 	}
-	
-	// Expect 10 and 30
-	sum := results[0] + results[1]
-	if sum != 40 {
-		t.Errorf("expected sum 40, got %d", sum)
+	if len(sukses) != 2 || len(galat) != 2 {
+		t.Fatalf("mau 2 sukses dan 2 galat, dapat %d dan %d", len(sukses), len(galat))
 	}
-	
+
+	// Galat WAJIB membawa konteks item yang menyebabkannya.
+	for _, e := range galat {
+		if !strings.Contains(e.Error(), "transform ") {
+			t.Errorf("galat kehilangan konteks item: %v", e)
+		}
+	}
+
+	if sukses[0]+sukses[1] != 40 { // 1*10 + 3*10
+		t.Errorf("mau jumlah 40, dapat %d", sukses[0]+sukses[1])
+	}
 	if mock.CalledCounts != 4 {
-		t.Errorf("expected mock to be called 4 times, got %d", mock.CalledCounts)
+		t.Errorf("mau mock dipanggil 4 kali, dapat %d", mock.CalledCounts)
 	}
 }
 ```

@@ -10,7 +10,9 @@ Solusi absolut dari masalah ini adalah arsitektur **Worker Pool** atau *Bounded 
 Untuk memudahkan manajemen Pool rumit, paket eksternal resmi `golang.org/x/sync/errgroup` mendongkrak fungsionalitas `sync.WaitGroup` primitif menjadi artileri level *enterprise*, karena ia menyuplai 3 keunggulan mutlak:
 1. **Error Aggregation**: Merekam, menampung, dan mengembalikan `error` PERTAMA (*The First Ocurrence*) yang dilemparkan (return) oleh siapapun dari anak-anak goroutine (child worker). Anda tak perlu membuat channel `chan error` manual.
 2. **Context Cancellation Propagation (`WithContext`)**: Jika satu goroutine worker gagal (mengembalikan error pertama), parent context kelompok `Group` tersebut akan *Otomatis Dibatalkan (Canceled) pada milidetik itu juga*. Sinyal kematian `Done()` dikirim paksa serentak, sehingga semua worker goroutine kolega lainnya yang sedang berjalan terpelatuk mati membatalkan task sisa (*graceful abort*) menghemat komputasi berharga CPU.
-3. **Concurrency Limiting (`SetLimit`)** (Berlaku semenjak rilis Go v1.20+): Fitur revolusioner yang membuang praktik lawas penggunaan `Buffered Channels` semu (Semaphore pola usang). Developer kini secara mandiri cukup mendeklarasikan maksimal takaran jumlah goroutine concurrent yang bekerja (e.g., limit = 5).
+3. **Concurrency Limiting (`SetLimit`)**: Membatasi jumlah goroutine yang berjalan bersamaan tanpa perlu menyusun semaphore berbasis buffered channel sendiri.
+
+   **Catatan versi yang sering salah dikutip:** `SetLimit` adalah fitur modul **`golang.org/x/sync`** (ditambahkan pada rilis modul di 2022), **bukan** fitur bahasa Go 1.20. Yang menentukan ketersediaannya adalah versi `golang.org/x/sync` di `go.mod` Anda — bukan versi toolchain Go. Menaikkan Go tanpa menaikkan modulnya tidak akan memunculkan `SetLimit`.
 
 ## Diagram ASCII
 
@@ -45,7 +47,6 @@ package concurrency
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"testing"
 	"time"

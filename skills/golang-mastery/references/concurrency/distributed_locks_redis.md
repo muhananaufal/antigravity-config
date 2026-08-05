@@ -1,6 +1,6 @@
 # Distributed Locks & Redlock (Redis)
 
-> **Berlaku:** Go 1.21+ · Redis 7+ · `go-redsync` · **Lihat juga:** `distributed_patterns_resilience/idempotency_key_engine.md` · `db_sqlc/database_locking_strategies.md` · `background_jobs_worker/cron_scheduler_go.md` · `caching_strategy/redis_advanced_patterns.md`
+> **Berlaku:** Go 1.21+ · Redis 7+ · `github.com/redis/go-redis/v9` (v8 di `go-redis/redis` sudah tidak dipelihara — repo berpindah organisasi) · `go-redsync` · **Lihat juga:** `distributed_patterns_resilience/idempotency_key_engine.md` · `db_sqlc/database_locking_strategies.md` · `background_jobs_worker/cron_scheduler_go.md` · `caching_strategy/redis_advanced_patterns.md`
 
 ## Konsep Utama
 Dalam transisi dari aplikasi *monolith* menuju arsitektur *microservices* terdistribusi yang masif, primitif sinkronisasi Go bawaan (seperti `sync.Mutex` atau `channels`) menjadi **tidak relevan** untuk menjaga konsistensi eksternal. `sync.Mutex` di Go secara ketat hanya mengunci goroutine *dalam satu mesin / alamat RAM (process space) yang sama*. Jika aplikasi penjadwal tagihan (Billing Job) Anda di-deploy di 5 Pod Kubernetes replika, kelimanya akan melakukan proses `cron` secara serentak, menembus `sync.Mutex` lokal mereka, dan merusak / menduplikasi tagihan user di Database (Data Corruption). 
@@ -47,7 +47,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 	"github.com/google/uuid"
 	"go.uber.org/goleak"
 )

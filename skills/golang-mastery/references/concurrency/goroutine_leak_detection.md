@@ -51,8 +51,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
-	"runtime"
 	"testing"
 	"time"
 
@@ -213,8 +211,10 @@ func GoodContext() {
 
 ## Edge Cases
 
-1. **Membiarkan `time.After` Menggantung dalam Loop**: Menuliskan blok kontrol `case <-time.After(1 * time.Second):` secara lugu di dalam iterasi *for...select* yang tak terhingga (*endless loop*) adalah malapetaka memori. Setiap putaran iterasi, Go akan melahirkan satu goroutine OS baru bertugas menghitung mundur waktu, dan goroutine ini tidak akan pernah dihapus oleh Garbage Collector hingga detiknya kedaluwarsa.
-   - *Defensive*: Gunakan fungsi konstruktor yang bisa didaur ulang: `timer := time.NewTimer(...)` taruh letaknya di luar loop pembungkus. Selama perulangan, manfaatkan `timer.Reset()` dan panggil `timer.Stop()` di ujung akhir.
+1. **`time.After` di dalam loop — dan mengapa jawabannya berubah di Go 1.23**: `case <-time.After(d):` di dalam `for...select` membuat **timer runtime baru** setiap iterasi (bukan goroutine — ini kekeliruan yang sering diulang). Timer itu memegang memori sampai kedaluwarsa.
+   - **Go ≤ 1.22**: timer yang belum kedaluwarsa **tidak bisa** dikumpulkan GC meski sudah tidak dirujuk siapa pun. Loop cepat dengan `time.After(1*time.Minute)` menumpuk ribuan timer hidup — kebocoran memori yang nyata.
+   - **Go 1.23+**: timer yang tidak lagi direferensikan **dikumpulkan GC segera**, tanpa menunggu kedaluwarsa. Kebocorannya hilang.
+   - *Defensive*: pada Go 1.23+ pola ini tidak lagi bocor, tetapi tetap mengalokasikan timer per iterasi. Untuk loop panas, `timer := time.NewTimer(d)` di luar loop dengan `timer.Reset(d)` di dalamnya tetap lebih hemat. Yang WAJIB diperhatikan: `Reset` hanya aman setelah timer benar-benar terpicu atau di-`Stop`, dan channel-nya sudah dikuras — kalau tidak, Anda membaca nilai lama dari putaran sebelumnya.
 
 2. **Perpustakaan Eksternal (Third-Party Libs) yang Buta-Context**: Aplikasi Go Anda sekuat rantai terlemahnya. Jika Anda memanggil library database lawas (`CGO` atau yang tidak menerima parameter `context.Context`), lalu database server asing (remote) tersebut *hang* dan tak menjawab packet TCP (tanpa mengirim sinyal Reset), goroutine Go pembungkus library tersebut akan beku menanti dalam blok *OS syscall* hingga ajal. Ini melampaui kemampuan context Go murni, menyebabkan *undeniable goroutine leak*.
    - *Defensive*: Secara arsitektural bungkus panggilan third-party kolot (legacy) tersebut dalam goroutine terpisah dan *tinggalkan* secara asinkron jika *timeout context caller* tersentuh. Laporkan (submit PR) kepada maintainer package tersebut untuk beralih ke `API` yang *context-aware*. Perlu diakui goroutine pembungkus aslinya tetap bocor (tersendat pada OS level), namun setidaknya aplikasi utama Go Anda terselamatkan dari kebuntuan berantai.

@@ -65,6 +65,7 @@ Pelajaran yang sudah dibayar mahal. WAJIB dibaca sebelum task teknis (§3.1 `AGE
 ## Konvensi Kode & Framework
 
 - Saat mengecek atau membuat direktori upload di CodeIgniter, WAJIB sesuaikan dengan pola model konvensi proyek: gunakan path absolut `FCPATH . 'uploads/...'` dan hak akses `0755`, bukan path relatif (`./`) atau `0777`.
+- Pada custom error message `form_validation` di CodeIgniter, placeholder `%s` akan digantikan oleh nama label (bukan nilai input). DILARANG menulis ulang label di depan `%s` karena menghasilkan teks ganda (contoh: `"NIP %s"` menjadi `"NIP NIP"`).
 - **Satu sinyal bukan pengukuran.** Saya melaporkan "20 berkas tanpa diagram" berdasarkan pencarian fence ```text saja. Angka sebenarnya 4 — sisanya memakai fence polos atau judul berbeda. Selisihnya 5x, dan saya sudah menyampaikannya ke user sebagai temuan. Sebelum melaporkan angka sebagai defect, uji detektornya pada berkas yang DIKETAHUI punya properti itu.
 - Audit cakupan berbeda dari audit struktur. Empat dimensi format bisa 100% sementara core domain kehilangan topik yang pasti kepakai (error handling, OAuth/OIDC, CORS, pagination). Yang menemukannya bukan pengukuran struktur, tapi mendaftar isi tiap domain lalu bertanya "apa yang ditanyakan wawancara senior dan tidak ada di sini".
 - Menandai seluruh domain sebagai Core ("semua") tanpa memeriksa isinya membuat agent membaca berkas niche di setiap proyek. `devops_control_planes` punya 5 dari 8 berkas niche. Core WAJIB menyebut berkas, bukan direktori, kecuali seluruh isinya memang selalu relevan.

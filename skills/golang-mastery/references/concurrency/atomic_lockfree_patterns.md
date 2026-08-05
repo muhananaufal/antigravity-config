@@ -7,9 +7,11 @@ Paket `sync/atomic` menyediakan primitif operasi atomic pada level hardware. Ope
 
 1. **Primitive Operations**: Menyediakan fungsi dasar `Add`, `CompareAndSwap` (CAS), `Load`, dan `Store` untuk tipe bilangan bulat dasar (`int32`, `int64`, `uint32`, `uint64`, `uintptr`).
 2. **CAS (Compare-And-Swap)**: Jantung dari operasi lock-free. Mekanismenya: membaca suatu nilai lama dari memori, memeriksa apakah nilainya masih sama dengan yang dibaca, dan jika iya, mengubahnya menjadi nilai baru secara atomik. Jika di antara waktu itu ada goroutine lain yang sudah mengubahnya, CAS akan gagal (`false`). Goroutine pemanggil kemudian harus mengulang kembali (looping) proses pembacaan dan perhitungan (disebut *CAS Loop*).
-3. **`atomic.Value` & Hot Reload**: Tipe serbaguna (pre-Go 1.19) untuk menyimpan dan mengambil nilai tipe `any` (interface{}) secara atomik. Sangat sering digunakan untuk *Hot-Reloading* konfigurasi, di mana ada satu goroutine *writer* yang rutin mem-push konfigurasi baru, dan ribuan goroutine *readers* yang membacanya tanpa pernah terblokir *lock*.
-4. **`atomic.Pointer[T]` (Go 1.19+)**: Pembungkus generic dan type-safe yang sepenuhnya menggantikan kebutuhan untuk melakukan *type-assertion* manual (dan rentan panic) pada `atomic.Value`. Ini adalah standar industri terbaru.
-5. **Memory Ordering (Happens-Before)**: Go menjamin *sequential consistency* dari semua fungsi di package atomic. Artinya, jika goroutine A melakukan atomic `Store` dan goroutine B melihat nilai tersebut via atomic `Load`, semua penulisan memori yang dilakukan A sebelum `Store` dijamin akan terlihat oleh B (*Happens-Before relationship*). Tidak ada instruction reordering yang akan merusak logika data.
+3. **`atomic.Value` & Hot Reload**: Tipe untuk menyimpan dan mengambil nilai `any` secara atomik. Ia **tidak usang** dan masih ada di Go modern — tetapi menuntut tipe yang konsisten sepanjang umur nilai itu, dan pelanggarannya baru ketahuan sebagai panic saat runtime. Untuk kasus baru, `atomic.Pointer[T]` hampir selalu pilihan yang lebih baik.
+4. **`atomic.Pointer[T]` (Go 1.19+)**: Pembungkus generic dan type-safe yang menghapus kebutuhan type-assertion manual. Kesalahan tipe menjadi galat kompilasi, bukan panic produksi.
+5. **Memory Ordering (Happens-Before)**: Go menjamin *sequential consistency* untuk operasi di paket `atomic`. Bila goroutine A melakukan `Store` dan goroutine B melihat nilai itu lewat `Load`, seluruh penulisan memori A **sebelum** `Store` dijamin terlihat oleh B.
+
+   Batas jaminannya WAJIB dipahami: yang diurutkan adalah operasi terhadap **variabel atomic itu sendiri** beserta penulisan di sekitarnya. Ia **tidak** membentuk urutan menyilang dengan mekanisme lain — `Mutex.Unlock` mengurutkan terhadap `Lock`, bukan terhadap `atomic.Load`. Mencampur keduanya pada satu variabel tetap data race, betapapun kelihatannya "sudah terlindungi". Lihat Anti-Pattern 2.
 
 ## Diagram ASCII
 
@@ -46,7 +48,7 @@ package concurrency
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -58,6 +60,9 @@ import (
 // ==========================================
 // KODE PRODUCTION-READY
 // ==========================================
+
+// ErrConfigNil dikembalikan bila pemanggil mencoba menyimpan konfigurasi nil.
+var ErrConfigNil = errors.New("config: konfigurasi baru tidak boleh nil")
 
 // Config merupakan struct konfigurasi kompleks yang akan di-reload secara hot.
 type Config struct {
@@ -89,7 +94,9 @@ func (ch *ConfigHolder) Get() *Config {
 // Update menyimpan konfigurasi baru secara atomik.
 func (ch *ConfigHolder) Update(ctx context.Context, newConfig *Config) error {
 	if newConfig == nil {
-		return fmt.Errorf("context: %w", fmt.Errorf("new config cannot be nil"))
+		// Sentinel, bukan fmt.Errorf berlapis: pemanggil mungkin perlu
+		// membedakan kondisi ini dari galat lain dengan errors.Is.
+		return ErrConfigNil
 	}
 	ch.config.Store(newConfig)
 	return nil
@@ -133,17 +140,28 @@ func TestAtomicConfigHotReload(t *testing.T) {
 
 	// Start 100 reader goroutines. Mereka membaca konfigurasi ribuan kali
 	// tanpa diblokir oleh Mutex (Lock-Free).
+	//
+	// YANG DIUJI: pembaca SELALU melihat salah satu dari dua konfigurasi
+	// yang UTUH -- tidak pernah campuran (MaxWorkers dari cfg lama dengan
+	// DSN dari cfg baru). Itulah jaminan yang diberikan pertukaran pointer
+	// atomik, dan itulah yang harus diperiksa.
+	//
+	// Assertion seperti `if cfg.MaxWorkers < 10` TIDAK menguji apa pun di
+	// sini: nilai awal 10 dan nilai baru 50, jadi kondisinya tidak pernah
+	// benar -- uji akan lulus bahkan bila Get() mengembalikan sampah.
 	for i := 0; i < 100; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for j := 0; j < 1000; j++ {
 				cfg := holder.Get()
-				if cfg.MaxWorkers < 10 {
-					t.Errorf("Invalid MaxWorkers read: %d", cfg.MaxWorkers)
+				sesuaiLama := cfg.MaxWorkers == 10 && cfg.DSN == "postgres://db1"
+				sesuaiBaru := cfg.MaxWorkers == 50 && cfg.DSN == "postgres://db2"
+				if !sesuaiLama && !sesuaiBaru {
+					// t.Errorf aman dipanggil dari goroutine lain; t.Fatal TIDAK.
+					t.Errorf("konfigurasi campuran terbaca: MaxWorkers=%d DSN=%s",
+						cfg.MaxWorkers, cfg.DSN)
 				}
-				// Simulasi kerja kecil
-				time.Sleep(1 * time.Microsecond)
 			}
 		}()
 	}
@@ -240,7 +258,11 @@ func (b *GoodStruct) Get() int64 {
 // GOOD: Memori selalu konsisten diakses menggunakan hardware atomic instructions.
 ```
 
-**Why dangerous:** Seringkali engineer berasumsi bahwa karena writer sudah terproteksi oleh `sync.Mutex`, pembaca (`reader`) cukup menggunakan `atomic.Load`. Hal ini merusak *Memory Consistency*. Di beberapa arsitektur, operasi write biasa di dalam mutex mungkin tidak segera di-flush ke *main memory* jika tidak ada instruksi atomic padanya. Akibatnya, `atomic.Load` bisa membaca nilai basi (stale) atau berpotensi mengalami *torn read* pada tipe 64-bit di mesin 32-bit (Silent Data Corruption / Data Race).
+**Why dangerous:** Alasannya bukan soal "flush ke main memory" — `Mutex.Unlock` **memang** membentuk *happens-before* dengan `Lock` berikutnya di semua arsitektur yang didukung Go, lengkap dengan memory barrier-nya. Yang rusak adalah hal lain, dan lebih mendasar.
+
+Model memori Go membentuk urutan antar operasi **sejenis**: `Unlock` mengurutkan terhadap `Lock`, dan `atomic.Store` mengurutkan terhadap `atomic.Load`. Ia **tidak** membentuk urutan menyilang antara mutex di satu sisi dan atomic di sisi lain. Penulisan `b.val = 99` di dalam mutex dan pembacaan `atomic.LoadInt64(&b.val)` di luar mutex karena itu adalah **dua akses ke alamat yang sama, satu di antaranya penulisan, tanpa happens-before di antaranya** — yaitu definisi data race, dan race detector akan menandainya.
+
+Konsekuensi praktisnya: perilakunya tidak terdefinisi menurut spesifikasi, bukan sekadar "mungkin basi". Aturannya sederhana dan tidak punya pengecualian — **satu variabel, satu mekanisme sinkronisasi.** Pilih mutex atau atomic, jangan campur.
 
 ## Edge Cases
 

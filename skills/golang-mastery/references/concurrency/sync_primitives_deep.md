@@ -3,12 +3,23 @@
 > **Berlaku:** Go 1.21+ (`sync.OnceValue`, `sync.OnceFunc`) · **Lihat juga:** `concurrency/atomic_lockfree_patterns.md` · `concurrency/data_race_detection.md` · `runtime_internals/stdlib_modern_slices_maps_sync.md` · `hft_zero_alloc/memory_arena_batch_alloc.md`
 
 ## Konsep Utama
-Paket bawaan `sync` dalam Go mensuplai primitif sinkronisasi tingkat rendah (*low-level synchronization constructs*) yang bertindak sebagai pelengkap dari fasilitas channel (`chan`). Penggunaan primitif package `sync` jauh lebih diutamakan, memiliki throughput kinerja yang berkali lipat lebih gegas (fast), dan overhead yang sangat tipis bila tugas utama Anda hanyalah melindungi akses baca-tulis ke variabel internal dalam memori struct, alih-alih merutekan alur data di *event pipeline* (CSP).
+Paket bawaan `sync` menyediakan primitif sinkronisasi tingkat rendah yang melengkapi channel — bukan menggantikannya. Keduanya menjawab masalah yang berbeda, dan memilih berdasarkan "mana yang lebih cepat" adalah cara paling umum memilih yang salah.
+
+| Kebutuhan | Alat |
+| :--- | :--- |
+| Melindungi akses baca-tulis ke state bersama | `sync.Mutex` / `RWMutex` |
+| Memindahkan **kepemilikan** data antar goroutine | channel |
+| Koordinasi siklus hidup dan pembatalan | channel + `context` |
+| Menghitung, menandai, atau menukar satu nilai | `sync/atomic` |
+
+Mutex memang punya overhead lebih tipis daripada channel untuk melindungi satu variabel — tetapi itu bukan alasan memakainya untuk alur data. Pipeline yang dipaksa memakai mutex kehilangan backpressure alami channel dan menjadi jauh lebih sulit dibuktikan benar.
 
 1. **`sync.Mutex` & `sync.RWMutex`**: Kunci akses perlindungan eksklusif (Exclusive Locks). Varian `RWMutex` memecah kunci menjadi dua jenis: Pembaca (`RLock`) yang izinkan berparalel tanpa batas asalkan tak ada penulis, dan Penulis (`Lock`) yang mutlak tunggal dan menyetop seluruh aktivitas baca.
    - *Starvation Mode (Sejak Go 1.9)*: Dulu, goroutine baru yang beruntung bisa terus "menyerobot" lock dari goroutine lama yang sudah lama antri (karena faktor CPU cache fairness). Kini, jika ada sebuah goroutine menunggu lock lebih dari 1 milidetik, Mutex beralih dari mode *Fast-Spin* ke mode kelaparan (*Starvation/Strict FIFO Queue*). Ia akan melarang pendatang baru memperebutkan kunci hingga antrian paling depan mendapatkan porsi jalan kerjanya.
 2. **`sync.Map`**: Implementasi Thread-Safe Hash Map (`map[K]V`) murni bawaan Go. Ini **TIDAK UNTUK** digunakan sehari-hari! Ia diciptakan, dioptimalkan, dan ber-performa sangat tinggi HANYA untuk dua spesifik *use-case*: (a) `Append-Only / Write-Once, Read-Many` layaknya Cache Memori Konfigurasi Aplikasi. (b) Goroutine yang berinteraksi tidak memodifikasi Kunci (Key) yang saling tabrakan (Disjoint set). Pemakaian `sync.Map` di kasus umum justru memperlambat aplikasi.
-3. **`sync.Pool`**: Area penampungan (*Recycling Bin*) Objek Alokasi Sementara. Fungsinya memangkas habis tekanan pada *Garbage Collector* (GC) ketika kita melakukan proses seperti Encoding JSON. Ketimbang meminta CPU mengalokasikan memori struct kosong berulang-ulang, goroutine bisa "meminjam" bekas objek dari Pool. Namun awas: isi Pool dapat *dihapus habis tak bersisa secara diam-diam* oleh GC Go sewaktu-waktu.
+3. **`sync.Pool`**: Penampungan objek sementara yang bisa dipakai ulang, untuk memangkas tekanan GC pada jalur seperti encoding JSON. Objek di dalamnya **dapat dibuang GC sewaktu-waktu** — jadi Pool tidak pernah boleh dipakai sebagai cache yang isinya diandalkan.
+
+   Sejak Go 1.13 pembuangannya tidak seketika: ada *victim cache*, sehingga objek bertahan sekitar dua siklus GC sebelum benar-benar hilang. Itu mengurangi hentakan alokasi tepat setelah GC, tetapi tidak mengubah aturannya — apa pun yang ada di Pool harus aman untuk hilang kapan saja.
 4. **`sync.Once`**: Semantik garansi matematis. Menjamin satu potong blok instruksi tertutup (closure function) hanya akan dieksekusi **tepat satu kali** di sepanjang umur hidup program (sejak *boot-up* hingga *shutdown*), bahkan jika ia dipanggil oleh 5 juta goroutine di fraksi milidetik yang sama identik. Inti dari desain *Singleton Inisialisasi Lazy* di Go.
 5. **`sync.Cond`**: Fasilitas Wait/Notify Pattern primitif (Kondisi Variabel). Mengizinkan sepasukan goroutine untuk tidur pulas (tanpa membakar 1% pun siklus CPU) lalu dibangunkan mendadak secara spesifik (`Signal()`) atau massal (`Broadcast()`) apabila syarat variabel luar telah digenapi.
 
@@ -45,7 +56,6 @@ package concurrency
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"sync"
 	"testing"
@@ -123,24 +133,37 @@ var jsonBufferPool = sync.Pool{
 	},
 }
 
+// batasBufferPool adalah ambang di atas mana buffer TIDAK dikembalikan.
+//
+// Tanpa ambang ini, satu permintaan yang menghasilkan buffer 10 MB akan
+// menitipkannya di pool selamanya, dan RSS proses tetap tinggi permanen
+// meski beban sudah lama reda. Pool dirancang untuk objek berumur pendek
+// dengan ukuran yang seragam.
+const batasBufferPool = 64 << 10 // 64 KB
+
 // FastStringConcat mendemonstrasikan daur ulang objek.
 func FastStringConcat(a, b string) string {
 	// 1. Dapatkan struct kotor/baru dari Pool (butuh Type Assertion)
 	buf := jsonBufferPool.Get().(*bytes.Buffer)
-	
+
 	// 2. CRITICAL: Bersihkan sampah / sisa teks data masa lalu!
-	buf.Reset() 
-	
+	buf.Reset()
+
 	// 3. Tulis (Zero Allocations if capacity holds)
 	buf.WriteString(a)
 	buf.WriteString("-")
 	buf.WriteString(b)
-	
+
+	// bytes.Buffer.String() menyalin isinya, jadi aman mengembalikan buf
+	// ke pool setelah baris ini.
 	result := buf.String()
-	
-	// 4. Setorkan kembali ke Recycling Bin agar dimanfaatkan goroutine lain
-	jsonBufferPool.Put(buf)
-	
+
+	// 4. Kembalikan HANYA bila ukurannya masih wajar. Buffer yang sudah
+	//    tumbuh besar dibiarkan di-GC, bukan dititipkan ke pool.
+	if buf.Cap() <= batasBufferPool {
+		jsonBufferPool.Put(buf)
+	}
+
 	return result
 }
 
@@ -237,10 +260,32 @@ func (rc *RegistryConfig) CorruptDeadlockMethod() {
     rc.mu.RUnlock()
 }
 
-// ✅ GOOD: RUnlock() secara bersih dahulu, barulah Lock() untuk Menulis.
+// ✅ GOOD: RUnlock() dulu, lalu Lock() -- TAPI WAJIB periksa ulang kondisinya.
+func (rc *RegistryConfig) AmbilAtauBuat(key string) bool {
+    rc.mu.RLock()
+    v, ada := rc.flags[key]
+    rc.mu.RUnlock()
+    if ada {
+        return v
+    }
+
+    // ANTARA RUnlock DAN Lock ADA CELAH. Goroutine lain bisa menyisipkan
+    // key ini lebih dulu. Melewatkan pemeriksaan kedua di bawah adalah bug
+    // TOCTOU klasik: dua goroutine sama-sama menyimpulkan "belum ada",
+    // dan yang kedua menimpa hasil yang pertama.
+    rc.mu.Lock()
+    defer rc.mu.Unlock()
+    if v, ada := rc.flags[key]; ada {   // <-- pemeriksaan KEDUA, wajib
+        return v
+    }
+    rc.flags[key] = false
+    return false
+}
 ```
 
-**Why dangerous:** Ini adalah jebakan klasik bagi mantan programmer Java/C# yang terbiasa pada fitur *Reentrant Locks* atau *Lock Upgrading/Escalation*. Di bahasa Go, Mutex **TIDAK** mencatat Goroutine ID mana yang memegang mereka (Bukan reentrant). Jika Goroutine `G-99` memanggil `RLock()`, Mutex hanya mencatat "+1 Pembaca Tiba". Jika `G-99` lalu memanggil `Lock()`, Mutex akan menunggu seluruh pembaca (termasuk porsi +1 milik `G-99` tadi) pulang sebelum membuka gemboknya. Hasil akhirnya adalah *Deadlock Livelock*, di mana goroutine menyandera dirinya sendiri.
+**Why dangerous:** Ini jebakan klasik bagi programmer yang terbiasa pada *Reentrant Lock* di Java/C#. Di Go, Mutex **TIDAK** mencatat goroutine mana yang memegangnya — ia tidak reentrant. Ketika `G-99` memanggil `RLock()`, Mutex hanya mencatat "+1 pembaca". Saat `G-99` lalu memanggil `Lock()`, Mutex menunggu **seluruh** pembaca pulang — termasuk +1 miliknya sendiri, yang tidak akan pernah pulang. Goroutine itu menunggu dirinya sendiri: deadlock permanen.
+
+**Dan perbaikannya tidak berhenti di "RUnlock dulu".** Melepas lalu mengambil ulang membuka celah waktu di mana state bisa berubah. Nasihat "RUnlock dulu baru Lock" tanpa pemeriksaan kedua hanya menukar deadlock dengan bug TOCTOU yang jauh lebih sulit terlihat — karena ia tidak menggantung, ia hanya kadang-kadang salah.
 
 ## Edge Cases
 

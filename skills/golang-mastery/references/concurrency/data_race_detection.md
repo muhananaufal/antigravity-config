@@ -143,13 +143,34 @@ func TestThreadSafeRegistry_NoRace(t *testing.T) {
 	}
 }
 
-// MockRegistry digunakan untuk testing layer bisnis tanpa overhead lock mutex
+// MockRegistry untuk menguji logika bisnis tanpa ongkos mutex.
+//
+// PERINGATAN — dua hal yang WAJIB dipegang saat memakainya:
+//
+//  1. Mock ini TIDAK aman untuk akses konkuren. Memakainya di uji yang
+//     menjalankan goroutine paralel akan menghasilkan data race pada
+//     mock-nya sendiri -- kegagalan yang menyesatkan, karena yang salah
+//     adalah alat ujinya, bukan kode yang diuji.
+//  2. Mock WAJIB menghormati kontrak yang sama dengan implementasi nyata.
+//     Snapshot() pada ThreadSafeRegistry MENYALIN agar map internal tidak
+//     bocor ke pemanggil. Mock yang mengembalikan map aslinya akan
+//     membuat uji lulus untuk kode yang memutasi hasil Snapshot --
+//     lalu produksi rusak dengan cara yang tidak pernah terlihat di CI.
 type MockRegistry struct {
 	MockItems map[string]int
 }
-func (m *MockRegistry) Add(key string, val int) { m.MockItems[key] = val }
+
+func (m *MockRegistry) Add(key string, val int)    { m.MockItems[key] = val }
 func (m *MockRegistry) Get(key string) (int, bool) { val, ok := m.MockItems[key]; return val, ok }
-func (m *MockRegistry) Snapshot() map[string]int { return m.MockItems }
+
+// Snapshot menyalin, persis seperti implementasi nyata.
+func (m *MockRegistry) Snapshot() map[string]int {
+	out := make(map[string]int, len(m.MockItems))
+	for k, v := range m.MockItems {
+		out[k] = v
+	}
+	return out
+}
 
 func TestRegistry_MockUsage(t *testing.T) {
 	// Memastikan logika bisnis berjalan benar dengan mock
