@@ -35,6 +35,7 @@ Agent WAJIB mencocokkan nature of task ke domain berikut **secara proaktif**:
 | Low-latency, HFT, zero-alloc, matching engine, order book | `hft_zero_alloc/` |
 | Linux syscall, epoll, cgroups, seccomp, raw socket | `system_programming_linux/` |
 | Security audit, zero-trust, OPA, SPIFFE, cosign, SBOM | `cybersecurity_zerotrust/` |
+| CLI, subcommand, flag, TUI, distribusi biner, `--version` | `cli_tooling/` |
 | Code generation, AST, linter custom, WASM plugin | `ast_metaprogramming/` |
 | Game server, multiplayer, tick loop, leaderboard | `game_backend/` |
 | Distributed consensus, Raft, etcd, WAL, BadgerDB | `distributed_consensus_storage/` |
