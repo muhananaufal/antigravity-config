@@ -56,10 +56,12 @@ Source Code + go.sum
 package testingquality
 
 import (
-	"crypto/md5"  // #nosec G501 — HANYA untuk demonstrasi, JANGAN di production
+	"crypto/md5" // #nosec G501 — HANYA untuk demonstrasi, JANGAN di production
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -83,41 +85,89 @@ func SecurityFlaws(userInput string) string {
 	return string(out)
 }
 
+// perintahDiizinkan memetakan nama ke JALUR ABSOLUT.
+//
+// Nama telanjang seperti "ls" diselesaikan exec.Command lewat $PATH, dan
+// penyerang yang bisa memengaruhi PATH proses — variabel lingkungan yang
+// diwarisi, unit systemd yang salah tulis, entrypoint kontainer — mendapat
+// eksekusi arbitrer meski daftar putihnya sempurna. Jalur absolut menutup itu.
+var perintahDiizinkan = map[string]string{
+	"ls":  "/bin/ls",
+	"pwd": "/bin/pwd",
+}
+
 // SafeAlternatives mendemonstrasikan pola aman sebagai pengganti SecurityFlaws.
 func SafeAlternatives(userInput string) (string, error) {
-	// AMAN: Whitelist command args, bukan string shell langsung
-	allowedCommands := map[string]bool{"ls": true, "pwd": true}
 	parts := strings.Fields(userInput)
 	if len(parts) == 0 {
-		return "", fmt.Errorf("empty command")
-	}
-	if !allowedCommands[parts[0]] {
-		return "", fmt.Errorf("command %q not allowed", parts[0])
+		return "", fmt.Errorf("perintah kosong")
 	}
 
-	// Gunakan exec.Command dengan args terpisah, BUKAN sh -c
-	cmd := exec.Command(parts[0], parts[1:]...)
+	jalur, ok := perintahDiizinkan[parts[0]]
+	if !ok {
+		return "", fmt.Errorf("perintah %q tidak diizinkan", parts[0])
+	}
+
+	// ARGUMEN juga divalidasi, bukan hanya nama perintahnya.
+	//
+	// Inilah setengah yang biasanya hilang: mendaftarputihkan BINER tidak
+	// sama dengan mendaftarputihkan OPERASI. `ls` yang diizinkan tetap
+	// menerima `ls -la /etc` atau `ls /home/korban` — perintahnya sah,
+	// pembacaannya tidak. Untuk contoh ini hanya nama berkas relatif tanpa
+	// komponen path yang diterima.
+	for _, a := range parts[1:] {
+		if strings.HasPrefix(a, "-") {
+			return "", fmt.Errorf("opsi %q tidak diizinkan", a)
+		}
+		if a != filepath.Base(a) || strings.Contains(a, "..") {
+			return "", fmt.Errorf("argumen %q memuat komponen path", a)
+		}
+	}
+
+	// exec.Command dengan args TERPISAH, bukan `sh -c`.
+	cmd := exec.Command(jalur, parts[1:]...) // #nosec G204 — jalur & argumen sudah divalidasi
 	out, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("exec %q: %w", parts[0], err)
+		return "", fmt.Errorf("jalankan %q: %w", parts[0], err)
 	}
 	return string(out), nil
 }
 
-// SecureHTTPHeaders contoh middleware untuk security headers.
+// SecureHTTPHeaders contoh middleware untuk security header.
 func SecureHTTPHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Mencegah MIME sniffing
 		w.Header().Set("X-Content-Type-Options", "nosniff")
-		// Mencegah clickjacking
 		w.Header().Set("X-Frame-Options", "DENY")
-		// CSP dasar
-		w.Header().Set("Content-Security-Policy", "default-src 'self'")
-		// HSTS (hanya untuk HTTPS)
-		w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+		// frame-ancestors menggantikan X-Frame-Options di browser modern dan
+		// lebih ekspresif; keduanya dipasang demi klien lama.
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'")
+
+		// HSTS HANYA di HTTPS — dan sebelumnya komentarnya menyatakan itu
+		// sementara kodenya memasangnya tanpa syarat apa pun. Komentar yang
+		// menjanjikan kondisi yang tidak ada di kode adalah bentuk kesalahan
+		// paling mudah lolos review.
+		if lewatHTTPS(r) {
+			w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+		}
 		next.ServeHTTP(w, r)
 	})
 }
+
+// lewatHTTPS memperhitungkan terminator TLS di depan aplikasi.
+//
+// Pada topologi ingress/ALB yang menghentikan TLS, r.TLS bernilai nil di
+// dalam pod dan pemeriksaan `r.TLS != nil` saja membuat HSTS tidak pernah
+// terkirim — senyap. X-Forwarded-Proto hanya boleh dipercaya bila memang ada
+// proxy tepercaya di depan; tanpa itu, klien bisa menuliskannya sendiri.
+func lewatHTTPS(r *http.Request) bool {
+	if r.TLS != nil {
+		return true
+	}
+	return diBalikProksiTepercaya && strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
+}
+
+// diBalikProksiTepercaya disetel dari konfigurasi deployment, bukan ditebak.
+const diBalikProksiTepercaya = true
 
 // TestSafeAlternatives memverifikasi bahwa fungsi aman bekerja dengan benar
 // dan menolak command yang tidak diizinkan.
@@ -157,27 +207,44 @@ func TestSafeAlternatives(t *testing.T) {
 	})
 }
 
-// TestSecureHTTPHeaders memverifikasi semua security headers di-set dengan benar.
+// TestSecureHTTPHeaders memverifikasi seluruh security header.
 func TestSecureHTTPHeaders(t *testing.T) {
-	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := SecureHTTPHeaders(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-	})
+	}))
 
-	handler := SecureHTTPHeaders(next)
-
-	req, _ := http.NewRequest(http.MethodGet, "/", nil)
+	// httptest.NewRequest, bukan http.NewRequest dengan galat dibuang `_`.
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("X-Forwarded-Proto", "https")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
-	headers := map[string]string{
-		"X-Content-Type-Options": "nosniff",
-		"X-Frame-Options":        "DENY",
-		"Content-Security-Policy": "default-src 'self'",
+	mau := map[string]string{
+		"X-Content-Type-Options":  "nosniff",
+		"X-Frame-Options":         "DENY",
+		"Content-Security-Policy": "default-src 'self'; frame-ancestors 'none'",
 	}
-	for header, expected := range headers {
-		if got := rec.Header().Get(header); got != expected {
-			t.Errorf("header %q = %q, want %q", header, got, expected)
+	for h, v := range mau {
+		if got := rec.Header().Get(h); got != v {
+			t.Errorf("header %q = %q, mau %q", h, got, v)
 		}
+	}
+
+	// HSTS adalah satu-satunya header yang komentarnya keliru pada versi
+	// sebelumnya — dan satu-satunya yang tidak diperiksa uji ini.
+	if !strings.Contains(rec.Header().Get("Strict-Transport-Security"), "max-age=") {
+		t.Error("HSTS hilang di balik terminator TLS")
+	}
+}
+
+func TestSecureHTTPHeaders_TanpaHTTPSTidakAdaHSTS(t *testing.T) {
+	handler := SecureHTTPHeaders(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	req := httptest.NewRequest(http.MethodGet, "/", nil) // tanpa TLS, tanpa X-Forwarded-Proto
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Header().Get("Strict-Transport-Security") != "" {
+		t.Error("HSTS dipasang pada koneksi non-TLS")
 	}
 }
 ```
@@ -202,11 +269,22 @@ linters-settings:
       - G304 # File path injection
       - G401 # Use of weak cryptographic primitive
       - G501 # Import of crypto/md5
-      - G601 # Implicit memory aliasing in for loop (Go <1.22)
+      # G601 (implicit memory aliasing) SENGAJA tidak disertakan: masalah
+      # yang dideteksinya tidak ada lagi sejak semantik variabel loop
+      # berubah di Go 1.22, dan `run.go` di atas menyatakan 1.23.
+      # Mengaktifkannya hanya menghasilkan derau di basis kode modern.
 
-  govulncheck:
-    # Hanya laporkan vuln yang fungsinya benar-benar dipanggil (call-graph analysis)
-    # Ini adalah default govulncheck — biarkan default
+# CATATAN PENTING: govulncheck BUKAN linter golangci-lint.
+#
+# Versi sebelumnya menaruh blok `govulncheck:` di bawah `linters-settings`.
+# Blok itu sepenuhnya INERT — golangci-lint tidak mengenal nama itu, tidak
+# ada linter maupun setelan bernama demikian, sehingga tidak satu pun
+# pemindaian kerentanan benar-benar berjalan. Yang lebih buruk dari tidak
+# memasangnya adalah memasang sesuatu yang terlihat seperti sudah terpasang.
+#
+# govulncheck adalah alat TERPISAH dan dijalankan sebagai langkah CI sendiri:
+#   go install golang.org/x/vuln/cmd/govulncheck@latest
+#   govulncheck ./...
 
 linters:
   disable-all: true
