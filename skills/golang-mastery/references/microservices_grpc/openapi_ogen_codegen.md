@@ -1,5 +1,7 @@
 # OpenAPI (Swagger) Generation untuk gRPC-Gateway
 
+> **Berlaku:** Go 1.21+ · `ogen` / `oapi-codegen` · OpenAPI 3.1 · **Lihat juga:** `microservices_grpc/rest_chi_middleware_stack.md` · `microservices_grpc/api_versioning_strategy.md` · `testing_quality/e2e_testing_patterns.md` · `cli_tooling/config_precedence_viper.md`
+
 ## Konsep dan Internals
 Dalam lingkungan Microservices, dokumentasi API adalah kontrak suci. Menulis spesifikasi REST (Swagger / OpenAPI v2 atau v3) secara manual di ekosistem Go memakan waktu tinggi dan rentan *out-of-sync* antara dokumen dan *logic*. 
 
@@ -231,3 +233,34 @@ Ada tim yang menggunakan gRPC-Gateway, tetapi menugaskan Technical Writer/Fronte
 1. **Format Enum (*Int vs String*) di Swagger JSON**: Secara bawaan (*default*), tipe `enum` protobuf akan dikonversi menjadi Integer/Angka pada serialisasi JSON. Namun, Spesifikasi OpenAPI hasil generasi `protoc-gen-openapiv2` seringkali mendeskripsikan Enum tersebut sebagai himpunan string (`"ACTIVE"`, `"INACTIVE"`). Akibat ketidakcocokan ini, klien yang memvalidasi payload JSON mereka secara kaku (*Strict Validator*) akan error. *Solusi*: Anda harus memastikan `runtime.ServeMux` gRPC-Gateway dikonfigurasi dengan `runtime.WithMarshalerOption(runtime.MIMEWildcard, &runtime.JSONPb{ EnumsAsInts: false })` agar *output* HTTP menjadi String selaras dengan *Swagger Specs*.
 2. **Kustomisasi CamelCase vs Snake_case**: Protobuf standar menggunakan *snake_case* untuk field (e.g. `first_name`). `openapiv2` standar akan mengonversinya menjadi *camelCase* (`firstName`) di Swagger UI, namun tergantung pada opsi *marshaler* gRPC-Gateway (`UseProtoNames: true/false`), output HTTP aktual bisa saja berbeda (tetap `first_name`). Jika dokumentasi (camelCase) tidak cocok dengan network response aktual (snake_case), Klien Web Front-end akan gagal memetakan JSON. Anda harus meninjau konsistensi flag `json_name` di file *proto* Anda.
 3. **Mengabaikan Health Check Endpoint di Swagger**: Layanan Microservice sering memiliki endpoint `/healthz` yang diimplementasikan di atas gRPC. Endpoint-endpoint operasional ini idealnya disembunyikan (*hidden*) dari Swagger Specs agar Klien Publik tidak kebingungan. Gunakan *Swagger exclude config* atau beri anotasi pengabaian (jangan taruh `google.api.http` di atas rute kesehatan internal).
+
+## Kapan JANGAN Pakai Ini
+
+- **Memelihara spesifikasi dan handler sebagai dua hal terpisah.** Keduanya pasti menyimpang, dan yang menyimpang diam-diam adalah dokumentasinya — sampai ada klien yang membangun berdasarkan janji yang sudah tidak berlaku. Pilih satu arah: spesifikasi menghasilkan kode, atau kode menghasilkan spesifikasi.
+- **Generate dari spesifikasi yang tidak divalidasi di CI.** Spesifikasi yang tidak pernah diperiksa akan menghasilkan kode yang gagal dikompilasi pada saat paling tidak tepat.
+- **OpenAPI untuk komunikasi internal yang sudah memakai gRPC.** Dua kontrak untuk hal yang sama berarti dua tempat yang bisa salah, dan dua tempat yang harus diperbarui bersamaan.
+- **Menganggap validasi hasil generate menggantikan validasi bisnis.** Ia memeriksa **bentuk**, bukan makna. `jumlah: -5` lolos pemeriksaan tipe dan tetap salah secara bisnis.
+- **Menambah field respons tanpa memeriksa dampaknya.** Sebagian generator klien menolak field yang tidak dikenal secara default; "penambahan yang aman" bisa merusak klien yang memvalidasi ketat.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Dokumentasi tidak cocok dengan perilaku | siapa sumber kebenarannya | Spesifikasi dan kode dipelihara terpisah |
+| Kode hasil generate tertinggal | `go generate` + `git diff` di CI | Tidak ada gerbang sinkronisasi |
+| Klien rusak setelah rilis "kompatibel" | diff spesifikasi antar rilis | Perubahan breaking tidak terdeteksi |
+| Permintaan valid ditolak validator | skema vs aturan bisnis | Skema lebih ketat daripada yang dimaksudkan |
+| Permintaan tidak masuk akal diterima | validasi bisnis setelah validasi bentuk | Validasi bentuk disalahartikan sebagai validasi makna |
+
+```bash
+# Spesifikasi harus valid sebelum apa pun digenerate darinya
+npx @redocly/cli lint openapi.yaml
+
+ogen --target internal/api --clean openapi.yaml && go build ./...
+
+# Gerbang CI: hasil generate WAJIB sinkron dengan spesifikasi
+go generate ./... && git diff --exit-code
+
+# Perubahan yang merusak klien, sebelum dirilis
+npx oasdiff breaking openapi-lama.yaml openapi.yaml
+```

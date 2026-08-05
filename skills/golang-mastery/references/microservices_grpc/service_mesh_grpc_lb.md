@@ -1,5 +1,7 @@
 # Service Mesh & gRPC Load Balancing: Resilience and Traffic Control
 
+> **Berlaku:** Go 1.21+ · `grpc-go` v1.60+ · Envoy / Istio · **Lihat juga:** `microservices_grpc/grpc_streaming_patterns.md` · `microservices_grpc/http_client_production.md` · `observability_resilience/circuit_breaker_hystrix.md` · `devops_control_planes/docker_container_go.md`
+
 ## Konsep dan Internals
 Dalam ekosistem gRPC, Load Balancing sangat berbeda dengan HTTP/1.1 tradisional. Karena gRPC berbasis HTTP/2 yang bersifat koneksi-persisten (*connection multiplexing*), meletakkan NGINX TCP (L4) Load Balancer konvensional di tengah tidak akan mendistribusikan lalu lintas secara adil. Semua request dari satu Client Go akan disalurkan melalui satu pipa HTTP/2 yang sama ke satu Server saja (*connection hoarding*).
 
@@ -231,3 +233,36 @@ stream {
 2. **Context Cancellation & Envoy Retry Storm**: Service Mesh (seperti Envoy) otomatis mem-parse *Deadline* Go Context (`context.WithTimeout`) dan menerjemahkannya ke HTTP Header `grpc-timeout`. Jika Klien menset timeout 2 detik dan timeout habis di Klien, Proxy (Envoy) akan ikut membatalkan *request* ke hilir, mencegah peladen hilir kelelahan bekerja untuk klien yang sudah menyerah. Namun jika Proxy dikonfigurasikan Retry ekstrem tanpa pembatasan `x-envoy-max-retries`, satu request gagal bisa diamplifikasi menjadi badai lalu lintas (Retry Storm).
 3. **Flapping Health Checks di Service Mesh**: Endpoint `grpc_health_v1.HealthCheck` digunakan Proxy untuk memvalidasi rotasi peladen. Apabila pemeriksaan Health Check Anda terlalu sensitif (misalnya langsung `NOT_SERVING` jika ada 1 kueri DB lambat selama 200ms), pod akan ditendang keluar-masuk rotasi (*flapping*). Proses ini me-reset pool koneksi Envoy secara konstan, memicu lonjakan latensi di seluruh mesh jaringan. Gunakan state management transisional untuk Health Server.
 4. **Stale DNS Resolution saat Pod di-roll**: Saat *Deployment* Kubernetes diperbarui, pod lama mati dan IP baru muncul. gRPC-go DNS Resolver mem-cache data ini. Terkadang resolusi ulangnya membutuhkan jeda (*DNS lag*). Membekali klien `grpc.Dial` dengan konfigurasi *Retry mechanism JSON* (untuk status `UNAVAILABLE`) akan memastikan request terselamatkan sementara resolver memompa IP baru ke *Load Balancing pool*.
+
+## Kapan JANGAN Pakai Ini
+
+- **Service mesh untuk beberapa layanan saja.** Ongkos operasionalnya — sidecar di setiap pod, control plane, rotasi sertifikat, upgrade yang menyentuh semua layanan — tidak sebanding sampai jumlah layanan dan tim benar-benar besar.
+- **Proxy L4 (TCP) di depan gRPC.** HTTP/2 memultipleks banyak permintaan pada satu koneksi, sehingga balancer L4 hanya menyeimbangkan **koneksi**. Hasilnya: seluruh trafik satu klien menumpuk di satu backend, dan grafik CPU akan menunjukkannya dengan jelas.
+- **`pick_first` untuk target multi-node.** Ia memakai alamat pertama yang berhasil dan membiarkan sisanya menganggur. Untuk headless service, `round_robin` yang benar.
+- **Retry di mesh **dan** di aplikasi sekaligus.** Retry berlapis mengalikan beban: tiga percobaan di dua lapisan berarti sembilan permintaan ke hilir yang justru sedang sekarat.
+- **Mengandalkan mesh untuk kebenaran.** Mesh memberi lalu lintas yang teramati, terenkripsi, dan bisa diatur. Ia tidak membuat operasi Anda idempoten, dan retry otomatisnya justru menuntut idempotensi yang harus Anda sediakan sendiri.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Satu pod hilir jauh lebih sibuk | sebaran CPU antar pod | Balancing L4, atau `pick_first` |
+| Beban hilir berlipat saat insiden | retry di mesh dan aplikasi | Retry berlapis mengalikan permintaan |
+| Koneksi tidak pindah setelah scale-up | resolver yang dipakai klien | Daftar endpoint tidak diperbarui |
+| Latensi naik setelah memasang mesh | overhead sidecar | Setiap hop menambah dua lompatan proxy |
+| mTLS gagal setelah beberapa bulan | masa berlaku sertifikat | Rotasi tidak berjalan |
+
+```bash
+# Sebaran beban antar pod -- timpang berarti balancing tidak terjadi
+kubectl top pods -l app=hilir
+curl -s localhost:9090/metrics | grep grpc_client_handled_total
+
+# Balancer dan resolver yang benar-benar dipakai klien Go
+GRPC_GO_LOG_SEVERITY_LEVEL=info GRPC_GO_LOG_VERBOSITY_LEVEL=2 ./app 2>&1 \
+  | grep -iE 'balancer|resolver' | head
+
+# Apa yang dilihat sidecar Envoy
+kubectl exec <pod> -c istio-proxy -- pilot-agent request GET clusters | head -40
+kubectl exec <pod> -c istio-proxy -- pilot-agent request GET stats \
+  | grep -E 'upstream_rq_retry|upstream_cx_active'
+```

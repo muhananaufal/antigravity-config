@@ -1,5 +1,7 @@
 # gRPC dan Protobuf Patterns di Go: Schema Design dan Evolusi
 
+> **Berlaku:** Go 1.21+ · `google.golang.org/protobuf` · `buf` CLI · **Lihat juga:** `microservices_grpc/api_versioning_strategy.md` · `microservices_grpc/grpc_streaming_patterns.md` · `microservices_grpc/grpc_interceptors_middleware.md` · `microservices_grpc/openapi_ogen_codegen.md`
+
 ## Konsep dan Internals
 Protocol Buffers (Protobuf) adalah mekanisme dari Google untuk serialisasi struktur data yang independen dari bahasa pemrograman dan platform. Dalam arsitektur microservices Go, Protobuf v3 (`proto3`) digunakan sebagai *Interface Definition Language* (IDL) tunggal bersama gRPC.
 
@@ -331,3 +333,35 @@ default:
 2. **Limitasi Default Zero Values di Masking**: Protobuf 3 tidak mengirim properti *zero-value* (seperti `int32 = 0`, `string = ""`) pada network serialization. Ini artinya, tanpa `FieldMask`, Anda tidak dapat membedakan apakah Klien ingin mereset *balance* menjadi `0`, atau klien tidak berniat memperbarui properti *balance*. Selalu andalkan kombinasi *Field Mask* atau gunakan `google.protobuf.Int32Value` (wrapper objects yang bertindak seperti pointer) untuk bidang yang sensitif terhadap beda `0` dan `null`.
 3. **Validasi Sub-Paths pada FieldMask**: Pada struktur bersarang (*nested structs*), klien dapat mengirim FieldMask string bertitik, seperti `update_mask.paths = ["profile.address.city"]`. Jika Anda melakukan masking secara naif di Go tanpa rekursif `switch` (atau library seperti `protoc-gen-go-fieldmask`), operasi update akan korup di level DB layer.
 4. **Context Deadline Menghilang Saat Casting**: Walaupun `context` tersalurkan di gRPC Go, ketika melakukan manipulasi `metadata.MD` lalu membuat `OutgoingContext` baru dengan `context.Background()`, deadline bawaan request dari `IncomingContext` akan terbuang (*stripped*). Server akan menjalankan komputasi tak terbatas meski klien terputus. Pastikan menyambung metadata dengan `context.WithTimeout` turunan context aslinya.
+
+## Kapan JANGAN Pakai Ini
+
+- **Untuk API yang dikonsumsi browser secara langsung.** gRPC-Web membutuhkan proxy, dan alat pengembang browser tidak bisa membaca payload biner. Untuk API publik yang dipakai orang di luar tim Anda, JSON masih jauh lebih ramah didebug.
+- **`optional`/`oneof` sebagai cara menghindari keputusan skema.** Skema yang serba opsional memindahkan seluruh validasi ke setiap pemanggil, dan pemanggil yang lupa memvalidasi tidak akan ketahuan sampai produksi.
+- **Menyimpan pesan protobuf terserialisasi sebagai satu-satunya bentuk di database.** Ia tidak bisa di-query, tidak bisa dibaca manusia saat insiden, dan migrasi skemanya berubah menjadi migrasi kode.
+- **`Any` kecuali benar-benar tidak ada jalan lain.** Ia mengembalikan sistem ke pengetikan dinamis, dan seluruh keuntungan kontrak yang bisa diperiksa mesin ikut hilang.
+- **Memakai ulang nomor field yang pernah dihapus.** Ini kesalahan yang tidak bisa diperbaiki belakangan: klien lama akan menafsirkan byte lama sebagai field baru dan menghasilkan data yang salah tanpa satu pun galat. Selalu `reserved`.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Klien lama membaca nilai yang tidak masuk akal | riwayat nomor field di `.proto` | Nomor field dipakai ulang setelah dihapus |
+| `ResourceExhausted: received message larger than max` | ukuran pesan vs batas 4 MB | Payload melewati batas bawaan gRPC |
+| Field baru selalu bernilai nol di klien lama | versi generate klien | Perilaku yang benar — pastikan memang disengaja |
+| Perubahan proto lolos ke rilis lalu merusak klien | apakah `buf breaking` ada di CI | Tidak ada gerbang kompatibilitas |
+| Deserialisasi gagal pada sebagian pesan | tipe field yang pernah berubah | Perubahan tipe pada nomor field yang sama |
+
+```bash
+buf lint
+buf format -d
+
+# Gerbang WAJIB di CI: menolak perubahan yang merusak klien
+buf breaking --against '.git#branch=main'
+
+# Nomor field yang dihapus tanpa reserved adalah bom waktu
+grep -rn 'reserved' --include='*.proto' .
+
+# Pesan melewati batas ukuran
+kubectl logs -l app=api --since=1h | grep -c 'larger than max'
+```

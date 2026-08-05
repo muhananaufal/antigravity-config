@@ -1,5 +1,7 @@
 # gRPC Interceptors & Middleware: Konsep, Implementasi, dan Best Practices
 
+> **Berlaku:** Go 1.21+ · `grpc-go` v1.60+ · `go-grpc-middleware` v2 · **Lihat juga:** `microservices_grpc/grpc_streaming_patterns.md` · `observability_resilience/opentelemetry_tracing.md` · `observability_resilience/rate_limiting_patterns.md` · `microservices_grpc/rest_chi_middleware_stack.md`
+
 ## Konsep dan Internals
 Dalam ekosistem gRPC, middleware disebut sebagai **Interceptors**. Interceptors memungkinkan kita untuk mencegat (intercept) eksekusi dari panggilan RPC (Remote Procedure Call) baik di sisi client maupun server. Konsep ini sangat mirip dengan middleware di HTTP/REST (seperti pada Chi, Gin, atau Express), dan merupakan tempat yang ideal untuk menangani *cross-cutting concerns* seperti:
 - **Authentication & Authorization** (contoh: validasi JWT, pengecekan RBAC).
@@ -365,3 +367,32 @@ server := grpc.NewServer(
 2. **Besaran Metadata Limit (Header Bomb)**: gRPC, di atas HTTP/2, memiliki batas *header list size*. Jika Anda membaca *metadata* di interceptor dan menyimpan keseluruhan valuenya di *in-memory* logging (contoh: me-log seluruh payload headers), klien jahat dapat mengirimkan ribuan *key* palsu dan memaksa log-aggregator (atau RAM server Anda) OOM (Out-of-Memory). Letakkan interceptor size limiter atau logging yang aman (*truncate* string panjang) di titik paling awal (segera setelah panic recovery).
 3. **Panic(Nil)**: Di Go, sangat memungkinkan untuk menjalankan kode bodoh seperti `panic(nil)`. Jika *panic handler* Anda hanya mengecek `if r := recover(); r != nil`, maka `panic(nil)` akan menyelinap dan menyebabkan *uncaught crash*. Untuk mendeteksi `panic(nil)`, dibutuhkan *wrapper flag* boolean di samping *recover*, atau sekadar memastikan Anda selalu menggunakan tipe *error* ketika meng-invoke panic dalam basis kode internal.
 4. **Waktu Propagasi Timeout/Deadline**: Ketika *intercepting*, pastikan Anda tidak secara tidak sengaja "mereset" *context deadline*. Terkadang developer menggunakan `context.Background()` sebagai *base* baru untuk spawn *worker* di interceptor dan lupa melampirkan deadline asli. Hal ini dapat menyebabkan masalah goroutine leaking jika stream tersebut pada akhirnya menggantung karena tidak adanya timeout. Selalu buat turunan *context* dengan `context.WithTimeout` dari context asal gRPC jika Anda butuh perpanjangan sementara, dan jangan lupa panggil `cancel()`.
+
+## Kapan JANGAN Pakai Ini
+
+- **Logika bisnis di dalam interceptor.** Interceptor berjalan untuk **setiap** metode. Aturan yang hanya berlaku untuk sebagian metode akan tumbuh menjadi daftar pengecualian yang makin panjang, dan daftar itu akan ketinggalan saat metode baru ditambahkan.
+- **Memodifikasi `metadata.MD` yang diterima di tempat.** Metadata masuk boleh dibaca, tidak boleh diubah. Salin dulu dengan `md.Copy()`; mengubahnya langsung menghasilkan data race yang sulit ditelusuri.
+- **Recovery yang mengembalikan galat Go apa adanya.** Klien gRPC hanya memahami `status.Error`. Galat mentah sampai sebagai `Unknown` tanpa kode yang bisa ditindaklanjuti klien — dan retry otomatis di sisi klien jadi tidak mungkin.
+- **Hanya memasang unary interceptor.** Autentikasi yang lupa dipasang di stream interceptor berarti **seluruh** metode streaming tidak terlindungi, dan itu tidak akan pernah ketahuan dari uji unary.
+- **Menyimpan state per-permintaan di struct interceptor.** Interceptor dibagi antar seluruh permintaan. Apa pun yang bersifat per-permintaan harus lewat context.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Banyak `code = Unknown` di metrik | pembungkusan galat | Galat tidak dikonversi ke `status.Error` |
+| Metode streaming bisa diakses tanpa token | stream interceptor terpasang atau tidak | Auth hanya dipasang di jalur unary |
+| Proses mati karena panic satu permintaan | recovery interceptor | Tidak ada jaring pengaman panic |
+| Data antar permintaan tercampur | state di struct interceptor | Interceptor dibagi, state-nya tidak boleh |
+| Trace terputus tepat di gRPC | urutan interceptor | Interceptor tracing dipasang setelah yang lain |
+
+```bash
+grpcurl -plaintext localhost:9090 list
+grpcurl -plaintext localhost:9090 pkg.Layanan/Metode          # tanpa token: harus ditolak
+grpcurl -plaintext -H 'authorization: Bearer x' localhost:9090 pkg.Layanan/StreamMetode
+
+# Kode status selain OK -- Unknown yang banyak berarti galat tidak dibungkus
+curl -s localhost:9090/metrics | grep grpc_server_handled_total | grep -v 'code="OK"'
+
+kubectl logs -l app=api --since=1h | grep -c 'code = Unknown'
+```

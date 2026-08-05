@@ -1,5 +1,7 @@
 # GraphQL API dengan gRPC Backend (Pola BFF & DataLoader)
 
+> **Berlaku:** Go 1.21+ · `99designs/gqlgen` v0.17+ · **Lihat juga:** `db_sqlc/query_optimization_n_plus_one.md` · `caching_strategy/multilevel_cache_l1l2.md` · `observability_resilience/rate_limiting_patterns.md` · `microservices_grpc/grpc_protobuf_patterns.md`
+
 ## Konsep dan Internals
 Dalam arsitektur *microservices*, memaparkan gRPC secara langsung ke klien publik (seperti SPA React atau Klien iOS) seringkali menyulitkan karena keterbatasan format payload (Over-fetching / Under-fetching). Solusi terbaik adalah menempatkan **GraphQL Server** sebagai *Backend-for-Frontend* (BFF). 
 
@@ -257,3 +259,32 @@ func (r *Resolver) Me(ctx context.Context) (*User, error) {
 1. **Partial Failure di Batching gRPC**: Dataloader mengirim 50 buah ID. Saat gRPC server melakukan kalkulasi, ID ke-49 error (contoh: *Data Corrupted*), sedangkan 49 lainnya sukses. Jika gRPC server langsung me-return `return nil, status.Error(...)`, 49 data yang sukses akan dikorbankan dan seluruh graf Kueri GraphQL akan *Fail / Nil*. Solusinya: gRPC harus menggunakan model desain *Response* yang memiliki properti array dari elemen campuran keberhasilan dan kegagalan (misalnya struct protobuf kustom `Message Result { User user = 1; string error = 2; }`), lalu BFF GraphQL memetakan properti `error` tersebut ke *GraphQL Error Path* individual.
 2. **Context Deadline Cancellation**: Jika klien membatalkan HTTP GET Kueri GraphQL di Browser (contoh pengguna menutup tab React), paket Context BFF otomatis *Canceled*. Pastikan Context ini dioper (propagate) *langsung* ke gRPC Client Anda (tanpa `context.Background()`), agar microservice ikut membatalkan proses database yang sedang berjalan dan menghemat *resources*.
 3. **Over-Batching di Dataloader**: Meskipun DataLoader mengumpulkan ID, batas memori protobuf default *Max Message Size* adalah 4MB. Jika Dataloader membengkak hingga puluhan ribu ID dalam sekali *tick* waktu penantian (2 milidetik), *Request Header/Payload* akan melampaui ambang batas 4MB yang akan membuat fungsi `Invoke` gRPC Klien *panic/crash*. Lakukan proteksi maksimal ID limit (misal: 100 IDs per Batch) di opsi konfigurasi Dataloader Anda.
+
+## Kapan JANGAN Pakai Ini
+
+- **Untuk API yang dikonsumsi satu klien yang Anda kendalikan sendiri.** Fleksibilitas query adalah jawaban atas masalah "banyak klien dengan kebutuhan berbeda". Bila kliennya satu dan tim yang sama menulisnya, REST atau gRPC lebih sederhana, lebih mudah di-cache, dan lebih mudah diamati.
+- **Tanpa batas kedalaman dan kompleksitas query.** Query bersarang dalam adalah vektor DoS yang sah: satu permintaan kecil bisa memicu ribuan query database. Batas ini bukan pengaturan lanjutan — ia prasyarat.
+- **Tanpa dataloader.** GraphQL membuat N+1 hampir tidak terhindarkan karena resolver dipanggil per node. Satu query yang mengembalikan 100 item menghasilkan 101 query database bila batching tidak dipasang.
+- **Untuk API publik tanpa persisted query.** Membiarkan siapa saja mengirim query sembarang berarti Anda tidak bisa memperkirakan beban, tidak bisa meng-cache di CDN, dan tidak bisa melarang bentuk query yang mahal.
+- **Sebagai lapisan tipis di atas gRPC yang hilirnya tidak punya API batch.** Dataloader hanya bisa membatch bila layanan hilir menyediakan endpoint batch; tanpa itu, N+1 hanya berpindah satu lapis.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Satu permintaan memicu ratusan query DB | jumlah span `db` per trace | Dataloader tidak dipasang, atau hilir tanpa API batch |
+| Beban tidak bisa diprediksi dari jumlah permintaan | sebaran kompleksitas query | Tidak ada batas kompleksitas |
+| Cache CDN tidak pernah kena | apakah persisted query dipakai | Query sembarang lewat `POST` tidak bisa di-cache |
+| Satu klien menjatuhkan seluruh layanan | kedalaman query maksimum | Tidak ada batas kedalaman |
+| Latensi p99 sangat berayun | variasi bentuk query | Beban ditentukan bentuk query, bukan jumlahnya |
+
+```bash
+# Jumlah query DB per permintaan GraphQL -- di atas 20 hampir pasti N+1
+curl -s "$JAEGER/api/traces?service=gql&limit=20" \
+  | jq '[.data[] | {t:.traceID, db:([.spans[]|select(.operationName|test("^db"))]|length)}]
+        | sort_by(-.db)[:5]'
+
+# Kedalaman dan kompleksitas yang benar-benar masuk
+kubectl logs -l app=gql --since=1h | jq -r 'select(.kedalaman) | .kedalaman' | sort -n | tail -5
+curl -s localhost:9090/metrics | grep -E 'graphql_(complexity|depth|resolver_duration)'
+```

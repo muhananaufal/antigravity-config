@@ -1,5 +1,7 @@
 # gRPC Streaming Patterns: Server, Client, & Bidirectional
 
+> **Berlaku:** Go 1.21+ · `grpc-go` v1.60+ · **Lihat juga:** `microservices_grpc/grpc_interceptors_middleware.md` · `concurrency/channel_patterns_pipelines.md` · `concurrency/context_cancellation_timeout.md` · `microservices_grpc/webhook_delivery_engine.md`
+
 ## Konsep dan Internals
 Dalam gRPC, *streaming* memungkinkan pengiriman kumpulan pesan tanpa batas atas koneksi TCP/HTTP2 tunggal. Alih-alih membuat request berulang-ulang yang mengorbankan waktu dalam *TCP handshake* dan *HTTP header overhead*, *streaming* menjaga *channel* tetap terbuka (long-lived connection) untuk transfer data dua arah.
 
@@ -342,3 +344,32 @@ if err != nil {
 2. **Koneksi Mati Separo (Half-Open TCP Connection)**: Jika laptop klien menutup paksa koneksi fisiknya (tanpa mengirimkan pesan TCP FIN) akibat kehilangan jangkauan Wi-Fi, Load Balancer (LB) atau server gRPC bisa terjebak berasumsi koneksi stream tersebut masih "hidup" tanpa henti. Memori di server tidak akan pernah bersih. Solusi: Nyalakan **gRPC Keepalive** parameter (`keepalive.EnforcementPolicy` dan `keepalive.ServerParameters`) saat membuat server agar melakukan pings TCP secara berkala dan memutus stream jika klien diam saja.
 3. **Max Message Size Exceeded (Ukuran File)**: Saat melakukan *Streaming*, klien cenderung tidak sengaja mengirimkan satu payload raksasa melebihi 4MB. Karena stream didesain untuk data yang "dipecah menjadi serpihan (chunks)", ini akan meng-crash-kan stream secara instan. Anda harus selalu mendefinisikan batas khusus dengan `grpc.MaxRecvMsgSize(1024 * 1024 * 10)` pada inisialisasi Server jika ingin memperbolehkan satu payload chunk dalam stream melebihi batas default.
 4. **Context Deadline Ignored**: Dalam stream yang berlangsung selama berjam-jam, propagasi timeout bisa menyesatkan. Jika koneksi diam dan Anda berada pada pemblokiran fungsi `stream.Recv()`, context server mungkin terbatalkan/expired, tetapi fungsi internal Anda yang lain tidak menyadarinya karena tidak memeriksa `ctx.Err()`. Lakukan multiplex (select) atas `ctx.Done()` setiap kali memanggil logika I/O tambahan agar sistem terurai dari blokir.
+
+## Kapan JANGAN Pakai Ini
+
+- **Untuk permintaan-respons biasa.** Streaming menambah manajemen siklus hidup, penanganan `io.EOF`, dan pemulihan koneksi — semuanya tanpa satu pun manfaat bila datanya memang satu potong.
+- **Untuk data yang wajib sampai melewati restart.** Stream yang putus kehilangan posisinya kecuali Anda membangun kursor sendiri. Untuk pengiriman yang tidak boleh hilang, antrean durabel adalah alat yang benar.
+- **`SendMsg`/`RecvMsg` dari beberapa goroutine pada stream yang sama.** Ini bukan pembatasan yang bisa dilanggar sesekali — ia merusak protokol. Satu goroutine pengirim, satu penerima, titik.
+- **Stream berumur panjang tanpa keepalive.** Load balancer, NAT, dan firewall memutus koneksi yang diam. Aplikasi baru menyadarinya saat mencoba mengirim, sering beberapa menit setelah datanya seharusnya terkirim.
+- **Streaming melewati proxy L4 tanpa dukungan HTTP/2.** Koneksi tampak hidup dan sehat, tetapi balancing tidak pernah terjadi — seluruh stream satu klien menempel di satu backend.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Stream mati setelah beberapa menit diam | idle timeout perantara | Keepalive tidak disetel di klien maupun server |
+| Pesan hilang setelah reconnect | apakah ada kursor | Posisi stream tidak dipulihkan |
+| Kerusakan data acak pada stream sibuk | jumlah goroutine yang menulis | `SendMsg` dipanggil konkuren |
+| Satu backend jauh lebih sibuk | tipe proxy di depan | L4 menyeimbangkan koneksi, bukan permintaan |
+| `code = Canceled` sangat banyak | siapa yang membatalkan | Klien pergi, atau context induk dibatalkan lebih awal |
+
+```bash
+curl -s localhost:9090/metrics | grep -E 'grpc_server_msg_(received|sent)_total'
+kubectl logs -l app=api --since=1h | grep -cE 'code = (Unavailable|Canceled)'
+
+# Perantara yang memutus stream di tengah jalan
+kubectl logs -l app=ingress --since=1h | grep -ciE 'stream reset|GOAWAY'
+
+# Log internal grpc-go: keepalive, resolver, dan penutupan koneksi
+GRPC_GO_LOG_SEVERITY_LEVEL=info GRPC_GO_LOG_VERBOSITY_LEVEL=2 ./app 2>&1 | grep -i keepalive | head
+```

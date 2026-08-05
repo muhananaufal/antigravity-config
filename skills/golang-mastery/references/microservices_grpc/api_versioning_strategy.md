@@ -1,5 +1,7 @@
 # gRPC API Versioning Strategy
 
+> **Berlaku:** Go 1.21+ · `buf breaking` · **Lihat juga:** `microservices_grpc/grpc_protobuf_patterns.md` · `microservices_grpc/openapi_ogen_codegen.md` · `db_sqlc/zero_downtime_migrations.md` · `engineering_practice/adr_decision_records.md`
+
 ## Konsep dan Internals
 Dalam ekosistem gRPC dan Protobuf, evolusi API difokuskan pada stabilitas *contract* jangka panjang dengan Klien. Tidak seperti REST HTTP/1.1 yang biasanya mengandalkan *URL Versioning* (`/api/v1/users`) atau *Header Versioning*, gRPC menggunakan pendekatan struktural berbasis penamaan paket biner (*Package Namespace Versioning*). 
 
@@ -239,3 +241,35 @@ message User {
 1. **Database Schema Breaking Change vs API (Kolom Hilang)**: Ketika API berevolusi menjadi V2 dan memisahkan string `full_name` menjadi dua bagian independen (`first_name`, `last_name`), Anda tidak boleh langsung men-drop kolom fisik `full_name` di database PostgreSQL. Jika Anda men-drop-nya, Handler Klien V1 tidak memiliki data asli (*source of truth*) untuk disajikan, karena konkat `first_name + " " + last_name` mungkin secara tata letak salah jika format asli nama tersebut tidak standar. *Defensive strategy*: Di fase deprecation (sering bertahun-tahun lamanya), Database memegang semua state dengan *backfilling scripts*, hingga analitik menunjukkan sisa traffic Klien V1 mencapai angka nol absolute.
 2. **Webhook / Asynchronous Payload Versioning**: Jika ekosistem microservice Anda menerbitkan Pub/Sub event asinkron atau Webhook HTTP (e.g. `UserCreatedEvent`) melalui jembatan gRPC-Gateway, versi struktur pesan tersebut juga terikat kuat pada Klien pendengar. Meningkatkan Service ke V2 dan mengirim event dengan struktur V2 secara paksa akan menyebabkan aplikasi pihak ketiga (Partner) kebingungan memilah *JSON mapping* dan men-trigger interupsi fatal. Sistem Anda harus menyimpan preferensi `WebhookVersion` untuk setiap mitra (Misal Partner A masih V1, Partner B V2).
 3. **Konflik Package Naming dalam Kode Golang**: Saat `protoc` (atau `buf generate`) menghasilkan *structs* Go untuk `v1` dan `v2`, nama Go package hasil gen bisa bentrok (*import collision*) karena identitas namanya sama-sama disederhanakan menjadi `userpb`. Kustomisasi konfigurasi `go_package` di opsi `.proto` mutlak diperlukan, contohnya: `option go_package = "github.com/acme/repo/api/v1;userpbv1";`.
+
+## Kapan JANGAN Pakai Ini
+
+- **Membuat `v2` untuk perubahan yang sebenarnya bisa dilakukan secara kompatibel.** Setiap versi baru adalah dua sistem yang harus dipelihara, diuji, dipantau, dan diamankan — selamanya, sampai ada yang berani mematikannya.
+- **Versi di header untuk API publik.** Ia tidak terlihat di URL, sulit di-cache, sulit didokumentasikan, dan sulit direproduksi dari log. Untuk API internal itu bisa diterima; untuk publik, versi di path lebih jujur.
+- **Menyusupkan flag versi ke lapisan domain.** Begitu `if isV2` muncul di service atau repository, setiap perubahan berikutnya harus mempertimbangkan dua dunia sekaligus. Versi adalah urusan lapisan transport, dan harus berhenti di situ.
+- **Menjanjikan dukungan tanpa tanggal akhir.** Tanpa tanggal sunset yang diumumkan sejak versi itu lahir, `v1` akan hidup selamanya dan menjadi alasan setiap penundaan berikutnya.
+- **Mengubah makna field tanpa mengubah namanya.** Kompatibel secara biner, tidak kompatibel secara semantik — dan tidak ada satu pun alat yang bisa mendeteksinya.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| `v1` tidak pernah bisa dimatikan | metrik pemakaian per versi | Tanpa angka, sunset hanya harapan |
+| Perbaikan bug hanya masuk ke satu versi | riwayat commit per versi | Dua basis kode menyimpang diam-diam |
+| Klien rusak tanpa ada perubahan skema | makna field yang berubah | Perubahan semantik tanpa perubahan nama |
+| Beban dukungan tinggi untuk versi lama | siapa yang masih memakainya | Tidak ada komunikasi migrasi yang menyasar pemakai nyata |
+| Versi baru dirilis tiap kuartal | apa yang memicu versi baru | Perubahan kompatibel diperlakukan sebagai breaking |
+
+```bash
+buf breaking --against '.git#branch=main'
+
+# Siapa yang masih memakai versi lama -- ini yang membuat sunset mungkin
+kubectl logs -l app=api --since=24h | jq -r '.path' | grep -oE '^/v[0-9]+' | sort | uniq -c
+
+# Klien mana yang belum bermigrasi
+kubectl logs -l app=api --since=24h \
+  | jq -r 'select(.path|startswith("/v1/")) | .user_agent' | sort | uniq -c | sort -rn | head
+
+# PromQL untuk dasbor sunset:
+#   sum by (versi) (rate(http_requests_total[24h]))
+```

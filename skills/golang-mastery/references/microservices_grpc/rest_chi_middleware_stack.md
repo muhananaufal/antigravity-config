@@ -1,5 +1,7 @@
 # gRPC-Gateway: Bridging REST dan gRPC
 
+> **Berlaku:** Go 1.22+ (`http.ServeMux` dengan pola metode) · `go-chi/chi` v5 · **Lihat juga:** `microservices_grpc/http_client_production.md` · `microservices_grpc/openapi_ogen_codegen.md` · `observability_resilience/rate_limiting_patterns.md` · `arch_patterns/clean_hexagonal_architecture.md`
+
 ## Konsep dan Internals
 Dalam adopsi gRPC (*HTTP/2 + Protobuf*), masalah terbesar biasanya adalah berhadapan dengan *Legacy Clients* (seperti Browser lama atau eksternal Webhook) yang hanya mampu mengirim permintaan standar **RESTful (HTTP/1.1 + JSON)**. 
 
@@ -242,3 +244,34 @@ func (s *server) GetData(ctx context.Context, req *Req) (*Resp, error) {
 1. **Pemetaan Query Parameter Ganda**: Di Protobuf, jika Anda memiliki list string untuk URI (*query parameter* bersarang), anotasi `google.api.http` mengekstrak parameter seperti `?id=1&id=2`. Jika klien Web mengirimnya dengan gaya PHP lama (`?id[]=1&id[]=2`), Gateway default akan memandangnya sebagai properti tidak valid, menyebabkan *Bad Request*. Tambahkan konvensi khusus pada Middleware *Chi router* Anda (layer sebelum *mux*) untuk men-sanitize format *bracket* tersebut.
 2. **CORS (Cross-Origin Resource Sharing) Pre-Flight Mati**: Klien React.js melempar HTTP method `OPTIONS /v1/users` sebelum mem-POST JSON. `grpc-gateway` mux standar tidak mengerti *request OPTIONS* dan akan memuntahkan error `Method Not Allowed (405)`. Cara wajib mengatasinya: Anda harus membungkus `gwMux` dalam HTTP Middleware klasik (misal menggunakan paket *rs/cors*) pada Layer Web HTTP Anda, *sebelum* mem-pass-down `ServeHTTP` tersebut ke *gateway mux*.
 3. **Context Timeout Header (`Grpc-Timeout`)**: Proxy HTTP canggih (seperti Envoy atau Nginx ingress) kadang mengirim tajuk (*header*) `Grpc-Timeout: 1S` meskipun trafik masuk sebagai REST. Gateway mampu mem-parsing HTTP *Header* ini dan menyetrum `Context.Deadline` gRPC internal Anda menjadi 1 detik. Jika developer mengabaikan `ctx.Err()` pada perulangan for / fungsi berat (menyerahkan nasib pada *garbage collection*), sistem akan terus memproses request REST yang sebetulnya sudah dibatalkan. Selalu hargai propagasi Deadline.
+
+## Kapan JANGAN Pakai Ini
+
+- **Router pihak ketiga untuk kebutuhan sederhana.** Sejak Go 1.22, `http.ServeMux` mendukung pola metode dan wildcard (`POST /pesanan/{id}`). Untuk banyak layanan itu sudah cukup — dan satu dependensi yang tidak ada adalah satu dependensi yang tidak perlu diamankan, diperbarui, atau dipelajari orang baru.
+- **Membiarkan bentuk HTTP merambat ke domain.** `*http.Request` di lapisan service mengikat logika bisnis pada transport, dan membuatnya tidak bisa dipanggil dari CLI, konsumer antrean, atau uji tanpa membangun request palsu.
+- **Middleware untuk aturan yang hanya berlaku pada sebagian rute.** Ia akan tumbuh menjadi daftar pengecualian di dalam middleware. Pasang di grup rute yang tepat.
+- **Mengembalikan galat internal apa adanya ke klien.** Pesan galat database memuat nama tabel, nama kolom, dan kadang nilai yang gagal — itu kebocoran informasi yang gratis diberikan kepada penyerang.
+- **Menentukan kode status secara ad-hoc di tiap handler.** Pemetaan galat domain ke status HTTP harus berada di satu tempat; kalau tidak, `404` dan `500` akan tertukar secara acak tergantung siapa yang menulis handler-nya.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| `404` dan `500` tertukar untuk kasus serupa | tempat pemetaan galat | Pemetaan tersebar di banyak handler |
+| Kardinalitas metrik HTTP meledak | label `path` | Path mentah dipakai sebagai label, bukan pola rute |
+| Pesan `pq:` atau `sql:` sampai ke klien | body respons galat | Galat internal tidak dipetakan |
+| Logika bisnis sulit diuji tanpa server | tanda tangan fungsi service | HTTP merambat ke domain |
+| Middleware baru memecahkan rute lain | cakupan pemasangan middleware | Dipasang global padahal spesifik |
+
+```bash
+# Kode status yang sebenarnya dikembalikan
+curl -s localhost:9090/metrics | grep http_requests_total | grep -E 'code="(4|5)'
+
+# Jumlah deret metrik HTTP -- membengkak berarti label path mentah
+curl -s localhost:9090/metrics | grep -c '^http_requests_total'
+
+# Apakah galat internal bocor?
+curl -si localhost:8080/api/v1/pesanan/tidak-ada | head -20
+kubectl logs -l app=api --since=1h \
+  | jq -r 'select(.status>=500) | .response' | grep -iE 'pq:|sql:|pgx|panic' | head
+```

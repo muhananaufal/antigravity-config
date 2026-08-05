@@ -1,5 +1,7 @@
 # HTTP Client Production Patterns (Go)
 
+> **Berlaku:** Go 1.21+ · `net/http` · **Lihat juga:** `distributed_patterns_resilience/retry_backoff_jitter.md` · `observability_resilience/circuit_breaker_hystrix.md` · `concurrency/context_cancellation_timeout.md` · `microservices_grpc/service_mesh_grpc_lb.md`
+
 ## 1. Konsep Mendalam & Internals
 
 ### Mengapa `http.DefaultClient` Berbahaya di Production
@@ -668,3 +670,36 @@ func (s *PaymentService) Charge(ctx context.Context, amount int) error {
 5. **Proxy & Corporate Firewall:** Di environment enterprise, traffic keluar melalui HTTP proxy. `http.Transport` sudah support `HTTP_PROXY`/`HTTPS_PROXY` env vars via `http.ProxyFromEnvironment`. Jika custom `DialContext` diset, proxy support hilang — harus implement manual atau gunakan `http.ProxyURL` di Transport config.
 
 6. **Large Response Streaming:** Untuk response body besar (file download, NDJSON stream), gunakan `io.LimitReader` untuk proteksi memory: `io.Copy(w, io.LimitReader(resp.Body, 100<<20))` — maksimum 100MB. Tanpa ini, malicious server bisa kirim response tidak terbatas dan exhaust heap.
+
+## Kapan JANGAN Pakai Ini
+
+- **`http.DefaultClient`.** Ia tidak punya timeout sama sekali. Satu hilir yang menggantung akan menahan goroutine Anda selamanya — ini penyebab kehabisan sumber daya paling umum di layanan Go, dan paling mudah dihindari.
+- **Membuat klien baru per permintaan.** Tiap `http.Client` membawa transport dan pool koneksinya sendiri. Membuatnya berulang berarti membuang keep-alive dan membayar TCP handshake plus TLS handshake setiap kali.
+- **`Timeout` pada `http.Client` sebagai satu-satunya batas.** Ia mencakup **seluruh** siklus termasuk pembacaan body, sehingga salah untuk unduhan besar atau streaming. Pakai context per permintaan, ditambah timeout terpisah di transport untuk dial dan TLS.
+- **Retry tanpa memastikan operasinya idempoten.** Mengulang `POST` yang sebenarnya sudah sampai — hanya responsnya yang hilang — akan menggandakan efeknya di sisi penerima.
+- **Melewatkan pembacaan body sampai habis sebelum `Close`.** Koneksi yang body-nya belum terbaca tidak dikembalikan ke pool. Pool perlahan kosong, dan latensi naik tanpa sebab yang tampak.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Goroutine menumpuk di `net/http` `RoundTrip` | `pprof/goroutine` | Permintaan tanpa timeout, menunggu selamanya |
+| Ribuan koneksi `TIME_WAIT` | `ss -tan state time-wait` | Koneksi tidak dipakai ulang |
+| Latensi naik perlahan sepanjang hari | rasio koneksi baru vs dipakai ulang | Pool kosong karena body tidak di-drain |
+| Efek ganda di sistem penerima | apakah retry aktif pada non-idempoten | Retry tanpa idempotency key |
+| Unduhan besar selalu gagal di detik ke-N | `Client.Timeout` | Timeout menyeluruh ikut membatasi pembacaan body |
+
+```bash
+# Koneksi yang tidak dipakai ulang meninggalkan jejak di TIME_WAIT
+ss -tan state time-wait | wc -l
+
+# Goroutine yang menggantung di klien HTTP
+curl -s 'localhost:6060/debug/pprof/goroutine?debug=1' | grep -B2 -A4 'RoundTrip'
+
+# Latensi hilir dibandingkan timeout yang disetel
+curl -s localhost:9090/metrics | grep -E 'http_client_(request_duration|requests_total)'
+
+# Aktifkan httptrace lalu catat conn_reused: rasio rendah = pool tidak bekerja
+kubectl logs -l app=api --since=1h \
+  | jq -r 'select(.conn_reused==false) | .host' | sort | uniq -c | sort -rn | head
+```

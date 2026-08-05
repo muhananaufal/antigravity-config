@@ -1,5 +1,7 @@
 # Webhook Delivery Engine via gRPC Server Streaming
 
+> **Berlaku:** Go 1.21+ · **Lihat juga:** `distributed_patterns_resilience/idempotency_key_engine.md` · `distributed_patterns_resilience/outbox_pattern_transactional.md` · `distributed_patterns_resilience/retry_backoff_jitter.md` · `background_jobs_worker/asynq_redis_jobs.md`
+
 ## Konsep dan Internals
 Sistem pengiriman *Webhook* seringkali digunakan untuk menginformasikan layanan pihak ketiga (Partner eksternal) tentang suatu kejadian (*Event*) di dalam sistem Anda (misal: "Pembayaran Berhasil", "Kurir Tiba").
 
@@ -268,3 +270,35 @@ message SubscribeRequest {
 1. **Poison Pill Webhook**: Jika *payload* yang Anda kirim menyebabkan Partner API me-return HTTP `400 Bad Request` permanen, namun Worker gRPC Anda dikonfigurasi untuk melakukan *Infinite Retry* (coba ulang selamanya). Satu *Poison Pill* event ini akan menyandera 1 thread worker secara absolut hingga akhir zaman. Patenkan *Dead-Letter-Queue* (DLQ) atau set limit percobaan ulang maksimal 5 kali dengan pola jeda (*Exponential Backoff*).
 2. **Backpressure Saturated Worker Pool**: Klien mengimplementasikan antrian Go (`jobQueue := make(chan *Event, 1000)`). Tiba-tiba terjadi badai *Black Friday* event sebanyak sejuta permintaan. Antrian Go 1000 penuh. Eksekusi penulisan `jobQueue <- event` akan mulai memblokir `Recv()`. Akhirnya menjalar ke masalah inti. Solusi tingkat lanjut: jika kanal *channel* 100% penuh, buang metrik penanda *Worker Exhausted* ke Prometheus dan secara dinamis mulai *Horizontal Pod Autoscaler (HPA)* Worker App di Kubernetes untuk mencairkan kepadatan antrian.
 3. **Pemisahan Traffic (Sharding)**: Server memiliki memori terbatas dan Klien memompa sejuta koneksi Stream. Jika Anda me-deploy 5 replika Klien Worker, setiap worker perlu parameter penyaring (*sharding id*) di requestnya, agar Service Core bisa secara selektif membroadcast "Event 1-200 ke Worker A, Event 201-400 ke Worker B". Jika tidak, 5 Replika Worker akan menerima replika webhook yang persis sama, mengirim webhook duplikat ke pelanggan Anda (*At-least-once chaos*).
+
+## Kapan JANGAN Pakai Ini
+
+- **Mengirim webhook sinkron dari dalam transaksi bisnis.** Endpoint penerima yang lambat akan menahan transaksi Anda, dan kegagalan pengiriman tidak boleh membatalkan operasi yang sudah sah. Yang benar: catat kejadian di outbox dalam transaksi yang sama, kirim di luar.
+- **Tanpa penandatanganan payload.** Penerima tidak punya cara membedakan webhook Anda dari permintaan siapa pun yang kebetulan tahu URL-nya. HMAC atas body **beserta timestamp** adalah standar minimum — timestamp mencegah replay.
+- **Tanpa menyatakan jaminan urutan.** Pengiriman ulang membuat urutan tidak terjamin. Bila penerima diam-diam mengasumsikan urutan, mereka akan salah dan menyalahkan Anda. Sertakan nomor urut dan nyatakan kontraknya di dokumentasi.
+- **Retry tanpa batas ke endpoint yang sudah lama mati.** Antrean akan terisi pengiriman yang tidak akan pernah berhasil, dan mendorong keluar pengiriman yang masih bisa. Butuh batas percobaan, backoff, penonaktifan otomatis, dan pemberitahuan ke pemilik endpoint.
+- **Satu antrean bersama untuk semua penerima.** Satu penerima lambat menahan pengiriman ke semua penerima lain — head-of-line blocking yang membuat insiden satu pelanggan menjadi insiden semua pelanggan.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Pengiriman ke semua penerima melambat bersamaan | panjang antrean per penerima | Satu antrean bersama; satu penerima lambat menahan semua |
+| Penerima melaporkan kejadian ganda | ID kejadian di payload | Tidak ada kunci deduplikasi di sisi penerima |
+| Kejadian hilang setelah restart | apakah ada outbox | Pengiriman hanya hidup di memori |
+| Antrean penuh oleh satu penerima mati | batas percobaan | Retry tanpa batas dan tanpa penonaktifan |
+| Penerima menolak dengan galat tanda tangan | jam server vs toleransi timestamp | Clock drift melewati jendela validasi |
+
+```bash
+# Panjang antrean per penerima -- yang menumpuk sendirian adalah penyebabnya
+redis-cli --scan --pattern 'webhook:antrean:*' \
+  | while read -r k; do echo "$(redis-cli llen "$k") $k"; done | sort -rn | head
+
+# Tingkat keberhasilan per penerima
+kubectl logs -l app=webhook --since=24h \
+  | jq -r '"\(.penerima) \(.status)"' | sort | uniq -c | sort -rn | head -20
+
+# Pengiriman yang menyerah setelah batas percobaan
+curl -s localhost:9090/metrics | grep -E 'webhook_(delivery_total|retry_total|dlq_total)'
+kubectl logs -l app=webhook --since=24h | grep -c 'percobaan habis'
+```
