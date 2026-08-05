@@ -54,7 +54,7 @@ import (
 	"time"
 )
 
-var ErrBulkheadFull = errors.New("bulkhead penuh, permintaan ditolak demi menjaga stabilitas sistem")
+var ErrBulkheadFull = errors.New("bulkhead full, request rejected to maintain system stability")
 
 // Bulkhead membatasi jumlah eksekusi konkuren.
 type Bulkhead struct {
@@ -69,7 +69,7 @@ type Bulkhead struct {
 	aktif      atomic.Int64 // gauge: sedang berjalan
 	diterima   atomic.Int64 // counter: total yang pernah mendapat tiket
 	ditolak    atomic.Int64 // counter: total yang ditolak
-	tungguNano atomic.Int64 // counter: akumulasi waktu tunggu tiket
+	waitNano atomic.Int64 // counter: akumulasi waktu tunggu tiket
 }
 
 // NewBulkhead menginisialisasi kapasitas maksimum kompartemen.
@@ -89,14 +89,14 @@ func NewBulkhead(nama string, maxConcurrent int) *Bulkhead {
 // `aktif` adalah GAUGE (sedang berjalan sekarang); `diterima` dan `ditolak`
 // adalah COUNTER kumulatif. Membaginya dengan gauge -- godaan yang mudah --
 // menghasilkan angka tak bermakna yang berubah-ubah mengikuti beban sesaat.
-func (b *Bulkhead) Statistik() (aktif, diterima, ditolak int64, rerataTunggu time.Duration) {
+func (b *Bulkhead) Stats() (aktif, diterima, ditolak int64, waitMean time.Duration) {
 	aktif = b.aktif.Load()
 	diterima = b.diterima.Load()
 	ditolak = b.ditolak.Load()
 	if n := diterima + ditolak; n > 0 {
-		rerataTunggu = time.Duration(b.tungguNano.Load() / n)
+		waitMean = time.Duration(b.waitNano.Load() / n)
 	}
-	return aktif, diterima, ditolak, rerataTunggu
+	return aktif, diterima, ditolak, waitMean
 }
 
 // Kapasitas mengembalikan batas maksimum kompartemen ini.
@@ -120,20 +120,20 @@ func Jalankan[T any](
 	timeout time.Duration,
 	task func(ctx context.Context) (T, error),
 ) (T, error) {
-	var nol T
-	mulaiTunggu := time.Now()
+	var zero T
+	startWait := time.Now()
 
 	// 1. Fase Acquire Resource (Mencoba masuk kompartemen)
-	err := b.ambilTiket(ctx, timeout)
-	b.tungguNano.Add(int64(time.Since(mulaiTunggu)))
+	err := b.getTicket(ctx, timeout)
+	b.waitNano.Add(int64(time.Since(startWait)))
 	if err != nil {
 		b.ditolak.Add(1)
-		return nol, err
+		return zero, err
 	}
 	b.diterima.Add(1)
 	b.aktif.Add(1)
 
-	type hasil struct {
+	type result struct {
 		val T
 		err error
 	}
@@ -141,7 +141,7 @@ func Jalankan[T any](
 	// menggantung selamanya pada pengiriman bila Jalankan sudah keluar lewat
 	// ctx.Done() -- kebocoran goroutine di dalam pola yang tujuannya justru
 	// membatasi goroutine.
-	chHasil := make(chan hasil, 1)
+	resultCh := make(chan result, 1)
 
 	go func() {
 		// URUTAN DEFER DI SINI MENENTUKAN KEBENARANNYA.
@@ -174,16 +174,16 @@ func Jalankan[T any](
 				// tanpa satu pun nama fungsi.
 				slog.ErrorContext(ctx, "panic dalam task bulkhead",
 					"bulkhead", b.nama, "panic", r, "stack", string(debug.Stack()))
-				chHasil <- hasil{err: fmt.Errorf("panic dalam task: %v", r)}
+				resultCh <- result{err: fmt.Errorf("panic dalam task: %v", r)}
 			}
 		}()
 
 		val, err := task(ctx)
-		chHasil <- hasil{val, err}
+		resultCh <- result{val, err}
 	}()
 
 	select {
-	case res := <-chHasil:
+	case res := <-resultCh:
 		return res.val, res.err
 	case <-ctx.Done():
 		// Jalankan kembali lebih awal agar klien tidak menunggu, TETAPI
@@ -191,11 +191,11 @@ func Jalankan[T any](
 		// selesai. Slot yang tidak pernah kembali berarti task Anda tidak
 		// menghormati ctx -- dan itu memang harus terlihat sebagai kapasitas
 		// yang menyusut, bukan disembunyikan.
-		return nol, fmt.Errorf("context dibatalkan saat task berjalan: %w", ctx.Err())
+		return zero, fmt.Errorf("context dibatalkan saat task berjalan: %w", ctx.Err())
 	}
 }
 
-func (b *Bulkhead) ambilTiket(ctx context.Context, timeout time.Duration) error {
+func (b *Bulkhead) getTicket(ctx context.Context, timeout time.Duration) error {
 	// timeout <= 0 berarti fail-fast murni. Ini BUKAN kasus akademis:
 	// `time.NewTimer(0)` menyala seketika, dan `select` memilih ACAK di antara
 	// case yang sama-sama siap -- sehingga permintaan bisa ditolak meski slot
@@ -241,7 +241,7 @@ func NewApp() *Application {
 	}
 }
 
-type Laporan struct{ Baris int }
+type Laporan struct{ Rows int }
 
 func (a *Application) HandleReport(ctx context.Context) (Laporan, error) {
 	// Hasilnya BERTIPE. Tidak ada type assertion, tidak ada interface{}.
@@ -260,7 +260,7 @@ func (a *Application) HandleReport(ctx context.Context) (Laporan, error) {
 			// menghormati ctx yang membatasi BERAPA LAMA. Keduanya diperlukan.
 			select {
 			case <-time.After(10 * time.Second):
-				return Laporan{Baris: 1_000_000}, nil
+				return Laporan{Rows: 1_000_000}, nil
 			case <-ctx.Done():
 				return Laporan{}, ctx.Err()
 			}
@@ -308,9 +308,9 @@ db.SetMaxOpenConns(100) // Global pool
    func Jalankan(...) {
        b.pool <- struct{}{}
        defer func() { <-b.pool }()   // lepas saat Jalankan RETURN
-       go func() { chHasil <- task(ctx) }()
+       go func() { resultCh <- task(ctx) }()
        select {
-       case res := <-chHasil: return res
+       case res := <-resultCh: return res
        case <-ctx.Done():    return ctx.Err()   // <-- tiket lepas, TASK MASIH JALAN
        }
    }
@@ -319,7 +319,7 @@ db.SetMaxOpenConns(100) // Global pool
    go func() {
        defer func() { <-b.pool }()
        ...
-       chHasil <- task(ctx)
+       resultCh <- task(ctx)
    }()
    ```
 
@@ -370,7 +370,7 @@ func TestBulkhead_MenolakSaatPenuh(t *testing.T) {
 	task := func(context.Context) (string, error) {
 		masuk <- struct{}{}
 		<-lepas
-		return "selesai", nil
+		return "done", nil
 	}
 
 	var wg sync.WaitGroup
@@ -379,7 +379,7 @@ func TestBulkhead_MenolakSaatPenuh(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			if _, err := Jalankan(ctx, b, time.Second, task); err != nil {
-				t.Errorf("task pengisi gagal: %v", err)
+				t.Errorf("filler task failed: %v", err)
 			}
 		}()
 	}
@@ -393,7 +393,7 @@ func TestBulkhead_MenolakSaatPenuh(t *testing.T) {
 		select {
 		case <-masuk:
 		case <-time.After(2 * time.Second):
-			t.Fatal("task pengisi tidak pernah mulai berjalan")
+			t.Fatal("filler task never started running")
 		}
 	}
 
@@ -422,24 +422,24 @@ func TestBulkhead_MenolakSaatPenuh(t *testing.T) {
 // tetap hijau sementara bulkhead diam-diam kehilangan kemampuan membatasi
 // apa pun -- persis di bawah beban yang menjadi alasan ia dipasang.
 func TestBulkhead_TiketTidakLepasSaatPemanggilMenyerah(t *testing.T) {
-	const kapasitas = 3
-	b := NewBulkhead("uji", kapasitas)
+	const capacity = 3
+	b := NewBulkhead("uji", capacity)
 
-	var berjalan atomic.Int64
-	var puncak atomic.Int64
+	var running atomic.Int64
+	var peak atomic.Int64
 	tahan := make(chan struct{})
 
 	// Task yang SENGAJA mengabaikan ctx -- mensimulasikan hilir yang macet
 	// atau pustaka pihak ketiga tanpa dukungan context.
 	task := func(context.Context) (int, error) {
-		n := berjalan.Add(1)
+		n := running.Add(1)
 		for {
-			p := puncak.Load()
-			if n <= p || puncak.CompareAndSwap(p, n) {
+			p := peak.Load()
+			if n <= p || peak.CompareAndSwap(p, n) {
 				break
 			}
 		}
-		defer berjalan.Add(-1)
+		defer running.Add(-1)
 		<-tahan
 		return 1, nil
 	}
@@ -461,9 +461,9 @@ func TestBulkhead_TiketTidakLepasSaatPemanggilMenyerah(t *testing.T) {
 	// Beri kesempatan task yang tertinggal untuk terdaftar.
 	time.Sleep(50 * time.Millisecond)
 
-	if p := puncak.Load(); p > kapasitas {
+	if p := peak.Load(); p > capacity {
 		t.Fatalf("task berjalan serentak mencapai %d, melebihi kapasitas %d; "+
-			"tiket dilepas saat pemanggil keluar padahal task masih berjalan", p, kapasitas)
+			"tiket dilepas saat pemanggil keluar padahal task masih berjalan", p, capacity)
 	}
 
 	close(tahan)
@@ -480,7 +480,7 @@ func TestBulkhead_PembatalanContextDiteruskan(t *testing.T) {
 		case <-c.Done():
 			return "", c.Err()
 		case <-time.After(5 * time.Second):
-			return "selesai", nil
+			return "done", nil
 		}
 	}
 
@@ -491,7 +491,7 @@ func TestBulkhead_PembatalanContextDiteruskan(t *testing.T) {
 
 	_, err := Jalankan(ctx, b, 10*time.Second, task)
 	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("mengharapkan context.Canceled di rantai galat, dapat %v", err)
+		t.Fatalf("expected context.Canceled in error chain, got %v", err)
 	}
 }
 
@@ -504,7 +504,7 @@ func TestBulkhead_PanicMelepasTiket(t *testing.T) {
 		panic("task meledak")
 	})
 	if err == nil {
-		t.Fatal("panic harus dikembalikan sebagai galat")
+		t.Fatal("panic must be returned as an error")
 	}
 
 	// Bila tiket tidak dilepas, panggilan berikutnya menggantung sampai
@@ -512,7 +512,7 @@ func TestBulkhead_PanicMelepasTiket(t *testing.T) {
 	if _, err := Jalankan(ctx, b, 200*time.Millisecond, func(context.Context) (int, error) {
 		return 7, nil
 	}); err != nil {
-		t.Fatalf("kapasitas tidak pulih setelah panic: %v", err)
+		t.Fatalf("capacity did not recover after panic: %v", err)
 	}
 }
 
@@ -544,7 +544,7 @@ func TestBulkhead_MetrikTercatat(t *testing.T) {
 		t.Fatalf("mengharapkan penolakan, dapat %v", err)
 	}
 
-	aktif, diterima, ditolak, _ := b.Statistik()
+	aktif, diterima, ditolak, _ := b.Stats()
 	if aktif != 1 {
 		t.Errorf("aktif = %d, mau 1", aktif)
 	}

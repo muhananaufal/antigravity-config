@@ -57,7 +57,7 @@ func httpClientSafe(rootCA []byte, sertifikatKlien tls.Certificate) (*http.Clien
 	// KOSONG — dan setiap koneksi gagal dengan "certificate signed by unknown
 	// authority", galat yang menuduh peer padahal berkas CA Anda yang cacat.
 	if !pool.AppendCertsFromPEM(rootCA) {
-		return nil, errors.New("root CA tidak dapat dimuat")
+		return nil, errors.New("failed to load root CA")
 	}
 	return &http.Client{
 		Transport: &http.Transport{
@@ -156,9 +156,9 @@ import (
 )
 
 var (
-	ErrBundelBelumDimuat = errors.New("bundel sertifikat belum dimuat")
-	ErrRootCATidakValid  = errors.New("gagal mem-parse root CA")
-	ErrSertifikatExpired = errors.New("sertifikat sudah kedaluwarsa")
+	ErrBundleNotLoaded = errors.New("certificate bundle not loaded")
+	ErrInvalidRootCA   = errors.New("failed to parse root CA")
+	ErrCertExpired     = errors.New("certificate has expired")
 )
 
 // Bundel adalah SATU kesatuan yang dirotasi bersama: sertifikat identitas
@@ -186,20 +186,20 @@ type Bundel struct {
 func MuatBundel(pathCert, pathKey, pathCA string) (*Bundel, error) {
 	certPEM, err := os.ReadFile(pathCert)
 	if err != nil {
-		return nil, fmt.Errorf("baca sertifikat: %w", err)
+		return nil, fmt.Errorf("read certificate: %w", err)
 	}
 	keyPEM, err := os.ReadFile(pathKey)
 	if err != nil {
-		return nil, fmt.Errorf("baca kunci: %w", err)
+		return nil, fmt.Errorf("read key: %w", err)
 	}
 	caPEM, err := os.ReadFile(pathCA)
 	if err != nil {
-		return nil, fmt.Errorf("baca CA: %w", err)
+		return nil, fmt.Errorf("read CA: %w", err)
 	}
 
 	cert, err := tls.X509KeyPair(certPEM, keyPEM)
 	if err != nil {
-		return nil, fmt.Errorf("sertifikat dan kunci tidak cocok atau rusak: %w", err)
+		return nil, fmt.Errorf("certificate and key mismatch or corrupted: %w", err)
 	}
 	// tls.X509KeyPair TIDAK mengisi cert.Leaf pada Go < 1.23. Diparse sendiri
 	// supaya tanggal kedaluwarsa bisa diperiksa di sini dan diekspos sebagai
@@ -207,17 +207,17 @@ func MuatBundel(pathCert, pathKey, pathCA string) (*Bundel, error) {
 	// sertifikat ini habis" dari dalam proses.
 	leaf, err := x509.ParseCertificate(cert.Certificate[0])
 	if err != nil {
-		return nil, fmt.Errorf("parse sertifikat daun: %w", err)
+		return nil, fmt.Errorf("parse leaf certificate: %w", err)
 	}
 	cert.Leaf = leaf
 
 	if time.Now().After(leaf.NotAfter) {
-		return nil, fmt.Errorf("%w: berakhir %s", ErrSertifikatExpired, leaf.NotAfter)
+		return nil, fmt.Errorf("%w: expired at %s", ErrCertExpired, leaf.NotAfter)
 	}
 
 	pool := x509.NewCertPool()
 	if !pool.AppendCertsFromPEM(caPEM) {
-		return nil, ErrRootCATidakValid
+		return nil, ErrInvalidRootCA
 	}
 
 	return &Bundel{
@@ -265,14 +265,14 @@ func (m *ManajerBundel) Pantau(ctx context.Context, tiap time.Duration) {
 			if err != nil {
 				// Bundel lama DIPERTAHANKAN. Berkas yang tertangkap di tengah
 				// penulisan tidak boleh menjatuhkan layanan yang sedang sehat.
-				slog.ErrorContext(ctx, "gagal memuat bundel, tetap memakai yang lama", "galat", err)
+				slog.ErrorContext(ctx, "failed to load bundle, retaining previous bundle", "error", err)
 				continue
 			}
 			if lama := m.bundel.Load(); lama != nil && lama.sidik == baru.sidik {
 				continue
 			}
 			m.bundel.Store(baru)
-			slog.InfoContext(ctx, "bundel sertifikat dirotasi", "kedaluwarsa", baru.NotAfter)
+			slog.InfoContext(ctx, "certificate bundle rotated", "not_after", baru.NotAfter)
 		}
 	}
 }
@@ -282,7 +282,7 @@ func (m *ManajerBundel) Pantau(ctx context.Context, tiap time.Duration) {
 func (m *ManajerBundel) SisaBerlaku() (time.Duration, error) {
 	b := m.bundel.Load()
 	if b == nil {
-		return 0, ErrBundelBelumDimuat
+		return 0, ErrBundleNotLoaded
 	}
 	return time.Until(b.NotAfter), nil
 }
@@ -297,7 +297,7 @@ func (m *ManajerBundel) KonfigServer() *tls.Config {
 		GetConfigForClient: func(*tls.ClientHelloInfo) (*tls.Config, error) {
 			b := m.bundel.Load()
 			if b == nil {
-				return nil, ErrBundelBelumDimuat // fail-secure: putuskan koneksi
+				return nil, ErrBundleNotLoaded // fail-secure: putuskan koneksi
 			}
 			return &tls.Config{
 				MinVersion:   tls.VersionTLS13,
@@ -320,11 +320,11 @@ func (m *ManajerBundel) TransportKlien() *http.Transport {
 		DialTLSContext: func(ctx context.Context, jaringan, alamat string) (net.Conn, error) {
 			b := m.bundel.Load()
 			if b == nil {
-				return nil, ErrBundelBelumDimuat
+				return nil, ErrBundleNotLoaded
 			}
 			host, _, err := net.SplitHostPort(alamat)
 			if err != nil {
-				return nil, fmt.Errorf("alamat tujuan: %w", err)
+				return nil, fmt.Errorf("target address: %w", err)
 			}
 			d := &tls.Dialer{Config: &tls.Config{
 				MinVersion:   tls.VersionTLS13,
@@ -374,11 +374,11 @@ func buatCA(t *testing.T) otoritas {
 	t.Helper()
 	k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
-		t.Fatalf("kunci CA: %v", err)
+		t.Fatalf("CA key: %v", err)
 	}
 	tmpl := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "uji-ca"},
+		Subject:               pkix.Name{CommonName: "test-ca"},
 		NotBefore:             time.Now().Add(-time.Minute),
 		NotAfter:              time.Now().Add(time.Hour),
 		IsCA:                  true,
@@ -387,7 +387,7 @@ func buatCA(t *testing.T) otoritas {
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &k.PublicKey, k)
 	if err != nil {
-		t.Fatalf("buat CA: %v", err)
+		t.Fatalf("create CA: %v", err)
 	}
 	sert, err := x509.ParseCertificate(der)
 	if err != nil {
@@ -402,7 +402,7 @@ func tulisBundel(t *testing.T, dir string, ca otoritas, cn string) (pathCert, pa
 	t.Helper()
 	k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
-		t.Fatalf("kunci daun: %v", err)
+		t.Fatalf("leaf key: %v", err)
 	}
 	tmpl := &x509.Certificate{
 		SerialNumber: big.NewInt(time.Now().UnixNano()),
@@ -415,11 +415,11 @@ func tulisBundel(t *testing.T, dir string, ca otoritas, cn string) (pathCert, pa
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, ca.sert, &k.PublicKey, ca.kunci)
 	if err != nil {
-		t.Fatalf("terbitkan daun: %v", err)
+		t.Fatalf("issue leaf: %v", err)
 	}
 	kDER, err := x509.MarshalECPrivateKey(k)
 	if err != nil {
-		t.Fatalf("marshal kunci: %v", err)
+		t.Fatalf("marshal key: %v", err)
 	}
 
 	pathCert = filepath.Join(dir, "tls.crt")
@@ -427,7 +427,7 @@ func tulisBundel(t *testing.T, dir string, ca otoritas, cn string) (pathCert, pa
 	pathCA = filepath.Join(dir, "ca.crt")
 	tulis := func(p string, b []byte) {
 		if err := os.WriteFile(p, b, 0o600); err != nil {
-			t.Fatalf("tulis %s: %v", p, err)
+			t.Fatalf("write %s: %v", p, err)
 		}
 	}
 	tulis(pathCert, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
@@ -460,18 +460,18 @@ func TestServerMenolakKlienTanpaSertifikat(t *testing.T) {
 	resp, err := tanpaSertifikat.Get(srv.URL)
 	if err == nil {
 		resp.Body.Close()
-		t.Fatal("klien tanpa sertifikat diterima — ClientAuth tidak ditegakkan")
+		t.Fatal("client without certificate accepted - ClientAuth not enforced")
 	}
 
 	// Klien DENGAN sertifikat dari CA yang sama: harus lolos.
 	dengan := &http.Client{Transport: m.TransportKlien()}
 	resp, err = dengan.Get(srv.URL)
 	if err != nil {
-		t.Fatalf("klien ber-sertifikat ditolak: %v", err)
+		t.Fatalf("client with certificate rejected: %v", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("kode = %d, mau 200", resp.StatusCode)
+		t.Fatalf("code = %d, want 200", resp.StatusCode)
 	}
 }
 
@@ -489,10 +489,10 @@ func TestBundelRusakTidakMenggantikanYangSehat(t *testing.T) {
 	// Tulis PEM terpotong, persis seperti pembacaan di tengah penulisan.
 	isi, _ := os.ReadFile(pathCert)
 	if err := os.WriteFile(pathCert, isi[:len(isi)/2], 0o600); err != nil {
-		t.Fatalf("potong berkas: %v", err)
+		t.Fatalf("truncate file: %v", err)
 	}
 	if _, err := MuatBundel(pathCert, pathKey, pathCA); err == nil {
-		t.Fatal("PEM terpotong diterima MuatBundel")
+		t.Fatal("truncated PEM accepted by MuatBundel")
 	}
 
 	ctx, batal := context.WithCancel(context.Background())
@@ -501,7 +501,7 @@ func TestBundelRusakTidakMenggantikanYangSehat(t *testing.T) {
 	batal()
 
 	if m.bundel.Load() != sebelum {
-		t.Fatal("bundel rusak menggantikan bundel yang sehat")
+		t.Fatal("corrupted bundle replaced healthy bundle")
 	}
 }
 
@@ -517,7 +517,7 @@ func TestSisaBerlakuTerbaca(t *testing.T) {
 		t.Fatalf("SisaBerlaku: %v", err)
 	}
 	if sisa <= 0 || sisa > time.Hour {
-		t.Fatalf("sisa berlaku = %s, di luar rentang yang diharapkan", sisa)
+		t.Fatalf("remaining validity = %s, out of expected range", sisa)
 	}
 }
 
@@ -525,7 +525,7 @@ func poolDari(t *testing.T, caPEM []byte) *x509.CertPool {
 	t.Helper()
 	p := x509.NewCertPool()
 	if !p.AppendCertsFromPEM(caPEM) {
-		t.Fatal("CA PEM tidak dapat dimuat")
+		t.Fatal("failed to load CA PEM")
 	}
 	return p
 }

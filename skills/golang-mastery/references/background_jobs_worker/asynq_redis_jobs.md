@@ -87,7 +87,7 @@ func NewEmailDeliveryTask(userID int64, templateID, toAddress string) (*asynq.Ta
 	
 	bytes, err := json.Marshal(payload)
 	if err != nil {
-		return nil, fmt.Errorf("gagal marshalling email payload: %w", err)
+		return nil, fmt.Errorf("failed marshalling email payload: %w", err)
 	}
 
 	// asynq.Task berisi nama/tipe dan payload biner
@@ -103,13 +103,13 @@ type EmailDeliveryProcessor struct {
 func (p *EmailDeliveryProcessor) ProcessTask(ctx context.Context, t *asynq.Task) error {
 	var payload EmailDeliveryPayload
 	if err := json.Unmarshal(t.Payload(), &payload); err != nil {
-		return fmt.Errorf("json.Unmarshal gagal: %v: %w", err, asynq.SkipRetry)
+		return fmt.Errorf("json.Unmarshal failed: %v: %w", err, asynq.SkipRetry)
 	}
 
 	// Lakukan bisnis logic dengan type-safe payload
 	err := p.Mailer.Send(ctx, payload.ToAddress, payload.TemplateID, payload.UserID)
 	if err != nil {
-		return fmt.Errorf("pengiriman email gagal untuk user %d: %w", payload.UserID, err)
+		return fmt.Errorf("email delivery failed for user %d: %w", payload.UserID, err)
 	}
 	
 	return nil
@@ -156,7 +156,7 @@ func StartWorkerPool(redisConnOpt asynq.RedisConnOpt) {
 			
 			// Custom error handler (untuk integrasi Sentry/NewRelic)
 			ErrorHandler: asynq.ErrorHandlerFunc(func(ctx context.Context, task *asynq.Task, err error) {
-				slog.Error("Task gagal", "type", task.Type(), "error", err)
+				slog.Error("Task failed", "type", task.Type(), "error", err)
 			}),
 			
 			// Shutdown timeout saat SIGINT/SIGTERM (graceful shutdown)
@@ -172,7 +172,7 @@ func StartWorkerPool(redisConnOpt asynq.RedisConnOpt) {
 	mux.Handle(jobs.TypeEmailDelivery, emailProcessor)
 
 	if err := srv.Run(mux); err != nil {
-		slog.Error("Gagal menjalankan asynq server", "error", err)
+		slog.Error("Failed to run asynq server", "error", err)
 	}
 }
 ```
@@ -223,7 +223,7 @@ func EnqueueInvoice(client *asynq.Client, invoiceID string) {
 	// dalam jendela waktu (TTL) 1 jam terakhir yang sedang pending/active.
 	info, err := client.Enqueue(task, asynq.Unique(time.Hour))
 	if err == asynq.ErrDuplicateTask {
-		slog.Info("Invoice sudah masuk antrean", "invoice_id", invoiceID)
+		slog.Info("Invoice already enqueued", "invoice_id", invoiceID)
 	}
 }
 ```
@@ -383,7 +383,7 @@ func TestNewEmailDeliveryTask(t *testing.testing) {
 
 	var payload jobs.EmailDeliveryPayload
 	if err := json.Unmarshal(task.Payload(), &payload); err != nil {
-		t.Fatalf("Gagal unmarshal payload: %v", err)
+		t.Fatalf("Failed to unmarshal payload: %v", err)
 	}
 
 	if payload.UserID != userID || payload.ToAddress != to {

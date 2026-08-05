@@ -93,7 +93,7 @@ import (
 )
 
 // klienLimit menyimpan state token bucket untuk satu identitas.
-type klienLimit struct {
+type clientLimit struct {
 	limiter *rate.Limiter
 	// terlihat disimpan atomik supaya jalur panas cukup memegang kunci BACA.
 	// Dengan sync.Mutex biasa, setiap permintaan — termasuk yang identitasnya
@@ -113,23 +113,23 @@ type Konfig struct {
 
 type IPRateLimiter struct {
 	mu    sync.RWMutex
-	klien map[string]*klienLimit
+	klien map[string]*clientLimit
 	k     Konfig
 
-	diizinkan prometheus.Counter
+	allowed prometheus.Counter
 	ditolak   prometheus.Counter
 }
 
 func NewIPRateLimiter(ctx context.Context, k Konfig) *IPRateLimiter {
 	i := &IPRateLimiter{
-		klien: make(map[string]*klienLimit),
+		klien: make(map[string]*clientLimit),
 		k:     k,
-		diizinkan: prometheus.NewCounter(prometheus.CounterOpts{
+		allowed: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "rate_limit_allowed_total", Help: "Permintaan yang lolos rate limiter."}),
 		ditolak: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "rate_limit_rejected_total", Help: "Permintaan yang ditolak rate limiter."}),
 	}
-	k.Reg.MustRegister(i.diizinkan, i.ditolak)
+	k.Reg.MustRegister(i.allowed, i.ditolak)
 
 	// Sweeper terikat ctx. Bentuk `go i.cleanup()` dengan `for { time.Sleep() }`
 	// di dalamnya adalah kebocoran goroutine permanen: tidak ada cara
@@ -157,13 +157,13 @@ func (i *IPRateLimiter) limiter(kunci string) *rate.Limiter {
 		v.terlihat.Store(sekarang)
 		return v.limiter
 	}
-	baru := &klienLimit{limiter: rate.NewLimiter(i.k.Rate, i.k.Burst)}
+	baru := &clientLimit{limiter: rate.NewLimiter(i.k.Rate, i.k.Burst)}
 	baru.terlihat.Store(sekarang)
 	i.klien[kunci] = baru
 	return baru.limiter
 }
 
-func (i *IPRateLimiter) sapuBasi(ctx context.Context, tiap, umurMaks time.Duration) {
+func (i *IPRateLimiter) sapuBasi(ctx context.Context, tiap, maxAge time.Duration) {
 	t := time.NewTicker(tiap)
 	defer t.Stop()
 	for {
@@ -171,10 +171,10 @@ func (i *IPRateLimiter) sapuBasi(ctx context.Context, tiap, umurMaks time.Durati
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			batas := time.Now().Add(-umurMaks).UnixNano()
+			limit := time.Now().Add(-maxAge).UnixNano()
 			i.mu.Lock()
 			for k, v := range i.klien {
-				if v.terlihat.Load() < batas {
+				if v.terlihat.Load() < limit {
 					delete(i.klien, k)
 				}
 			}
@@ -200,12 +200,12 @@ func (i *IPRateLimiter) sapuBasi(ctx context.Context, tiap, umurMaks time.Durati
 //
 // Yang boleh dipercaya hanya entri yang DITAMBAHKAN proxy milik Anda sendiri,
 // dihitung dari KANAN sebanyak ProksiTepercaya.
-func (i *IPRateLimiter) identitas(r *http.Request) (string, error) {
+func (i *IPRateLimiter) identity(r *http.Request) (string, error) {
 	ipSambungan, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		ipSambungan = r.RemoteAddr
 	}
-	langsung := func() (string, error) {
+	direct := func() (string, error) {
 		if net.ParseIP(ipSambungan) == nil {
 			return "", fmt.Errorf("RemoteAddr bukan alamat IP: %q", r.RemoteAddr)
 		}
@@ -213,12 +213,12 @@ func (i *IPRateLimiter) identitas(r *http.Request) (string, error) {
 	}
 
 	if i.k.ProksiTepercaya == 0 {
-		return langsung()
+		return direct()
 	}
 
 	var bagian []string
-	for _, baris := range r.Header.Values("X-Forwarded-For") {
-		for _, p := range strings.Split(baris, ",") {
+	for _, row := range r.Header.Values("X-Forwarded-For") {
+		for _, p := range strings.Split(row, ",") {
 			if p = strings.TrimSpace(p); p != "" {
 				bagian = append(bagian, p)
 			}
@@ -228,22 +228,22 @@ func (i *IPRateLimiter) identitas(r *http.Request) (string, error) {
 	if idx < 0 {
 		// Rantai lebih pendek dari yang seharusnya: proxy tidak menambahkan
 		// entri, atau permintaan tidak benar-benar melewatinya. Jangan menebak.
-		return langsung()
+		return direct()
 	}
 	ip := net.ParseIP(bagian[idx])
 	if ip == nil {
-		return "", fmt.Errorf("entri X-Forwarded-For tidak valid: %q", bagian[idx])
+		return "", fmt.Errorf("invalid X-Forwarded-For entry: %q", bagian[idx])
 	}
 	return ip.String(), nil
 }
 
 func (i *IPRateLimiter) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		kunci, err := i.identitas(r)
+		kunci, err := i.identity(r)
 		if err != nil {
 			// Identitas tidak dapat ditentukan berarti pembatasan tidak dapat
 			// ditegakkan. Menolak lebih aman daripada memberi jalur bebas-limit.
-			http.Error(w, "identitas klien tidak dapat ditentukan", http.StatusBadRequest)
+			http.Error(w, "client identity cannot be determined", http.StatusBadRequest)
 			return
 		}
 
@@ -266,14 +266,14 @@ func (i *IPRateLimiter) Middleware(next http.Handler) http.Handler {
 		if tunggu := res.Delay(); tunggu > 0 {
 			res.Cancel() // kembalikan token — kita MENOLAK, bukan menunggu
 			i.ditolak.Inc()
-			i.pasangHeaderKuota(w, 0, tunggu)
+			i.setQuotaHeader(w, 0, tunggu)
 			w.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(tunggu.Seconds()))))
 			http.Error(w, "429 Too Many Requests", http.StatusTooManyRequests)
 			return
 		}
 
-		i.diizinkan.Inc()
-		i.pasangHeaderKuota(w, int(lim.Tokens()), 0)
+		i.allowed.Inc()
+		i.setQuotaHeader(w, int(lim.Tokens()), 0)
 		next.ServeHTTP(w, r)
 	})
 }
@@ -283,7 +283,7 @@ func (i *IPRateLimiter) Middleware(next http.Handler) http.Handler {
 // Retry-After memberi tahu klien kapan boleh kembali SETELAH ia ditolak.
 // Header ini memberitahunya SEBELUM ia tertolak, sehingga klien yang patuh
 // bisa memperlambat diri sendiri dan badai pengulangan tidak pernah terbentuk.
-func (i *IPRateLimiter) pasangHeaderKuota(w http.ResponseWriter, sisa int, reset time.Duration) {
+func (i *IPRateLimiter) setQuotaHeader(w http.ResponseWriter, sisa int, reset time.Duration) {
 	h := w.Header()
 	h.Set("RateLimit-Limit", strconv.Itoa(i.k.Burst))
 	h.Set("RateLimit-Remaining", strconv.Itoa(max(sisa, 0)))
@@ -346,10 +346,10 @@ func TestXFFDiabaikanTanpaProksiTepercaya(t *testing.T) {
 	h := limiterUji(t, Konfig{Rate: 1, Burst: 1, ProksiTepercaya: 0})
 
 	var terakhir int
-	for i, palsu := range []string{"1.2.3.4", "5.6.7.8", "9.10.11.12"} {
+	for i, fake := range []string{"1.2.3.4", "5.6.7.8", "9.10.11.12"} {
 		req := httptest.NewRequest(http.MethodGet, "/", nil)
 		req.RemoteAddr = "203.0.113.9:40000"
-		req.Header.Set("X-Forwarded-For", palsu)
+		req.Header.Set("X-Forwarded-For", fake)
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
 		if i == 0 && rec.Code != http.StatusOK {
@@ -358,7 +358,7 @@ func TestXFFDiabaikanTanpaProksiTepercaya(t *testing.T) {
 		terakhir = rec.Code
 	}
 	if terakhir != http.StatusTooManyRequests {
-		t.Fatalf("kode terakhir = %d, mau 429 — XFF palsu berhasil menghindari limit", terakhir)
+		t.Fatalf("last code = %d, want 429 — fake XFF successfully bypassed limit", terakhir)
 	}
 }
 
@@ -367,7 +367,7 @@ func TestXFFDiabaikanTanpaProksiTepercaya(t *testing.T) {
 func TestSatuProksiTepercayaMemakaiEntriPalingKanan(t *testing.T) {
 	h := limiterUji(t, Konfig{Rate: 1, Burst: 1, ProksiTepercaya: 1})
 
-	kirim := func(xff string) int {
+	send := func(xff string) int {
 		req := httptest.NewRequest(http.MethodGet, "/", nil)
 		req.RemoteAddr = "10.0.0.1:40000" // alamat proxy
 		req.Header.Set("X-Forwarded-For", xff)
@@ -378,10 +378,10 @@ func TestSatuProksiTepercayaMemakaiEntriPalingKanan(t *testing.T) {
 
 	// Klien yang sama (198.51.100.5) mencoba menyamar dengan mengubah bagian
 	// kiri rantai. Bagian kanan tetap ditulis proxy, jadi keduanya satu bucket.
-	if got := kirim("1.2.3.4, 198.51.100.5"); got != http.StatusOK {
+	if got := send("1.2.3.4, 198.51.100.5"); got != http.StatusOK {
 		t.Fatalf("permintaan 1 = %d, mau 200", got)
 	}
-	if got := kirim("9.9.9.9, 198.51.100.5"); got != http.StatusTooManyRequests {
+	if got := send("9.9.9.9, 198.51.100.5"); got != http.StatusTooManyRequests {
 		t.Fatalf("permintaan 2 = %d, mau 429 — entri kiri yang dipalsukan ikut dipercaya", got)
 	}
 }
@@ -405,7 +405,7 @@ func TestRetryAfterMencerminkanTungguSebenarnya(t *testing.T) {
 
 	ra, err := strconv.Atoi(rec.Header().Get("Retry-After"))
 	if err != nil {
-		t.Fatalf("Retry-After tidak dapat dibaca: %v", err)
+		t.Fatalf("Retry-After cannot be read: %v", err)
 	}
 	// Nilai tetap "10" pada versi lama lolos pemeriksaan "header ada", tapi
 	// menyuruh klien menunggu dua kali lebih lama dari yang diperlukan.
@@ -413,7 +413,7 @@ func TestRetryAfterMencerminkanTungguSebenarnya(t *testing.T) {
 		t.Fatalf("Retry-After = %d detik, mau ~5", ra)
 	}
 	if rec.Header().Get("RateLimit-Limit") == "" {
-		t.Error("header kuota tidak dikirim; klien tidak punya cara memperlambat diri sebelum tertolak")
+		t.Error("quota header not sent; client has no way to slow down before being rejected")
 	}
 }
 ```
@@ -470,42 +470,42 @@ Seluruh urutan berjalan dalam satu `EVAL`, sehingga atomik terhadap pod lain: ti
 // KeputusanKuota adalah hasil satu evaluasi.
 type KeputusanKuota struct {
 	Diizinkan bool
-	Terpakai  int64
-	Tunggu    time.Duration
+	Used  int64
+	Wait    time.Duration
 }
 
 type RedisLimiter struct {
-	skrip   *redis.Script
+	script   *redis.Script
 	rdb     *redis.Client
-	batas   int64
+	limit   int64
 	jendela time.Duration
 	// gagalTerbuka menentukan perilaku saat Redis tidak dapat dihubungi.
 	// Lihat Edge Case 2 — jawabannya BERBEDA untuk kuota kapasitas dan untuk
 	// batas keamanan seperti login.
-	gagalTerbuka bool
+	failOpen bool
 }
 
-func (l *RedisLimiter) Izinkan(ctx context.Context, identitas, idPermintaan string) (KeputusanKuota, error) {
-	hasil, err := l.skrip.Run(ctx, l.rdb,
-		[]string{"ratelimit:" + identitas},
-		l.batas, l.jendela.Microseconds(), idPermintaan,
+func (l *RedisLimiter) Izinkan(ctx context.Context, identity, idPermintaan string) (KeputusanKuota, error) {
+	result, err := l.script.Run(ctx, l.rdb,
+		[]string{"ratelimit:" + identity},
+		l.limit, l.jendela.Microseconds(), idPermintaan,
 	).Slice()
 	if err != nil {
-		if l.gagalTerbuka {
+		if l.failOpen {
 			return KeputusanKuota{Diizinkan: true}, nil
 		}
 		return KeputusanKuota{}, fmt.Errorf("evaluasi kuota: %w", err)
 	}
 
-	diizinkan, _ := hasil[0].(int64)
-	terpakai, _ := hasil[1].(int64)
-	tungguDetik, _ := hasil[2].(string) // Lua mengembalikan float sebagai string
-	detik, _ := strconv.ParseFloat(tungguDetik, 64)
+	allowed, _ := result[0].(int64)
+	used, _ := result[1].(int64)
+	waitSec, _ := result[2].(string) // Lua mengembalikan float sebagai string
+	detik, _ := strconv.ParseFloat(waitSec, 64)
 
 	return KeputusanKuota{
-		Diizinkan: diizinkan == 1,
-		Terpakai:  terpakai,
-		Tunggu:    time.Duration(detik * float64(time.Second)),
+		Diizinkan: allowed == 1,
+		Used:  used,
+		Wait:    time.Duration(detik * float64(time.Second)),
 	}, nil
 }
 ```

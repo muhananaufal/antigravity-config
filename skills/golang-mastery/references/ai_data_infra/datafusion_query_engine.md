@@ -231,7 +231,7 @@ graph TD;
 
 ```sql
 -- Rencana WAJIB menunjukkan partisi yang dipangkas
-EXPLAIN SELECT sum(jumlah) FROM transaksi WHERE tanggal >= '2026-08-01';
+EXPLAIN SELECT sum(amount) FROM transactions WHERE date >= '2026-08-01';
 
 -- Query paling mahal (ClickHouse)
 SELECT query_duration_ms, read_rows, read_bytes, memory_usage, substring(query, 1, 60)
@@ -239,5 +239,5 @@ FROM system.query_log WHERE type = 'QueryFinish'
 ORDER BY memory_usage DESC LIMIT 10;
 
 -- Verifikasi terhadap sumber
-SELECT 'analitik' AS asal, count(*) FROM transaksi_olap WHERE tanggal = '2026-08-04';
+SELECT 'analytics' AS source, count(*) FROM transactions_olap WHERE date = '2026-08-04';
 ```

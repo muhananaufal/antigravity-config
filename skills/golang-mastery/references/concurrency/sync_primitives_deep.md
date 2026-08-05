@@ -133,13 +133,13 @@ var jsonBufferPool = sync.Pool{
 	},
 }
 
-// batasBufferPool adalah ambang di atas mana buffer TIDAK dikembalikan.
+// bufferPoolLimit adalah ambang di atas mana buffer TIDAK dikembalikan.
 //
 // Tanpa ambang ini, satu permintaan yang menghasilkan buffer 10 MB akan
 // menitipkannya di pool selamanya, dan RSS proses tetap tinggi permanen
 // meski beban sudah lama reda. Pool dirancang untuk objek berumur pendek
 // dengan ukuran yang seragam.
-const batasBufferPool = 64 << 10 // 64 KB
+const bufferPoolLimit = 64 << 10 // 64 KB
 
 // FastStringConcat mendemonstrasikan daur ulang objek.
 func FastStringConcat(a, b string) string {
@@ -160,7 +160,7 @@ func FastStringConcat(a, b string) string {
 
 	// 4. Kembalikan HANYA bila ukurannya masih wajar. Buffer yang sudah
 	//    tumbuh besar dibiarkan di-GC, bukan dititipkan ke pool.
-	if buf.Cap() <= batasBufferPool {
+	if buf.Cap() <= bufferPoolLimit {
 		jsonBufferPool.Put(buf)
 	}
 
@@ -261,11 +261,11 @@ func (rc *RegistryConfig) CorruptDeadlockMethod() {
 }
 
 // ✅ GOOD: RUnlock() dulu, lalu Lock() -- TAPI WAJIB periksa ulang kondisinya.
-func (rc *RegistryConfig) AmbilAtauBuat(key string) bool {
+func (rc *RegistryConfig) GetOrCreate(key string) bool {
     rc.mu.RLock()
-    v, ada := rc.flags[key]
+    v, ok := rc.flags[key]
     rc.mu.RUnlock()
-    if ada {
+    if ok {
         return v
     }
 
@@ -275,7 +275,7 @@ func (rc *RegistryConfig) AmbilAtauBuat(key string) bool {
     // dan yang kedua menimpa hasil yang pertama.
     rc.mu.Lock()
     defer rc.mu.Unlock()
-    if v, ada := rc.flags[key]; ada {   // <-- pemeriksaan KEDUA, wajib
+    if v, ok := rc.flags[key]; ok {   // <-- pemeriksaan KEDUA, wajib
         return v
     }
     rc.flags[key] = false
@@ -319,7 +319,7 @@ func (rc *RegistryConfig) AmbilAtauBuat(key string) bool {
 ```bash
 # Aktifkan dulu di kode: runtime.SetMutexProfileFraction(5)
 go tool pprof -top http://localhost:6060/debug/pprof/mutex
-go tool pprof -list 'NamaFungsi' http://localhost:6060/debug/pprof/mutex
+go tool pprof -list 'FunctionName' http://localhost:6060/debug/pprof/mutex
 
 # Aktifkan dulu di kode: runtime.SetBlockProfileRate(1)
 go tool pprof -top http://localhost:6060/debug/pprof/block

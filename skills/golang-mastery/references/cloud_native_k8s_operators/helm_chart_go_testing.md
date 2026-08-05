@@ -78,7 +78,7 @@ func TestHelmChartTemplateHAEnabled(t *testing.T) {
 	t.Parallel() // Optimasi: Jalankan unit test Helm secara paralel
 
 	helmChartPath, err := filepath.Abs("../charts/my-operator")
-	require.NoError(t, err, "Gagal mendapatkan absolute path ke helm chart")
+	require.NoError(t, err, "Failed to get absolute path to helm chart")
 
 	options := &helm.Options{
 		SetValues: map[string]string{
@@ -90,25 +90,25 @@ func TestHelmChartTemplateHAEnabled(t *testing.T) {
 
 	// RenderTemplateE me-return error jika rendering gagal, aman dari panic di tengah test.
 	output, err := helm.RenderTemplateE(t, options, helmChartPath, "my-release", []string{"templates/deployment.yaml"})
-	require.NoError(t, err, "Rendering Helm template gagal")
+	require.NoError(t, err, "Helm template rendering failed")
 
 	var deployment appsv1.Deployment
 	err = helm.UnmarshalK8SYamlE(t, output, &deployment)
 	require.NoError(t, err, "Unmarshaling K8s YAML failed")
 
 	// Asersi Bisnis Logika (Strongly Typed!)
-	require.NotNil(t, deployment.Spec.Replicas, "Replicas tidak boleh nil")
-	assert.Equal(t, int32(3), *deployment.Spec.Replicas, "Replica count salah")
+	require.NotNil(t, deployment.Spec.Replicas, "Replicas must not be nil")
+	assert.Equal(t, int32(3), *deployment.Spec.Replicas, "Incorrect replica count")
 
 	// Pastikan label anti-affinity masuk karena HA Enabled!
 	podAffinity := deployment.Spec.Template.Spec.Affinity
-	require.NotNil(t, podAffinity, "HA Enabled harus merender Affinity blok agar pod tersebar")
-	require.NotNil(t, podAffinity.PodAntiAffinity, "PodAntiAffinity hilang dari spec")
+	require.NotNil(t, podAffinity, "HA Enabled must render Affinity block to spread pods")
+	require.NotNil(t, podAffinity.PodAntiAffinity, "PodAntiAffinity missing from spec")
 
 	// Verifikasi container spec
 	containers := deployment.Spec.Template.Spec.Containers
-	require.Len(t, containers, 1, "Harus tepat 1 kontainer")
-	assert.True(t, strings.HasSuffix(containers[0].Image, ":v1.5.0"), "Image tag tak sesuai")
+	require.Len(t, containers, 1, "Must have exactly 1 container")
+	assert.True(t, strings.HasSuffix(containers[0].Image, ":v1.5.0"), "Image tag mismatch")
 }
 
 // Unit Test 2: Validasi Ingress rendering dengan asersi path dan anotasinya
@@ -135,15 +135,15 @@ func TestHelmChartTemplateIngress(t *testing.T) {
 
 	// Validasi Anotasi
 	val, ok := ingress.Annotations["cert-manager.io/cluster-issuer"]
-	require.True(t, ok, "Anotasi cert-manager tidak ditemukan")
-	assert.Equal(t, "letsencrypt-prod", val, "Nilai anotasi cert-manager salah")
+	require.True(t, ok, "cert-manager annotation not found")
+	assert.Equal(t, "letsencrypt-prod", val, "cert-manager annotation value mismatch")
 
 	// Validasi Routing Rules
-	require.Len(t, ingress.Spec.Rules, 1, "Harus ada 1 rule Ingress")
+	require.Len(t, ingress.Spec.Rules, 1, "Must have 1 Ingress rule")
 	rule := ingress.Spec.Rules[0]
-	assert.Equal(t, "api.example.com", rule.Host, "Host tidak sesuai")
-	require.Len(t, rule.HTTP.Paths, 1, "Harus ada 1 HTTP path pada Ingress")
-	assert.Equal(t, "/", rule.HTTP.Paths[0].Path, "Path routing tidak sesuai")
+	assert.Equal(t, "api.example.com", rule.Host, "Host mismatch")
+	require.Len(t, rule.HTTP.Paths, 1, "Must have 1 HTTP path on Ingress")
+	assert.Equal(t, "/", rule.HTTP.Paths[0].Path, "Routing path mismatch")
 }
 
 // Unit Test 3: Simulasi Multi-Document Rendering & Unmarshal List
@@ -178,7 +178,7 @@ func TestHelmChartMultiDocumentRender(t *testing.T) {
 		}
 	}
 
-	assert.GreaterOrEqual(t, len(services), 1, "Harusnya merender minimal 1 buah K8s Service")
+	assert.GreaterOrEqual(t, len(services), 1, "Should render at least 1 K8s Service")
 }
 ```
 
@@ -223,7 +223,7 @@ output := helm.RenderTemplate(t, options, helmChartPath, "my-release", []string{
 
 // GOOD: Menangkap dan memvalidasi tipe error yang dihasilkan (Defensive Programming)
 output, err := helm.RenderTemplateE(t, options, helmChartPath, "my-release", []string{"templates/deployment.yaml"})
-require.NoError(t, err, "Terjadi kesalahan saat mengeksekusi helm template")
+require.NoError(t, err, "An error occurred while executing helm template")
 ```
 **Why dangerous:** Pada pipeline CI/CD yang paralel (`t.Parallel()`), *panic* atau `t.Fatal` dari fungsi non-E bisa merusak eksekusi *goroutine* test lainnya, mengakibatkan *deadlock* atau pipeline *hanging* tanpa log kejelasan di Github Actions. Selalu gunakan *library* varian "E" (Returning Error) untuk *graceful error handling*.
 
@@ -253,7 +253,7 @@ require.NoError(t, err, "Terjadi kesalahan saat mengeksekusi helm template")
    // ... di dalam test block:
    cmd := exec.Command("helm", "dependency", "build", helmChartPath)
    err := cmd.Run()
-   require.NoError(t, err, "Gagal mengunduh helm dependencies sebelum test")
+   require.NoError(t, err, "Failed to download helm dependencies before test")
    ```
    Langkah ini wajib untuk skenario *cold-start* di pipeline CI.
 

@@ -114,7 +114,7 @@ import (
 // Penutup adalah satu sumber daya yang harus ditutup saat shutdown.
 // Urutannya dalam slice menentukan urutan penutupan: dari luar ke dalam,
 // pool database TERAKHIR.
-type Penutup struct {
+type Closer struct {
 	Nama  string
 	Tutup func(context.Context) error
 }
@@ -128,8 +128,8 @@ type Server struct {
 
 	jedaTepi     time.Duration // jeda sebelum Shutdown — tunggu endpoint dilepas
 	batasDrain   time.Duration // anggaran drain HTTP + tugas latar
-	batasPenutup time.Duration // anggaran seluruh Penutup
-	penutup      []Penutup
+	closeLimit time.Duration // anggaran seluruh Penutup
+	penutup      []Closer
 }
 
 // NewServer membuat server production-ready.
@@ -140,7 +140,7 @@ func NewServer(addr string, handler http.Handler) *Server {
 	s := &Server{
 		jedaTepi:     5 * time.Second,
 		batasDrain:   20 * time.Second,
-		batasPenutup: 3 * time.Second,
+		closeLimit: 3 * time.Second,
 	}
 	s.httpServer = &http.Server{
 		Addr:    addr,
@@ -157,8 +157,8 @@ func NewServer(addr string, handler http.Handler) *Server {
 
 // DaftarkanPenutup menambah sumber daya ke urutan penutupan.
 // Panggil sesuai urutan luar-ke-dalam: konsumer antrean dulu, pool DB terakhir.
-func (s *Server) DaftarkanPenutup(nama string, tutup func(context.Context) error) {
-	s.penutup = append(s.penutup, Penutup{Nama: nama, Tutup: tutup})
+func (s *Server) RegisterCloser(nama string, close func(context.Context) error) {
+	s.penutup = append(s.penutup, Closer{Nama: nama, Tutup: close})
 }
 
 // IsShuttingDown digunakan oleh Readiness Probe.
@@ -187,7 +187,7 @@ func (s *Server) Run() error {
 
 	select {
 	case err := <-serverErr:
-		return fmt.Errorf("server gagal start: %w", err)
+		return fmt.Errorf("server failed to start: %w", err)
 	case sig := <-sigCh:
 		slog.Info("shutdown: sinyal diterima", "sinyal", sig.String())
 	}
@@ -207,16 +207,16 @@ func (s *Server) Run() error {
 // shutdown idempoten: Kubernetes kadang mengirim SIGTERM lebih dari sekali.
 func (s *Server) shutdown() error {
 	var err error
-	s.sekaliMati.Do(func() { err = s.jalankanShutdown() })
+	s.sekaliMati.Do(func() { err = s.runShutdown() })
 	return err
 }
 
-func (s *Server) jalankanShutdown() error {
+func (s *Server) runShutdown() error {
 	// Tahap 0: tandai tidak siap. WAJIB sebelum jeda — kalau urutannya
 	// terbalik, load balancer masih mengirim trafik selama seluruh jeda dan
 	// jeda itu jadi tidak ada gunanya sama sekali.
 	s.sedangMati.Store(true)
-	slog.Info("shutdown: ditandai tidak siap", "readiness", http.StatusServiceUnavailable)
+	slog.Info("shutdown: marked as not ready", "readiness", http.StatusServiceUnavailable)
 
 	if s.jedaTepi > 0 {
 		slog.Info("shutdown: menunggu endpoint dilepas dari Service", "jeda", s.jedaTepi)
@@ -229,45 +229,45 @@ func (s *Server) jalankanShutdown() error {
 	// Galat DIKUMPULKAN, bukan di-return di tempat. Tahap berikutnya justru
 	// paling penting dijalankan ketika tahap sebelumnya gagal — di situlah
 	// koneksi masih menggantung dan pool DB masih terbuka.
-	var galat []error
+	var errs []error
 
 	// Tahap 1: listener ditutup, permintaan aktif diselesaikan.
-	slog.Info("shutdown: mengalirkan koneksi HTTP", "batas", s.batasDrain)
+	slog.Info("shutdown: draining HTTP connections", "limit", s.batasDrain)
 	if err := s.httpServer.Shutdown(ctx); err != nil {
-		galat = append(galat, fmt.Errorf("drain HTTP: %w", err))
+		errs = append(errs, fmt.Errorf("drain HTTP: %w", err))
 		// Putuskan paksa sisa koneksi. Tanpa ini, handler yang menggantung
 		// tetap memegang koneksi DB dan menahan tahap 3.
 		if err := s.httpServer.Close(); err != nil {
-			galat = append(galat, fmt.Errorf("tutup paksa listener: %w", err))
+			errs = append(errs, fmt.Errorf("tutup paksa listener: %w", err))
 		}
 	}
 
 	// Tahap 2: konsumer antrean dan cron.
-	selesai := make(chan struct{})
-	go func() { s.bgTasks.Wait(); close(selesai) }()
+	done := make(chan struct{})
+	go func() { s.bgTasks.Wait(); close(done) }()
 	select {
-	case <-selesai:
-		slog.Info("shutdown: seluruh tugas latar selesai")
+	case <-done:
+		slog.Info("shutdown: all background tasks completed")
 	case <-ctx.Done():
-		galat = append(galat, fmt.Errorf("tugas latar belum selesai: %w", ctx.Err()))
+		errs = append(errs, fmt.Errorf("background tasks not completed: %w", ctx.Err()))
 	}
 
 	// Tahap 3: sumber daya, dari luar ke dalam. Memakai context BARU dengan
 	// sengaja: pada titik ini ctx di atas kemungkinan besar sudah kedaluwarsa,
 	// dan menutup pool DB adalah hal terakhir yang boleh dilewatkan. Inilah
 	// alasan batasPenutup harus ikut dihitung dalam anggaran grace period.
-	tutupCtx, batalTutup := context.WithTimeout(context.Background(), s.batasPenutup)
-	defer batalTutup()
+	tutupCtx, cancelClose := context.WithTimeout(context.Background(), s.closeLimit)
+	defer cancelClose()
 	for _, p := range s.penutup {
 		if err := p.Tutup(tutupCtx); err != nil {
-			galat = append(galat, fmt.Errorf("tutup %s: %w", p.Nama, err))
+			errs = append(errs, fmt.Errorf("tutup %s: %w", p.Nama, err))
 		}
 	}
 
-	if len(galat) > 0 {
-		return errors.Join(galat...)
+	if len(errs) > 0 {
+		return errors.Join(errs...)
 	}
-	slog.Info("shutdown: selesai bersih")
+	slog.Info("shutdown: clean exit")
 	return nil
 }
 
@@ -332,7 +332,7 @@ func TestReadinessDitandaiSebelumJedaTepi(t *testing.T) {
 	srv.jedaTepi = 300 * time.Millisecond
 
 	if srv.IsShuttingDown() {
-		t.Fatal("belum boleh ditandai mati sebelum shutdown")
+		t.Fatal("must not be marked dead before shutdown")
 	}
 
 	_, serveErr := mulaiServer(t, srv)
@@ -345,7 +345,7 @@ func TestReadinessDitandaiSebelumJedaTepi(t *testing.T) {
 	for !srv.IsShuttingDown() {
 		select {
 		case <-tenggat:
-			t.Fatal("penanda tidak-siap belum menyala saat jeda tepi masih berjalan")
+			t.Fatal("not-ready marker not set while edge delay is still running")
 		default:
 			runtime.Gosched()
 		}
@@ -362,11 +362,11 @@ func TestShutdown_MenungguTugasLatar(t *testing.T) {
 	srv.jedaTepi = 0
 
 	srv.AddBackgroundTask()
-	tugasSelesai := make(chan struct{})
+	taskDone := make(chan struct{})
 	go func() {
 		defer srv.DoneBackgroundTask()
 		time.Sleep(50 * time.Millisecond)
-		close(tugasSelesai)
+		close(taskDone)
 	}()
 
 	_, serveErr := mulaiServer(t, srv)
@@ -375,9 +375,9 @@ func TestShutdown_MenungguTugasLatar(t *testing.T) {
 		t.Fatalf("shutdown: %v", err)
 	}
 	select {
-	case <-tugasSelesai:
+	case <-taskDone:
 	default:
-		t.Error("shutdown kembali sebelum tugas latar selesai")
+		t.Error("shutdown returned before background tasks completed")
 	}
 	<-serveErr
 }
@@ -385,21 +385,21 @@ func TestShutdown_MenungguTugasLatar(t *testing.T) {
 // Membuktikan urutan penutupan sumber daya dijalankan dari luar ke dalam,
 // dan — yang lebih penting — TETAP dijalankan meski drain HTTP gagal.
 func TestPenutupBerjalanMeskiDrainGagal(t *testing.T) {
-	blokir := make(chan struct{})
+	block := make(chan struct{})
 	masuk := make(chan struct{})
 	srv := NewServer("localhost:0", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		close(masuk)
-		<-blokir // handler sengaja tidak pernah selesai dalam anggaran drain
+		<-block // handler sengaja tidak pernah selesai dalam anggaran drain
 	}))
 	srv.jedaTepi = 0
 	srv.batasDrain = 100 * time.Millisecond
 
 	var urutan []string
-	srv.DaftarkanPenutup("konsumer", func(context.Context) error {
+	srv.RegisterCloser("konsumer", func(context.Context) error {
 		urutan = append(urutan, "konsumer")
 		return nil
 	})
-	srv.DaftarkanPenutup("pool-db", func(context.Context) error {
+	srv.RegisterCloser("pool-db", func(context.Context) error {
 		urutan = append(urutan, "pool-db")
 		return nil
 	})
@@ -410,12 +410,12 @@ func TestPenutupBerjalanMeskiDrainGagal(t *testing.T) {
 	<-masuk // handler yang memblokir sudah benar-benar berjalan
 
 	err := srv.shutdown()
-	close(blokir)
+	close(block)
 
 	// Drain WAJIB melaporkan galat, karena handler tidak akan pernah selesai
 	// di dalam batasDrain 100ms.
 	if err == nil {
-		t.Fatal("drain seharusnya gagal karena handler memblokir")
+		t.Fatal("drain should have failed because handler blocked")
 	}
 	// Tetapi urutan penutupan HARUS tetap berjalan lengkap. Versi lama
 	// berkas ini `return` begitu drain gagal, sehingga pool DB TIDAK PERNAH
@@ -432,25 +432,25 @@ func TestShutdown_PermintaanBerjalanDiselesaikan(t *testing.T) {
 		close(masuk) // deterministik: handler benar-benar sudah berjalan
 		time.Sleep(100 * time.Millisecond)
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("selesai"))
+		_, _ = w.Write([]byte("done"))
 	}))
 	defer ts.Close()
 
-	type hasil struct {
+	type result struct {
 		kode int
 		body string
 		err  error
 	}
-	hasilCh := make(chan hasil, 1)
+	resultCh := make(chan result, 1)
 	go func() {
 		resp, err := ts.Client().Get(ts.URL + "/lambat")
 		if err != nil {
-			hasilCh <- hasil{err: err}
+			resultCh <- result{err: err}
 			return
 		}
 		defer resp.Body.Close()
 		b, err := io.ReadAll(resp.Body)
-		hasilCh <- hasil{kode: resp.StatusCode, body: string(b), err: err}
+		resultCh <- result{kode: resp.StatusCode, body: string(b), err: err}
 	}()
 
 	<-masuk // menggantikan time.Sleep(10ms) yang menebak-nebak
@@ -464,12 +464,12 @@ func TestShutdown_PermintaanBerjalanDiselesaikan(t *testing.T) {
 	// Yang diuji bukan "handler sempat selesai", melainkan KLIEN benar-benar
 	// menerima responsnya. Shutdown yang menjatuhkan respons setelah handler
 	// kembali tetap lolos versi lama uji ini.
-	h := <-hasilCh
+	h := <-resultCh
 	if h.err != nil {
 		t.Fatalf("klien: %v", h.err)
 	}
-	if h.kode != http.StatusOK || h.body != "selesai" {
-		t.Fatalf("klien menerima %d %q, mau 200 %q", h.kode, h.body, "selesai")
+	if h.kode != http.StatusOK || h.body != "done" {
+		t.Fatalf("client received %d %q, want 200 %q", h.kode, h.body, "done")
 	}
 }
 ```
@@ -541,20 +541,20 @@ kind: Deployment
 spec:
   template:
     spec:
-      # Anggaran total. SELURUH urutan shutdown harus muat di sini.
+      # Anggaran total. SELURUH urutan shutdown harus muat di here.
       terminationGracePeriodSeconds: 30
       containers:
         - name: api
           lifecycle:
             preStop:
               exec:
-                # Alternatif yang lebih rapi dari jeda di dalam aplikasi:
-                # preStop berjalan SEBELUM SIGTERM dikirim, jadi aplikasi tidak
-                # perlu tahu apa-apa soal jeda.
+                # Alternatif yang lebih rapi from delay di dalam app:
+                # preStop running SEBELUM SIGTERM dikirim, jadi app tidak
+                # perlu tahu what-what soal delay.
                 #
-                # JEBAKAN: durasi preStop DIPOTONG dari terminationGracePeriod
-                # yang sama — 5 detik di sini menyisakan 25 detik, bukan 30.
-                # Kalau memakai ini, set jedaTepi=0 di aplikasi agar tidak
+                # JEBAKAN: durasi preStop DIPOTONG from terminationGracePeriod
+                # yang sama — 5 detik di here menyisakan 25 detik, bukan 30.
+                # Kalau memakai ini, set jedaTepi=0 di app agar tidak
                 # terhitung dua kali.
                 command: ["sleep", "5"]
           readinessProbe:
@@ -563,9 +563,9 @@ spec:
             timeoutSeconds: 1
             # failureThreshold × periodSeconds = berapa lama sampai endpoint
             # benar-benar dilepas: 2 × 2 = 4 detik, DI BAWAH jedaTepi 5 detik.
-            # Bawaan 3 × 10 = 30 detik LEBIH LAMA dari seluruh grace period,
-            # sehingga Pod mati sebelum sempat ditandai tidak siap dan jeda di
-            # aplikasi tidak menghasilkan apa-apa.
+            # Bawaan 3 × 10 = 30 detik LEBIH LAMA from seluruh grace period,
+            # sehingga Pod mati sebelum sempat ditandai tidak siap dan delay di
+            # app tidak menghasilkan what-what.
             failureThreshold: 2
           livenessProbe:
             # WAJIB tetap 200 selama drain. Liveness yang ikut 503 saat

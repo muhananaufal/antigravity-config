@@ -209,7 +209,7 @@ cosign download sbom registri.contoh.id/api@sha256:<digest> | head
 
 # Apakah cluster benar-benar menolak image tak bertanda tangan?
 kubectl get validatingwebhookconfigurations | grep -iE 'policy|sigstore|kyverno'
-kubectl run uji --image=nginx:latest --dry-run=server 2>&1 | head -5
+kubectl run test --image=nginx:latest --dry-run=server 2>&1 | head -5
 
 # Image yang benar-benar berjalan, beserta digest-nya
 kubectl get pods -A -o jsonpath='{range .items[*].status.containerStatuses[*]}{.imageID}{"\n"}{end}' | sort -u | head

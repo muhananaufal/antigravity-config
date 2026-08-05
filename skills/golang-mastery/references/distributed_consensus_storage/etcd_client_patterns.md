@@ -90,7 +90,7 @@ func NewEtcdManager(endpoints []string) (*EtcdManager, error) {
 		DialKeepAliveTimeout: 3 * time.Second,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("gagal inisialisasi etcd client: %w", err)
+		return nil, fmt.Errorf("failed to initialize etcd client: %w", err)
 	}
 	return &EtcdManager{cli: cli}, nil
 }
@@ -108,14 +108,14 @@ func (em *EtcdManager) RegisterService(ctx context.Context, serviceID, addr stri
 	// 1. Buat Lease
 	resp, err := em.cli.Grant(ctx, ttl)
 	if err != nil {
-		return nil, nil, fmt.Errorf("gagal membuat lease: %w", err)
+		return nil, nil, fmt.Errorf("failed to create lease: %w", err)
 	}
 
 	// 2. Put data dengan menyertakan LeaseID
 	key := fmt.Sprintf("/services/api/%s", serviceID)
 	_, err = em.cli.Put(ctx, key, addr, clientv3.WithLease(resp.ID))
 	if err != nil {
-		return nil, nil, fmt.Errorf("gagal meregister key %s: %w", key, err)
+		return nil, nil, fmt.Errorf("failed to register key %s: %w", key, err)
 	}
 
 	// 3. KeepAlive stream berjalan di background.
@@ -124,7 +124,7 @@ func (em *EtcdManager) RegisterService(ctx context.Context, serviceID, addr stri
 	kaCh, err := em.cli.KeepAlive(kaCtx, resp.ID)
 	if err != nil {
 		cancel()
-		return nil, nil, fmt.Errorf("gagal setup keepalive: %w", err)
+		return nil, nil, fmt.Errorf("failed to setup keepalive: %w", err)
 	}
 
 	errCh := make(chan error, 1)
@@ -171,7 +171,7 @@ func (em *EtcdManager) CompareAndSwapTransaction(ctx context.Context, key, expec
 	).Commit()
 
 	if err != nil {
-		return false, fmt.Errorf("transaksi CAS gagal dijalankan: %w", err)
+		return false, fmt.Errorf("CAS transaction failed to execute: %w", err)
 	}
 
 	return txnResp.Succeeded, nil
@@ -184,7 +184,7 @@ func (em *EtcdManager) RunLeaderElection(ctx context.Context, electionName, myNo
 	// dalam 5 detik etcd akan mencabut posisi leadernya.
 	session, err := concurrency.NewSession(em.cli, concurrency.WithTTL(5))
 	if err != nil {
-		return fmt.Errorf("gagal membuat concurrency session: %w", err)
+		return fmt.Errorf("failed to create concurrency session: %w", err)
 	}
 	defer session.Close()
 
@@ -205,7 +205,7 @@ func (em *EtcdManager) RunLeaderElection(ctx context.Context, electionName, myNo
 		ctxResign, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		if err := election.Resign(ctxResign); err != nil {
-			log.Printf("Gagal resign dengan bersih: %v", err)
+			log.Printf("Failed to resign cleanly: %v", err)
 		}
 		log.Printf("[%s] Mundur dari leader via signal.", myNodeName)
 		return nil
@@ -260,7 +260,7 @@ func (em *EtcdManager) WatchConfig(ctx context.Context, key string, callback fun
 func TestEtcdCASLogic(t *testing.T) {
 	em, err := NewEtcdManager([]string{"127.0.0.1:2379"})
 	if err != nil {
-		t.Skip("etcd lokal tidak berjalan, skip test")
+		t.Skip("local etcd not running, skip test")
 	}
 	defer em.Close()
 
@@ -274,7 +274,7 @@ func TestEtcdCASLogic(t *testing.T) {
 	// Setup Awal
 	_, err = em.cli.Put(ctx, key, "status_init")
 	if err != nil {
-		t.Fatalf("setup put gagal: %v", err)
+		t.Fatalf("setup put failed: %v", err)
 	}
 
 	// CAS Berhasil

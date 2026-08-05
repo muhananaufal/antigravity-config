@@ -218,7 +218,7 @@ func TestTCPConnectionManager(t *testing.T) {
 	// 1. Setup Server Dummy
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatalf("Gagal inisialisasi server: %v", err)
+		t.Fatalf("Failed to initialize server: %v", err)
 	}
 	defer listener.Close()
 
@@ -245,7 +245,7 @@ func TestTCPConnectionManager(t *testing.T) {
 	// 2. Client Setup
 	clientConn, err := net.Dial("tcp", listener.Addr().String())
 	if err != nil {
-		t.Fatalf("Client gagal koneksi: %v", err)
+		t.Fatalf("Client failed to connect: %v", err)
 	}
 	defer clientConn.Close()
 
@@ -256,11 +256,11 @@ func TestTCPConnectionManager(t *testing.T) {
 	clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	resp, err := reader.ReadString('\n')
 	if err != nil {
-		t.Fatalf("Client gagal baca dari server: %v", err)
+		t.Fatalf("Client failed to read from server: %v", err)
 	}
 
 	if strings.TrimSpace(resp) != "ACK: HELLO WORLD" {
-		t.Errorf("Respon tidak sesuai, didapat: %s", resp)
+		t.Errorf("Response mismatch, got: %s", resp)
 	}
 
 	// 4. Test Graceful Shutdown
@@ -271,7 +271,7 @@ func TestTCPConnectionManager(t *testing.T) {
 	clientConn.SetReadDeadline(time.Now().Add(1 * time.Second))
 	_, err = reader.ReadString('\n')
 	if err == nil {
-		t.Errorf("Harusnya mendapat error EOF (Koneksi ditutup), namun sukses")
+		t.Errorf("Should have received EOF error (connection closed), but got success")
 	}
 }
 ```

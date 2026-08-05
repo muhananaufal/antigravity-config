@@ -189,7 +189,7 @@ func (r *Router) PantauLag(ctx context.Context) {
 				lag, err := ukurLag(ctx, rp.DB)
 				if err != nil {
 					rp.sehat.Store(false)
-					r.cfg.Logger.Warn("gagal mengukur lag replica",
+					r.cfg.Logger.Warn("failed to measure replica lag",
 						"replica", rp.Nama, "err", err)
 					continue
 				}

@@ -258,7 +258,7 @@ func (r *MyAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 
 	// WAJIB: Update HANYA pada Subresource Status.
 	if err := r.Status().Update(ctx, &app); err != nil {
-		return ctrl.Result{}, fmt.Errorf("gagal mengupdate status: %w", err)
+		return ctrl.Result{}, fmt.Errorf("failed to update status: %w", err)
 	}
 	return ctrl.Result{}, nil
 }
@@ -327,7 +327,7 @@ func TestMyAppReconciler_UpdateStatus(t *testing.T) {
 	assert.NoError(t, err)
 	
 	// Validasi Status Subresource terganti dengan benar
-	assert.Equal(t, "Running", updatedApp.Status.Phase, "Phase harusnya menjadi Running setelah direkonsiliasi")
+	assert.Equal(t, "Running", updatedApp.Status.Phase, "Phase should be Running after reconciliation")
 }
 
 // Test 2: Edge Case ketika CRD dihapus (Not Found) tidak error, tapi IgnoreNotFound.
@@ -366,7 +366,7 @@ func TestMyApp_ConversionWebhook(t *testing.T) {
 	assert.NoError(t, err)
 	
 	// Validasi Internal Logic penggabungan
-	assert.Equal(t, "redis:7.0", dst.Spec.ContainerImage, "Image dan Version harusnya digabung")
+	assert.Equal(t, "redis:7.0", dst.Spec.ContainerImage, "Image and Version should be combined")
 }
 ```
 

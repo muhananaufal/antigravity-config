@@ -71,11 +71,11 @@ func (e *FFmpegEngine) TranscodeToHLS(ctx context.Context, inputPath, outM3U8 st
 	// Tangkap Stderr pipe untuk kalkulasi progress
 	stderrPipe, err := cmd.StderrPipe()
 	if err != nil {
-		return fmt.Errorf("gagal membuat stderr pipe: %w", err)
+		return fmt.Errorf("failed to create stderr pipe: %w", err)
 	}
 
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("gagal memulai ffmpeg: %w", err)
+		return fmt.Errorf("failed to start ffmpeg: %w", err)
 	}
 
 	// Parsing Progress di Background Goroutine
@@ -109,9 +109,9 @@ func (e *FFmpegEngine) TranscodeToHLS(ctx context.Context, inputPath, outM3U8 st
 	if err := cmd.Wait(); err != nil {
 		// Jika err karena Context deadline terlewati
 		if ctx.Err() == context.DeadlineExceeded {
-			return fmt.Errorf("transcoding dibatalkan karena timeout: %w", err)
+			return fmt.Errorf("transcoding cancelled due to timeout: %w", err)
 		}
-		return fmt.Errorf("eksekusi ffmpeg gagal: %w", err)
+		return fmt.Errorf("ffmpeg execution failed: %w", err)
 	}
 
 	return nil
@@ -130,11 +130,11 @@ func TestFFmpegContextCancellation(t *testing.T) {
 	err := cmd.Run()
 	
 	if err == nil {
-		t.Fatal("Ekspektasi command dibatalkan oleh context, tapi malah sukses berjalan penuh")
+		t.Fatal("expected command to be cancelled by context, but it ran successfully")
 	}
 
 	if ctx.Err() != context.DeadlineExceeded {
-		t.Fatalf("Ekspektasi context.DeadlineExceeded, tapi mendapat %v", ctx.Err())
+		t.Fatalf("expected context.DeadlineExceeded, got %v", ctx.Err())
 	}
 }
 

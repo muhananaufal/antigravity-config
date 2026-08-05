@@ -22,10 +22,10 @@ Membungkus dengan `%w` membuat error di dalamnya **bisa diperiksa pemanggil**. S
 
 ```go
 // Membungkus dengan %w = berjanji ErrNoRows terlihat pemanggil selamanya.
-return fmt.Errorf("ambil pengguna: %w", sql.ErrNoRows)
+return fmt.Errorf("fetch user: %w", sql.ErrNoRows)
 
 // Membungkus dengan %v = detail masuk pesan, identitas TIDAK bocor keluar.
-return fmt.Errorf("ambil pengguna: %v", err)
+return fmt.Errorf("fetch user: %v", err)
 ```
 
 Aturannya: bungkus dengan `%w` hanya error yang **memang** ingin Anda jadikan bagian kontrak. Untuk error dari pustaka pihak ketiga dan driver database, terjemahkan ke error domain Anda sendiri — jika tidak, seluruh sistem jadi bergantung pada detail implementasi lapisan terdalam.
@@ -105,44 +105,44 @@ import (
 // ---------- 1. SENTINEL: kondisi yang dibedakan pemanggil ----------
 
 var (
-	// ErrTidakDitemukan dikembalikan ketika entitas yang diminta tidak ada.
-	ErrTidakDitemukan = errors.New("entitas tidak ditemukan")
-	// ErrKonflik menandakan pelanggaran keunikan atau kondisi balapan optimistic.
-	ErrKonflik = errors.New("konflik keadaan")
-	// ErrTidakBerwenang menandakan pemanggil terautentikasi tetapi tidak diizinkan.
-	ErrTidakBerwenang = errors.New("tidak berwenang")
+	// ErrNotFound dikembalikan ketika entitas yang diminta tidak ada.
+	ErrNotFound = errors.New("entity not found")
+	// ErrConflict menandakan pelanggaran keunikan atau kondisi balapan optimistic.
+	ErrConflict = errors.New("state conflict")
+	// ErrUnauthorized menandakan pemanggil terautentikasi tetapi tidak diizinkan.
+	ErrUnauthorized = errors.New("unauthorized")
 )
 
 // ---------- 2. TIPE: error yang membawa data ----------
 
-// GalatValidasi membawa field mana yang gagal dan aturan apa yang dilanggar,
+// ValidationError membawa field mana yang gagal dan aturan apa yang dilanggar,
 // karena pemanggil (handler HTTP) perlu mengembalikannya ke klien per-field.
-type GalatValidasi struct {
+type ValidationError struct {
 	Field  string
-	Aturan string
-	Nilai  any
+	Rule   string
+	Value  any
 }
 
-func (g *GalatValidasi) Error() string {
-	return fmt.Sprintf("validasi gagal pada %q: melanggar %s", g.Field, g.Aturan)
+func (g *ValidationError) Error() string {
+	return fmt.Sprintf("validation failed on %q: violates %s", g.Field, g.Rule)
 }
 
-// GalatBanyakValidasi mengumpulkan beberapa kegagalan sekaligus.
+// MultiValidationError mengumpulkan beberapa kegagalan sekaligus.
 // Pemanggil bisa mengambilnya utuh dengan errors.As, atau memeriksa
 // salah satu isinya dengan errors.Is/As karena Unwrap mengembalikan slice.
-type GalatBanyakValidasi struct {
-	Galat []*GalatValidasi
+type MultiValidationError struct {
+	Errors []*ValidationError
 }
 
-func (g *GalatBanyakValidasi) Error() string {
-	return fmt.Sprintf("%d field tidak valid", len(g.Galat))
+func (g *MultiValidationError) Error() string {
+	return fmt.Sprintf("%d fields are invalid", len(g.Errors))
 }
 
 // Unwrap dengan tanda tangan []error (Go 1.20+) membuat errors.Is dan
 // errors.As menelusuri SELURUH isi, bukan hanya yang pertama.
-func (g *GalatBanyakValidasi) Unwrap() []error {
-	out := make([]error, len(g.Galat))
-	for i, e := range g.Galat {
+func (g *MultiValidationError) Unwrap() []error {
+	out := make([]error, len(g.Errors))
+	for i, e := range g.Errors {
 		out[i] = e
 	}
 	return out
@@ -150,12 +150,12 @@ func (g *GalatBanyakValidasi) Unwrap() []error {
 
 // ---------- 3. TERJEMAHAN DI BATAS: jangan biarkan galat pustaka bocor ----------
 
-// DariRepository menerjemahkan galat lapisan penyimpanan menjadi galat domain.
+// FromRepository menerjemahkan galat lapisan penyimpanan menjadi galat domain.
 //
 // Tanpa terjemahan ini, seluruh sistem menjadi bergantung pada detail
 // implementasi database: mengganti pgx ke sesuatu yang lain akan memecahkan
 // setiap `errors.Is(err, pgx.ErrNoRows)` yang tersebar di lapisan atas.
-func DariRepository(err error, entitas string, id any) error {
+func FromRepository(err error, entitas string, id any) error {
 	if err == nil {
 		return nil
 	}
@@ -177,41 +177,41 @@ func DariRepository(err error, entitas string, id any) error {
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return fmt.Errorf("%s %v: %w", entitas, id, err)
 
-	case errors.Is(err, errBarisTidakAda):
+	case errors.Is(err, errNoRows):
 		// Sentinel domain yang dibungkus; identitas pustaka TIDAK ikut keluar.
-		return fmt.Errorf("%s %v: %w", entitas, id, ErrTidakDitemukan)
-	case errors.Is(err, errKeunikan):
-		return fmt.Errorf("%s %v: %w", entitas, id, ErrKonflik)
+		return fmt.Errorf("%s %v: %w", entitas, id, ErrNotFound)
+	case errors.Is(err, errUniqueConstraint):
+		return fmt.Errorf("%s %v: %w", entitas, id, ErrConflict)
 	default:
 		// %v, bukan %w: pesannya berguna untuk log, identitasnya tidak
 		// dijadikan bagian kontrak yang harus dipelihara selamanya.
-		return fmt.Errorf("%s %v: galat penyimpanan: %v", entitas, id, err)
+		return fmt.Errorf("%s %v: storage error: %v", entitas, id, err)
 	}
 }
 
 // Sentinel internal paket penyimpanan (di kode nyata: pgx.ErrNoRows dsb).
 var (
-	errBarisTidakAda = errors.New("baris tidak ada")
-	errKeunikan      = errors.New("pelanggaran keunikan")
+	errNoRows           = errors.New("row not found")
+	errUniqueConstraint = errors.New("unique constraint violation")
 )
 
 // ---------- 4. PEMETAAN KE TRANSPORT: satu tempat, bukan di tiap handler ----------
 
-// Respons adalah bentuk galat yang aman dikirim ke klien.
-type Respons struct {
-	Kode      string            `json:"kode"`
-	Pesan     string            `json:"pesan"`
-	Field     map[string]string `json:"field,omitempty"`
-	KorelasiID string           `json:"korelasi_id"`
+// Response adalah bentuk galat yang aman dikirim ke klien.
+type Response struct {
+	Code          string            `json:"code"`
+	Message       string            `json:"message"`
+	Field         map[string]string `json:"field,omitempty"`
+	CorrelationID string            `json:"correlation_id"`
 }
 
-// KeHTTP memetakan galat domain ke status HTTP dan badan respons.
+// ToHTTP memetakan galat domain ke status HTTP dan badan respons.
 //
 // Ini SATU-SATUNYA tempat pemetaan terjadi. Menyebarnya ke tiap handler
 // adalah alasan paling umum 404 dan 500 tertukar secara acak.
-func KeHTTP(ctx context.Context, err error, korelasiID string) (int, Respons) {
-	var vBanyak *GalatBanyakValidasi
-	var vSatu *GalatValidasi
+func ToHTTP(ctx context.Context, err error, correlationID string) (int, Response) {
+	var vMulti *MultiValidationError
+	var vSingle *ValidationError
 
 	switch {
 	// URUTAN DUA CASE PERTAMA MENGIKAT, dan tidak terlihat dari kodenya.
@@ -222,38 +222,38 @@ func KeHTTP(ctx context.Context, err error, korelasiID string) (int, Respons) {
 	// Menukar kedua case ini membuat respons hanya memuat satu field dari
 	// sekian yang gagal, dan kliennya memperbaiki satu per satu tanpa pernah
 	// tahu ada yang lain. Bug diam yang lolos setiap review.
-	case errors.As(err, &vBanyak):
-		f := make(map[string]string, len(vBanyak.Galat))
-		for _, v := range vBanyak.Galat {
-			f[v.Field] = v.Aturan
+	case errors.As(err, &vMulti):
+		f := make(map[string]string, len(vMulti.Errors))
+		for _, v := range vMulti.Errors {
+			f[v.Field] = v.Rule
 		}
-		return http.StatusUnprocessableEntity, Respons{
-			Kode: "VALIDASI_GAGAL", Pesan: "Sebagian isian tidak valid.",
-			Field: f, KorelasiID: korelasiID,
-		}
-
-	case errors.As(err, &vSatu):
-		return http.StatusUnprocessableEntity, Respons{
-			Kode: "VALIDASI_GAGAL", Pesan: "Sebagian isian tidak valid.",
-			Field: map[string]string{vSatu.Field: vSatu.Aturan}, KorelasiID: korelasiID,
+		return http.StatusUnprocessableEntity, Response{
+			Code: "VALIDATION_FAILED", Message: "Some input fields are invalid.",
+			Field: f, CorrelationID: correlationID,
 		}
 
-	case errors.Is(err, ErrTidakDitemukan):
-		return http.StatusNotFound, Respons{
-			Kode: "TIDAK_DITEMUKAN", Pesan: "Data yang diminta tidak ada.",
-			KorelasiID: korelasiID,
+	case errors.As(err, &vSingle):
+		return http.StatusUnprocessableEntity, Response{
+			Code: "VALIDATION_FAILED", Message: "Some input fields are invalid.",
+			Field: map[string]string{vSingle.Field: vSingle.Rule}, CorrelationID: correlationID,
 		}
 
-	case errors.Is(err, ErrKonflik):
-		return http.StatusConflict, Respons{
-			Kode: "KONFLIK", Pesan: "Data sudah berubah. Muat ulang lalu coba lagi.",
-			KorelasiID: korelasiID,
+	case errors.Is(err, ErrNotFound):
+		return http.StatusNotFound, Response{
+			Code: "NOT_FOUND", Message: "Requested data does not exist.",
+			CorrelationID: correlationID,
 		}
 
-	case errors.Is(err, ErrTidakBerwenang):
-		return http.StatusForbidden, Respons{
-			Kode: "TIDAK_BERWENANG", Pesan: "Anda tidak punya akses ke sumber daya ini.",
-			KorelasiID: korelasiID,
+	case errors.Is(err, ErrConflict):
+		return http.StatusConflict, Response{
+			Code: "CONFLICT", Message: "Data has changed. Reload and try again.",
+			CorrelationID: correlationID,
+		}
+
+	case errors.Is(err, ErrUnauthorized):
+		return http.StatusForbidden, Response{
+			Code: "UNAUTHORIZED", Message: "You do not have access to this resource.",
+			CorrelationID: correlationID,
 		}
 
 	default:
@@ -265,24 +265,24 @@ func KeHTTP(ctx context.Context, err error, korelasiID string) (int, Respons) {
 		// galat itu masih utuh justru membuangnya, dan korelasiID yang
 		// diterima pengguna tidak menunjuk ke apa pun. Ketika ia menelepon
 		// dengan ID di tangan, tidak ada yang bisa dicari.
-		slog.ErrorContext(ctx, "galat tak tertangani dipetakan ke 500",
-			"korelasi_id", korelasiID, "galat", err)
+		slog.ErrorContext(ctx, "unhandled error mapped to 500",
+			"correlation_id", correlationID, "error", err)
 
-		return http.StatusInternalServerError, Respons{
-			Kode: "GALAT_INTERNAL", Pesan: "Terjadi kesalahan. Sebutkan ID ini bila menghubungi dukungan.",
-			KorelasiID: korelasiID,
+		return http.StatusInternalServerError, Response{
+			Code: "INTERNAL_ERROR", Message: "An unexpected error occurred. Reference this ID when contacting support.",
+			CorrelationID: correlationID,
 		}
 	}
 }
 
 // ---------- 5. KLASIFIKASI UNTUK RETRY ----------
 
-// LayakDiulang menjawab satu pertanyaan yang dibutuhkan lapisan retry:
+// IsRetryable menjawab satu pertanyaan yang dibutuhkan lapisan retry:
 // apakah mengulang operasi ini punya peluang berhasil?
 //
 // Galat validasi dan otorisasi TIDAK akan menjadi benar karena diulang;
 // mengulanginya hanya membakar kuota dan menunda kegagalan yang sudah pasti.
-func LayakDiulang(err error) bool {
+func IsRetryable(err error) bool {
 	if err == nil {
 		return false
 	}
@@ -301,16 +301,16 @@ func LayakDiulang(err error) bool {
 		return false
 	}
 
-	var v *GalatValidasi
+	var v *ValidationError
 	switch {
 	case errors.As(err, &v),
-		errors.Is(err, ErrTidakBerwenang),
-		errors.Is(err, ErrTidakDitemukan):
+		errors.Is(err, ErrUnauthorized),
+		errors.Is(err, ErrNotFound):
 		return false
 	}
-	var sementara interface{ Sementara() bool }
-	if errors.As(err, &sementara) {
-		return sementara.Sementara()
+	var temporary interface{ Temporary() bool }
+	if errors.As(err, &temporary) {
+		return temporary.Temporary()
 	}
 
 	// Konservatif: galat tak dikenal dianggap sementara.
@@ -341,119 +341,118 @@ import (
 // diklasifikasikan layak diulang.
 func TestGalatContextTidakLayakDiulang(t *testing.T) {
 	kasus := map[string]error{
-		"dibatalkan":         context.Canceled,
-		"deadline terlampaui": context.DeadlineExceeded,
+		"canceled":          context.Canceled,
+		"deadline exceeded": context.DeadlineExceeded,
 	}
 	for nama, asal := range kasus {
 		t.Run(nama, func(t *testing.T) {
 			// Lewat jalur terjemahan repository, persis seperti di produksi.
-			err := DariRepository(asal, "pesanan", 7)
+			err := FromRepository(asal, "order", 7)
 
 			if !errors.Is(err, asal) {
-				t.Fatalf("identitas galat context hilang setelah terjemahan: %v", err)
+				t.Fatalf("context error identity lost after translation: %v", err)
 			}
-			if LayakDiulang(err) {
-				t.Fatal("permintaan yang sudah dibatalkan diklasifikasikan layak diulang — " +
-					"lapisan retry akan membakar seluruh kuota lalu melapor 'percobaan habis'")
+			if IsRetryable(err) {
+				t.Fatal("canceled request classified as retryable")
 			}
 		})
 	}
 }
 
-func TestDariRepository_MenerjemahkanTanpaMembocorkanPustaka(t *testing.T) {
-	err := DariRepository(errBarisTidakAda, "pesanan", 42)
+func TestFromRepository_MenerjemahkanTanpaMembocorkanPustaka(t *testing.T) {
+	err := FromRepository(errNoRows, "order", 42)
 
-	if !errors.Is(err, ErrTidakDitemukan) {
-		t.Fatalf("harus bisa dikenali sebagai ErrTidakDitemukan, dapat %v", err)
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("should be recognized as ErrNotFound, got %v", err)
 	}
 	// Inti pengujian: identitas galat PUSTAKA tidak boleh ikut keluar,
 	// kalau tidak lapisan atas jadi bergantung pada driver database.
-	if errors.Is(err, errBarisTidakAda) {
-		t.Fatal("identitas galat pustaka bocor ke lapisan atas")
+	if errors.Is(err, errNoRows) {
+		t.Fatal("library error identity leaked to upper layer")
 	}
-	if got := err.Error(); got == "" || !contains(got, "pesanan 42") {
-		t.Errorf("konteks hilang dari pesan: %q", got)
+	if got := err.Error(); got == "" || !contains(got, "order 42") {
+		t.Errorf("context missing from message: %q", got)
 	}
 }
 
-func TestDariRepository_GalatTakDikenalTidakDijadikanKontrak(t *testing.T) {
-	asli := errors.New("koneksi putus")
-	err := DariRepository(asli, "pesanan", 7)
+func TestFromRepository_GalatTakDikenalTidakDijadikanKontrak(t *testing.T) {
+	asli := errors.New("connection reset")
+	err := FromRepository(asli, "order", 7)
 
 	if errors.Is(err, asli) {
-		t.Fatal("galat tak dikenal tidak boleh dibungkus %w")
+		t.Fatal("unknown error must not be wrapped with %w")
 	}
-	if !contains(err.Error(), "koneksi putus") {
-		t.Error("pesan aslinya tetap harus terbawa untuk keperluan log")
+	if !contains(err.Error(), "connection reset") {
+		t.Error("original message must be preserved for logging")
 	}
 }
 
-func TestKeHTTP_PemetaanTerpusat(t *testing.T) {
+func TestToHTTP_PemetaanTerpusat(t *testing.T) {
 	kasus := []struct {
-		nama    string
-		err     error
-		status  int
-		kode    string
+		nama   string
+		err    error
+		status int
+		kode   string
 	}{
-		{"tidak ditemukan", fmt.Errorf("x: %w", ErrTidakDitemukan), http.StatusNotFound, "TIDAK_DITEMUKAN"},
-		{"konflik", fmt.Errorf("x: %w", ErrKonflik), http.StatusConflict, "KONFLIK"},
-		{"tidak berwenang", ErrTidakBerwenang, http.StatusForbidden, "TIDAK_BERWENANG"},
-		{"validasi", &GalatValidasi{Field: "email", Aturan: "format"}, http.StatusUnprocessableEntity, "VALIDASI_GAGAL"},
-		{"tak dikenal", errors.New("boom"), http.StatusInternalServerError, "GALAT_INTERNAL"},
+		{"not found", fmt.Errorf("x: %w", ErrNotFound), http.StatusNotFound, "NOT_FOUND"},
+		{"conflict", fmt.Errorf("x: %w", ErrConflict), http.StatusConflict, "CONFLICT"},
+		{"unauthorized", ErrUnauthorized, http.StatusForbidden, "UNAUTHORIZED"},
+		{"validation", &ValidationError{Field: "email", Rule: "format"}, http.StatusUnprocessableEntity, "VALIDATION_FAILED"},
+		{"unknown", errors.New("boom"), http.StatusInternalServerError, "INTERNAL_ERROR"},
 	}
 	for _, k := range kasus {
 		t.Run(k.nama, func(t *testing.T) {
-			status, resp := KeHTTP(context.Background(), k.err, "kor-1")
-			if status != k.status || resp.Kode != k.kode {
-				t.Fatalf("mau %d/%s, dapat %d/%s", k.status, k.kode, status, resp.Kode)
+			status, resp := ToHTTP(context.Background(), k.err, "kor-1")
+			if status != k.status || resp.Code != k.kode {
+				t.Fatalf("want %d/%s, got %d/%s", k.status, k.kode, status, resp.Code)
 			}
-			if resp.KorelasiID != "kor-1" {
-				t.Error("korelasi ID wajib ikut agar insiden bisa ditelusuri")
+			if resp.CorrelationID != "kor-1" {
+				t.Error("correlation ID must be included to trace incidents")
 			}
 		})
 	}
 }
 
-func TestKeHTTP_GalatInternalTidakBocorKeKlien(t *testing.T) {
-	rahasia := errors.New(`pq: relation "pengguna_rahasia" does not exist`)
-	_, resp := KeHTTP(context.Background(), fmt.Errorf("ambil: %v", rahasia), "kor-2")
+func TestToHTTP_GalatInternalTidakBocorKeKlien(t *testing.T) {
+	rahasia := errors.New(`pq: relation "secret_users" does not exist`)
+	_, resp := ToHTTP(context.Background(), fmt.Errorf("fetch: %v", rahasia), "kor-2")
 
-	if contains(resp.Pesan, "pengguna_rahasia") || contains(resp.Pesan, "pq:") {
-		t.Fatalf("detail internal bocor ke klien: %q", resp.Pesan)
+	if contains(resp.Message, "secret_users") || contains(resp.Message, "pq:") {
+		t.Fatalf("internal details leaked to client: %q", resp.Message)
 	}
 }
 
 func TestUnwrapSlice_MenelusuriSeluruhIsi(t *testing.T) {
 	// Unwrap() []error membuat errors.As menemukan yang KEDUA, bukan berhenti
 	// di yang pertama. Tanpa ini, hanya kegagalan pertama yang terlihat.
-	g := &GalatBanyakValidasi{Galat: []*GalatValidasi{
-		{Field: "nama", Aturan: "wajib"},
-		{Field: "email", Aturan: "format"},
+	g := &MultiValidationError{Errors: []*ValidationError{
+		{Field: "name", Rule: "required"},
+		{Field: "email", Rule: "format"},
 	}}
-	var v *GalatValidasi
+	var v *ValidationError
 	if !errors.As(error(g), &v) {
-		t.Fatal("errors.As harus menemukan GalatValidasi di dalam gabungan")
+		t.Fatal("errors.As must find ValidationError within multi-error")
 	}
-	status, resp := KeHTTP(context.Background(), g, "kor-3")
+	status, resp := ToHTTP(context.Background(), g, "kor-3")
 	if status != http.StatusUnprocessableEntity || len(resp.Field) != 2 {
-		t.Fatalf("kedua field harus dilaporkan, dapat %v", resp.Field)
+		t.Fatalf("both fields must be reported, got %v", resp.Field)
 	}
 }
 
-func TestLayakDiulang(t *testing.T) {
+func TestIsRetryable(t *testing.T) {
 	kasus := map[string]struct {
 		err error
 		mau bool
 	}{
-		"validasi tidak diulang":    {&GalatValidasi{Field: "a"}, false},
-		"otorisasi tidak diulang":   {ErrTidakBerwenang, false},
-		"tidak ditemukan":           {ErrTidakDitemukan, false},
-		"tak dikenal dianggap bisa": {errors.New("timeout"), true},
-		"nil":                       {nil, false},
+		"validation is not retryable":          {&ValidationError{Field: "a"}, false},
+		"authorization is not retryable":       {ErrUnauthorized, false},
+		"not found is not retryable":           {ErrNotFound, false},
+		"unknown error is considered retryable": {errors.New("timeout"), true},
+		"nil":                                  {nil, false},
 	}
 	for nama, k := range kasus {
-		if got := LayakDiulang(k.err); got != k.mau {
-			t.Errorf("%s: mau %v, dapat %v", nama, k.mau, got)
+		if got := IsRetryable(k.err); got != k.mau {
+			t.Errorf("%s: want %v, got %v", nama, k.mau, got)
 		}
 	}
 }
@@ -480,7 +479,7 @@ func indexOf(s, sub string) int {
 func (r *Repo) Ambil(ctx context.Context, id int64) (*Pesanan, error) {
 	p, err := r.db.Ambil(ctx, id)
 	if err != nil {
-		log.Error("gagal ambil pesanan", "err", err) // dicatat di sini...
+		log.Error("failed to fetch order", "err", err) // dicatat di sini...
 		return nil, err                              // ...DAN dikembalikan
 	}
 	return p, nil
@@ -495,16 +494,16 @@ Setiap lapisan melakukan hal yang sama, dan satu kegagalan berakhir sebagai lima
 func (r *Repo) Ambil(ctx context.Context, id int64) (*Pesanan, error) {
 	p, err := r.db.Ambil(ctx, id)
 	if err != nil {
-		return nil, fmt.Errorf("ambil pesanan %d: %w", id, err)
+		return nil, fmt.Errorf("fetch order %d: %w", id, err)
 	}
 	return p, nil
 }
 
 // Di handler -- satu-satunya tempat yang mencatat:
 if err != nil {
-	status, resp := galat.KeHTTP(r.Context(), err, korelasiID)
+	status, resp := galat.ToHTTP(r.Context(), err, correlationID)
 	if status >= 500 {
-		logger.Error("permintaan gagal", "err", err, "korelasi_id", korelasiID)
+		logger.Error("request failed", "err", err, "correlation_id", correlationID)
 	}
 	tulisJSON(w, status, resp)
 	return
@@ -515,7 +514,7 @@ if err != nil {
 
 ```go
 if strings.Contains(err.Error(), "duplicate key") {
-	return c.JSON(409, "sudah ada")
+	return c.JSON(409, "already exists")
 }
 ```
 
@@ -524,8 +523,8 @@ Pesan galat bukan API. Ia berubah antar versi pustaka, antar bahasa lokal databa
 **✅ BENAR — periksa identitas, bukan teks**
 
 ```go
-if errors.Is(err, galat.ErrKonflik) {
-	return c.JSON(409, "sudah ada")
+if errors.Is(err, galat.ErrConflict) {
+	return c.JSON(409, "already exists")
 }
 ```
 
@@ -534,7 +533,7 @@ if errors.Is(err, galat.ErrKonflik) {
 ```go
 func (s *Service) Checkout(ctx context.Context) error {
 	if err := s.pembayaran.Bayar(ctx); err != nil {
-		return fmt.Errorf("bayar: %w", err) // seluruh galat penyedia jadi kontrak
+		return fmt.Errorf("pay: %w", err) // seluruh galat penyedia jadi kontrak
 	}
 	return nil
 }
@@ -547,9 +546,9 @@ Sejak baris itu, setiap galat internal penyedia pembayaran bisa diperiksa pemang
 ```go
 if err := s.pembayaran.Bayar(ctx); err != nil {
 	if errors.Is(err, penyedia.ErrDanaKurang) {
-		return fmt.Errorf("checkout: %w", ErrDanaKurang) // sentinel domain
+		return fmt.Errorf("checkout: %w", ErrInsufficientFunds) // sentinel domain
 	}
-	return fmt.Errorf("checkout: gagal membayar: %v", err) // opaque
+	return fmt.Errorf("checkout: payment failed: %v", err) // opaque
 }
 ```
 
@@ -559,7 +558,7 @@ if err := s.pembayaran.Bayar(ctx); err != nil {
 func AmbilKonfigurasi(kunci string) string {
 	v := os.Getenv(kunci)
 	if v == "" {
-		panic("konfigurasi " + kunci + " tidak ada") // di tengah permintaan
+		panic("config " + kunci + " not found") // di tengah permintaan
 	}
 	return v
 }
@@ -574,7 +573,7 @@ func MuatKonfigurasi() (Konfigurasi, error) { /* kembalikan error */ }
 func main() {
 	cfg, err := MuatKonfigurasi()
 	if err != nil {
-		log.Fatalf("konfigurasi tidak valid: %v", err) // hanya di main
+		log.Fatalf("invalid config: %v", err) // hanya di main
 	}
 	// ...
 }

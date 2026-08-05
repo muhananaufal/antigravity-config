@@ -135,20 +135,20 @@ func (c *Controller) Run(threadiness int, stopCh <-chan struct{}) error {
 	log.Println("Starting Pod Controller")
 
 	// 1. Block sampai Cache In-Memory awal (Lister) disingkron total dengan Etcd K8s
-	log.Println("Menunggu informer caches untuk sinkronisasi awal...")
+	log.Println("Waiting for informer caches to perform initial synchronization...")
 	if ok := cache.WaitForCacheSync(stopCh, c.podsSynced); !ok {
-		return fmt.Errorf("gagal mensinkronisasikan caches dengan kubernetes")
+		return fmt.Errorf("failed to synchronize caches with kubernetes")
 	}
 
 	// 2. Luncurkan worker
-	log.Println("Memulai pekerja (Workers)...")
+	log.Println("Starting workers...")
 	for i := 0; i < threadiness; i++ {
 		go wait.Until(c.runWorker, time.Second, stopCh)
 	}
 
-	log.Println("Controller berjalan stabil...")
+	log.Println("Controller running stably...")
 	<-stopCh // Tunggu Signal Kill
-	log.Println("Mematikan Pod Controller")
+	log.Println("Shutting down Pod Controller")
 
 	return nil
 }
@@ -180,12 +180,12 @@ func (c *Controller) processNextWorkItem() bool {
 		if err := c.syncHandler(key); err != nil {
 			// Kalau GAGAL, kirim ulang kembali ke Queue (AddRateLimited) agar terjadi Exponential Backoff!
 			c.workqueue.AddRateLimited(key)
-			return fmt.Errorf("error mensinkronisasi '%s': %s, akan dire-queue", key, err.Error())
+			return fmt.Errorf("error synchronizing '%s': %s, will be requeued", key, err.Error())
 		}
 		
 		// Kalau BERHASIL, hapus history rate-limit retry yang lalu (Forget)
 		c.workqueue.Forget(obj)
-		log.Printf("Sukses mensinkronisasikan Pod '%s'", key)
+		log.Printf("Successfully synchronized Pod '%s'", key)
 		return nil
 	}(obj)
 
@@ -205,7 +205,7 @@ func (c *Controller) syncHandler(key string) error {
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			// Pod sudah terhapus murni.
-			log.Printf("Pod %s sudah dihapus dari server.", key)
+			log.Printf("Pod %s already deleted from server.", key)
 			return nil
 		}
 		return err
@@ -213,7 +213,7 @@ func (c *Controller) syncHandler(key string) error {
 
 	// Bisnis Logika: (Misal) Cetak log jika pod mati.
 	if pod.Status.Phase == corev1.PodFailed {
-		log.Printf("Perhatian: Pod %s/%s Failed!", pod.Namespace, pod.Name)
+		log.Printf("Warning: Pod %s/%s Failed!", pod.Namespace, pod.Name)
 		// r.clientset.CoreV1().Pods().Delete(...) // Jika butuh merespon dengan K8s mutasi API.
 	}
 

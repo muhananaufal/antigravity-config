@@ -90,16 +90,16 @@ func SetupPropagator() {
 // dari sesi yang sudah diverifikasi — bukan dari header masuk. Lihat Anti-Pattern 4.
 func InjectTenantBaggage(ctx context.Context, info TenantInfo) (context.Context, error) {
 	if info.ID == "" {
-		return ctx, fmt.Errorf("tenant ID tidak boleh kosong")
+		return ctx, fmt.Errorf("tenant ID must not be empty")
 	}
 
 	mID, err := baggage.NewMember("tenant_id", info.ID)
 	if err != nil {
-		return ctx, fmt.Errorf("anggota baggage tenant_id tidak valid: %w", err)
+		return ctx, fmt.Errorf("invalid tenant_id baggage member: %w", err)
 	}
 	mTier, err := baggage.NewMember("user_tier", info.Tier)
 	if err != nil {
-		return ctx, fmt.Errorf("anggota baggage user_tier tidak valid: %w", err)
+		return ctx, fmt.Errorf("invalid user_tier baggage member: %w", err)
 	}
 
 	// baggage.New menegakkan batas W3C (180 anggota, 4096 byte per anggota,
@@ -155,19 +155,19 @@ func InjectBaggageToOutgoing(ctx context.Context, req *http.Request) {
 // Pemanggil yang bertanggung jawab membuktikan tier itu tepercaya — memindahkan
 // pembacaan baggage ke dalam fungsi ini menyembunyikan asal-usul nilainya dan
 // membuat eskalasi tier tidak terlihat saat code review.
-func HargaSetelahDiskon(hargaSen int64, tier string) int64 {
-	var potonganPersen int64
+func PriceAfterDiscount(hargaSen int64, tier string) int64 {
+	var discountPercent int64
 	switch tier {
 	case "gold":
-		potonganPersen = 10
+		discountPercent = 10
 	case "platinum":
-		potonganPersen = 20
+		discountPercent = 20
 	default:
 		return hargaSen
 	}
 	// Pembulatan ke bawah yang eksplisit dan deterministik. float64 untuk uang
 	// menghasilkan selisih yang tidak bisa direkonsiliasi dengan pembukuan.
-	return hargaSen - (hargaSen*potonganPersen)/100
+	return hargaSen - (hargaSen*discountPercent)/100
 }
 ```
 
@@ -198,7 +198,7 @@ func TestInjectTenantBaggage_Valid(t *testing.T) {
 
 func TestInjectTenantBaggage_IDKosong(t *testing.T) {
 	if _, err := InjectTenantBaggage(context.Background(), TenantInfo{Tier: "gold"}); err == nil {
-		t.Error("mau galat untuk tenant ID kosong, dapat nil")
+		t.Error("want error for empty tenant ID, got nil")
 	}
 }
 
@@ -263,7 +263,7 @@ func TestPropagasiInternalE2E(t *testing.T) {
 func TestHargaSetelahDiskon(t *testing.T) {
 	tests := []struct {
 		tier string
-		sen  int64
+		cents  int64
 		mau  int64
 	}{
 		{"gold", 10000, 9000},
@@ -277,8 +277,8 @@ func TestHargaSetelahDiskon(t *testing.T) {
 		{"gold", 1015, 914},
 	}
 	for _, tt := range tests {
-		if got := HargaSetelahDiskon(tt.sen, tt.tier); got != tt.mau {
-			t.Errorf("HargaSetelahDiskon(%d, %q) = %d, mau %d", tt.sen, tt.tier, got, tt.mau)
+		if got := PriceAfterDiscount(tt.cents, tt.tier); got != tt.mau {
+			t.Errorf("HargaSetelahDiskon(%d, %q) = %d, mau %d", tt.cents, tt.tier, got, tt.mau)
 		}
 	}
 }
@@ -356,7 +356,7 @@ Ini kesalahan paling mahal di berkas ini, dan yang paling sering lolos review ka
 // BAD: tier dibaca dari baggage, di layanan yang bisa dijangkau dari internet
 func HargaFinal(ctx context.Context, hargaSen int64) int64 {
     tenant, _ := ExtractTenantInfo(ctx)
-    return HargaSetelahDiskon(hargaSen, tenant.Tier)
+    return PriceAfterDiscount(hargaSen, tenant.Tier)
 }
 ```
 
@@ -372,12 +372,12 @@ Dan bila `tenant_id` juga diambil dari sana, yang Anda buka bukan lagi soal harg
 // GOOD: tepi publik membuang baggage kiriman, lalu membangunnya ULANG dari
 // identitas yang sudah diautentikasi.
 func EdgeHandler(w http.ResponseWriter, r *http.Request) {
-    sesi, err := AutentikasiSesi(r) // sumber kebenaran satu-satunya
+    session, err := AutentikasiSesi(r) // sumber kebenaran satu-satunya
     if err != nil {
         http.Error(w, "unauthorized", http.StatusUnauthorized)
         return
     }
-    ctx, err := InjectTenantBaggage(r.Context(), TenantInfo{ID: sesi.TenantID, Tier: sesi.Tier})
+    ctx, err := InjectTenantBaggage(r.Context(), TenantInfo{ID: session.TenantID, Tier: session.Tier})
     if err != nil {
         http.Error(w, "internal", http.StatusInternalServerError)
         return

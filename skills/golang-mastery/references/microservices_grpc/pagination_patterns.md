@@ -100,8 +100,8 @@ const (
 )
 
 var (
-	ErrCursorTidakValid = errors.New("pagination: cursor tidak valid")
-	ErrArahBerubah      = errors.New("pagination: urutan berubah di tengah penelusuran")
+	ErrCursorTidakValid = errors.New("pagination: invalid cursor")
+	ErrArahBerubah      = errors.New("pagination: sort order changed mid-traversal")
 )
 
 // Cursor menandai posisi terakhir yang sudah dikembalikan.
@@ -286,7 +286,7 @@ func TestCursor_BolakBalikUtuh(t *testing.T) {
 func TestUraiCursor_MenolakMasukanRusak(t *testing.T) {
 	for _, s := range []string{"bukan-base64!!", "eyJ4Ijox", "///"} {
 		if _, err := UraiCursor(s, "waktu_desc"); !errors.Is(err, ErrCursorTidakValid) {
-			t.Errorf("%q harus ditolak sebagai cursor tidak valid, dapat %v", s, err)
+			t.Errorf("%q should be rejected as invalid cursor, got %v", s, err)
 		}
 	}
 }
@@ -297,7 +297,7 @@ func TestUraiCursor_MendeteksiPerubahanUrutan(t *testing.T) {
 	c := Cursor{Waktu: time.Now(), ID: 1, Urut: "waktu_desc"}
 	s, _ := c.Sandi()
 	if _, err := UraiCursor(s, "judul_asc"); !errors.Is(err, ErrArahBerubah) {
-		t.Fatalf("perubahan urutan harus terdeteksi, dapat %v", err)
+		t.Fatalf("sort order change should be detected, got %v", err)
 	}
 }
 
@@ -312,13 +312,13 @@ func TestBangun_BarisEkstraTidakDikembalikan(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(h.Data) != 3 {
-		t.Fatalf("mau 3 baris, dapat %d", len(h.Data))
+		t.Fatalf("expected 3 rows, got %d", len(h.Data))
 	}
 	if !h.AdaBerikutnya {
-		t.Error("baris ke-4 menandakan masih ada halaman berikutnya")
+		t.Error("4th row indicates there is a next page")
 	}
 	if h.CursorBerikut == "" {
-		t.Error("cursor berikutnya wajib ada bila masih ada halaman")
+		t.Error("next cursor is required when there are more pages")
 	}
 }
 
@@ -329,10 +329,10 @@ func TestBangun_HalamanTerakhirTanpaCursor(t *testing.T) {
 		t.Fatal(err)
 	}
 	if h.AdaBerikutnya {
-		t.Error("hasil lebih sedikit dari batas berarti halaman terakhir")
+		t.Error("fewer results than limit means it is the last page")
 	}
 	if h.CursorBerikut != "" {
-		t.Error("halaman terakhir tidak boleh mengirim cursor")
+		t.Error("last page should not send a cursor")
 	}
 }
 
@@ -342,7 +342,7 @@ func TestBangun_HasilKosong(t *testing.T) {
 		t.Fatal(err)
 	}
 	if h.AdaBerikutnya || h.CursorBerikut != "" {
-		t.Error("hasil kosong tidak boleh menjanjikan halaman berikutnya")
+		t.Error("empty result must not promise a next page")
 	}
 }
 

@@ -120,7 +120,7 @@ func writeError(w http.ResponseWriter, status int, detail string) {
 }
 
 // tokenUji adalah kredensial fixture untuk contoh di berkas ini.
-const tokenUji = "valid-test-token"
+const testToken = "valid-test-token"
 
 // AuthMiddleware adalah contoh JWT middleware yang akan di-test.
 func AuthMiddleware(next http.Handler) http.Handler {
@@ -139,8 +139,8 @@ func AuthMiddleware(next http.Handler) http.Handler {
 		// bentuk yang ditiru orang dari berkas referensi adalah bentuk yang
 		// tertulis di sini — dan perbandingan token bearer dengan `!=`
 		// membocorkan informasi lewat waktu respons.
-		if subtle.ConstantTimeCompare([]byte(token), []byte(tokenUji)) != 1 {
-			writeError(w, http.StatusUnauthorized, "token tidak valid atau kedaluwarsa")
+		if subtle.ConstantTimeCompare([]byte(token), []byte(testToken)) != 1 {
+			writeError(w, http.StatusUnauthorized, "invalid or expired token")
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -210,34 +210,34 @@ func TestUserHandler_Recorder(t *testing.T) {
 // dan setiap golden test MENULIS ULANG berkas acuannya lalu lulus tanpa
 // membandingkan apa pun — selamanya, tanpa gejala. Flag `-update` hanya bisa
 // muncul bila seseorang mengetiknya di baris perintah.
-var perbaruiGolden = flag.Bool("update", false, "tulis ulang berkas golden")
+var updateGolden = flag.Bool("update", false, "tulis ulang berkas golden")
 
 // assertGoldenFile membandingkan body dengan berkas golden.
 // Jalankan `go test ./... -update` untuk memperbaruinya.
-func assertGoldenFile(t *testing.T, namaUji string, got []byte) {
+func assertGoldenFile(t *testing.T, testName string, got []byte) {
 	t.Helper()
 
-	nama := strings.ReplaceAll(namaUji, " ", "_") + ".golden"
-	jalur := filepath.Join("testdata", "golden", nama)
+	name := strings.ReplaceAll(testName, " ", "_") + ".golden"
+	path := filepath.Join("testdata", "golden", name)
 
-	if *perbaruiGolden {
-		require.NoError(t, os.MkdirAll(filepath.Dir(jalur), 0o755))
-		require.NoError(t, os.WriteFile(jalur, got, 0o644))
-		t.Logf("berkas golden diperbarui: %s", jalur)
+	if *updateGolden {
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		require.NoError(t, os.WriteFile(path, got, 0o644))
+		t.Logf("golden file updated: %s", path)
 		return
 	}
 
-	harap, err := os.ReadFile(jalur)
+	expected, err := os.ReadFile(path)
 	// errors.Is, bukan os.IsNotExist: yang kedua tidak membuka bungkus galat,
 	// sehingga galat yang dibungkus lapisan lain lolos ke require.NoError dan
 	// muncul sebagai kegagalan yang membingungkan alih-alih pesan yang jelas.
 	if errors.Is(err, fs.ErrNotExist) {
-		t.Fatalf("berkas golden tidak ada: %s\nJalankan dengan -update untuk membuatnya", jalur)
+		t.Fatalf("golden file missing: %s\nRun with -update to create it", path)
 	}
 	require.NoError(t, err)
 
-	assert.JSONEq(t, string(harap), string(got),
-		"respons tidak cocok dengan berkas golden %s", jalur)
+	assert.JSONEq(t, string(expected), string(got),
+		"response does not match golden file %s", path)
 }
 
 // --- Level 2: Full Server Test dengan Middleware Chain ---
@@ -306,29 +306,29 @@ func TestUserHandler_ConcurrentRequests(t *testing.T) {
 	ts := newTestServer(t)
 	client := ts.Client()
 
-	const jumlahPekerja = 20
-	galat := make(chan error, jumlahPekerja)
+	const workerCount = 20
+	errs := make(chan error, workerCount)
 
 	// Semua goroutine dilepas bersamaan. Tanpa gerbang ini, goroutine
 	// pertama biasanya sudah selesai sebelum yang terakhir dibuat, sehingga
 	// "uji konkuren" praktis berjalan berurutan dan tidak pernah menekan
 	// jalur yang ingin diperiksa.
-	gerbang := make(chan struct{})
+	gate := make(chan struct{})
 
-	for i := 0; i < jumlahPekerja; i++ {
+	for i := 0; i < workerCount; i++ {
 		go func() {
-			<-gerbang
+			<-gate
 
 			req, err := http.NewRequest(http.MethodGet, ts.URL+"/users/101", nil)
 			if err != nil {
-				galat <- err // galat TIDAK dibuang dengan `_`
+				errs <- err // galat TIDAK dibuang dengan `_`
 				return
 			}
-			req.Header.Set("Authorization", "Bearer "+tokenUji)
+			req.Header.Set("Authorization", "Bearer "+testToken)
 
 			resp, err := client.Do(req)
 			if err != nil {
-				galat <- err
+				errs <- err
 				return
 			}
 			defer resp.Body.Close()
@@ -338,22 +338,22 @@ func TestUserHandler_ConcurrentRequests(t *testing.T) {
 			// yang diuji berubah menjadi kemampuan menerima koneksi, bukan
 			// keamanan handler terhadap akses bersamaan.
 			if _, err := io.Copy(io.Discard, resp.Body); err != nil {
-				galat <- err
+				errs <- err
 				return
 			}
 			if resp.StatusCode != http.StatusOK {
-				galat <- fmt.Errorf("status tak terduga: %d", resp.StatusCode)
+				errs <- fmt.Errorf("unexpected status: %d", resp.StatusCode)
 				return
 			}
-			galat <- nil
+			errs <- nil
 		}()
 	}
 
-	close(gerbang)
+	close(gate)
 
-	for i := 0; i < jumlahPekerja; i++ {
-		if err := <-galat; err != nil {
-			t.Errorf("permintaan konkuren gagal: %v", err)
+	for i := 0; i < workerCount; i++ {
+		if err := <-errs; err != nil {
+			t.Errorf("concurrent request failed: %v", err)
 		}
 	}
 }

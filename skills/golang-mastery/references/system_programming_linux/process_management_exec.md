@@ -154,7 +154,7 @@ func LaunchBackground(ctx context.Context) {
     go func() {
         err := cmd.Wait() // Membersihkan entry di tabel proses OS
         if err != nil {
-            log.Printf("Background process selesai dengan error: %v", err)
+            log.Printf("Background process finished with error: %v", err)
         }
     }()
 }

@@ -104,7 +104,7 @@ func (e MoneyWithdrawn) EventType() string { return "MoneyWithdrawn" }
 var ErrInsufficientFunds = errors.New("insufficient funds")
 var ErrInvalidAmount = errors.New("amount must be greater than zero")
 
-var ErrEventTidakDikenal = errors.New("tipe event tidak dikenal saat replay")
+var ErrUnknownEvent = errors.New("unknown event type during replay")
 
 type BankAccount struct {
 	ID           string
@@ -135,7 +135,7 @@ func (a *BankAccount) Apply(event Event) error {
 	case MoneyWithdrawn:
 		a.BalanceMinor -= e.AmountMinor
 	default:
-		return fmt.Errorf("%w: %q pada agregat %s", ErrEventTidakDikenal, event.EventType(), a.ID)
+		return fmt.Errorf("%w: %q on aggregate %s", ErrUnknownEvent, event.EventType(), a.ID)
 	}
 	a.Version++
 	return nil
@@ -145,7 +145,7 @@ func (a *BankAccount) Apply(event Event) error {
 func (a *BankAccount) Rehydrate(events []Event) error {
 	for i, evt := range events {
 		if err := a.Apply(evt); err != nil {
-			return fmt.Errorf("replay event ke-%d: %w", i, err)
+			return fmt.Errorf("replay event #%d: %w", i, err)
 		}
 	}
 	return nil
@@ -174,7 +174,7 @@ type EventStore interface {
 }
 
 // InMemoryEventStore mensimulasikan database event (production = Postgres/EventStoreDB).
-var ErrKonflikVersi = errors.New("konflik versi agregat")
+var ErrVersionConflict = errors.New("konflik versi agregat")
 
 type InMemoryEventStore struct {
 	// Mutex WAJIB, dan alasannya lebih tajam dari sekadar "map tidak aman".
@@ -201,9 +201,9 @@ func (s *InMemoryEventStore) SaveEvents(ctx context.Context, aggregateID string,
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if versiKini := len(s.events[aggregateID]); expectedVersion != versiKini {
-		return fmt.Errorf("%w: agregat %s diharapkan versi %d, penyimpanan di versi %d",
-			ErrKonflikVersi, aggregateID, expectedVersion, versiKini)
+	if currentVersion := len(s.events[aggregateID]); expectedVersion != currentVersion {
+		return fmt.Errorf("%w: aggregate %s expected version %d, store at version %d",
+			ErrVersionConflict, aggregateID, expectedVersion, currentVersion)
 	}
 	s.events[aggregateID] = append(s.events[aggregateID], events...)
 	// Di sistem nyata: picu Transactional Outbox di transaksi yang SAMA.
@@ -223,8 +223,8 @@ func (s *InMemoryEventStore) GetEvents(ctx context.Context, aggregateID string) 
 	// pemanggil bisa menimpa elemennya — pada penyimpanan yang seluruh
 	// jaminannya adalah APPEND-ONLY. Histori yang bisa diubah pemanggil
 	// bukan histori.
-	asli := s.events[aggregateID]
-	return append([]Event(nil), asli...), nil
+	original := s.events[aggregateID]
+	return append([]Event(nil), original...), nil
 }
 
 // ==========================================
@@ -263,10 +263,10 @@ func TestBankAccount_CQRS(t *testing.T) {
 	}
 
 	if account.Version != 1 {
-		t.Errorf("versi = %d, mau 1", account.Version)
+		t.Errorf("version = %d, want 1", account.Version)
 	}
 	if account.BalanceMinor != 10_000 {
-		t.Errorf("saldo = %d, mau 10000", account.BalanceMinor)
+		t.Errorf("balance = %d, want 10000", account.BalanceMinor)
 	}
 
 	// C. Eksekusi Business Logic Command (penarikan 40,00)
@@ -285,17 +285,17 @@ func TestBankAccount_CQRS(t *testing.T) {
 	
 	// Coba withdraw melebihi saldo baru (60)
 	if err := account.Rehydrate(newEvents); err != nil {
-		t.Fatalf("Rehydrate event baru: %v", err)
+		t.Fatalf("Rehydrate new events: %v", err)
 	}
 	if _, err := account.Withdraw(99_900); !errors.Is(err, ErrInsufficientFunds) {
-		t.Errorf("galat = %v, mau ErrInsufficientFunds", err)
+		t.Errorf("error = %v, want ErrInsufficientFunds", err)
 	}
 }
 
-// eventAsing meniru event yang diterbitkan versi kode LEBIH BARU.
-type eventAsing struct{}
+// foreignEvent meniru event yang diterbitkan versi kode LEBIH BARU.
+type foreignEvent struct{}
 
-func (eventAsing) EventType() string { return "FiturBaruDeposit" }
+func (foreignEvent) EventType() string { return "NewFeatureDeposit" }
 
 // Replay yang menemui event tak dikenal WAJIB gagal keras.
 //
@@ -305,12 +305,13 @@ func (eventAsing) EventType() string { return "FiturBaruDeposit" }
 // tanpa satu pun galat di mana pun.
 func TestRehydrate_EventTakDikenalDitolak(t *testing.T) {
 	akun := NewBankAccount("acc-x")
-	err := akun.Rehydrate([]Event{
+	akunEvents := []Event{
 		MoneyDeposited{AmountMinor: 5_000},
-		eventAsing{},
-	})
-	if !errors.Is(err, ErrEventTidakDikenal) {
-		t.Fatalf("galat = %v, mau ErrEventTidakDikenal", err)
+		foreignEvent{},
+	}
+	err := akun.Rehydrate(akunEvents)
+	if !errors.Is(err, ErrUnknownEvent) {
+		t.Fatalf("error = %v, want ErrUnknownEvent", err)
 	}
 }
 ```

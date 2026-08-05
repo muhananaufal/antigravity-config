@@ -241,21 +241,21 @@ func TestSignalGracefulShutdown(t *testing.T) {
 	// Menggunakan os.Process.Signal mengirim sinyal ke diri sendiri
 	process, err := os.FindProcess(os.Getpid())
 	if err != nil {
-		t.Fatalf("Gagal mendapat pid: %v", err)
+		t.Fatalf("Failed to get pid: %v", err)
 	}
 	
 	if err := process.Signal(syscall.SIGTERM); err != nil {
-		t.Fatalf("Gagal mengirim SIGTERM: %v", err)
+		t.Fatalf("Failed to send SIGTERM: %v", err)
 	}
 
 	// Tunggu aplikasi mati
 	select {
 	case err := <-appDone:
 		if err != nil {
-			t.Errorf("Aplikasi tidak mati dengan wajar: %v", err)
+			t.Errorf("Application did not shut down gracefully: %v", err)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatalf("Aplikasi hang! Tidak merespons SIGTERM dalam 5 detik")
+		t.Fatalf("Application hangs! Not responding to SIGTERM within 5 seconds")
 	}
 }
 
@@ -268,20 +268,20 @@ func TestSIGHUPReloadSimulation(t *testing.T) {
 
 	process, err := os.FindProcess(os.Getpid())
 	if err != nil {
-		t.Fatalf("Gagal mendapat pid: %v", err)
+		t.Fatalf("Failed to get pid: %v", err)
 	}
 
 	// Kirim SIGHUP (biasanya untuk reload config)
 	if err := process.Signal(syscall.SIGHUP); err != nil {
-		t.Fatalf("Gagal mengirim SIGHUP: %v", err)
+		t.Fatalf("Failed to send SIGHUP: %v", err)
 	}
 
 	select {
 	case <-sigChan:
 		// Berhasil ditangkap
-		t.Log("SIGHUP berhasil diterima, simulasi reload config")
+		t.Log("SIGHUP received, simulating config reload")
 	case <-time.After(1 * time.Second):
-		t.Fatalf("Gagal menangkap SIGHUP tepat waktu")
+		t.Fatalf("Failed to catch SIGHUP in time")
 	}
 }
 
@@ -300,22 +300,22 @@ func TestSignalToOtherProcess_RootOnly(t *testing.T) {
 	attr := &os.ProcAttr{Files: []*os.File{os.Stdin, os.Stdout, os.Stderr}}
 	proc, err := os.StartProcess("/bin/sleep", []string{"sleep", "10"}, attr)
 	if err != nil {
-		t.Fatalf("Gagal membuat dummy child process: %v", err)
+		t.Fatalf("Failed to create dummy child process: %v", err)
 	}
 
 	// Kirim SIGTERM ke child process
 	if err := proc.Signal(syscall.SIGTERM); err != nil {
-		t.Fatalf("Gagal mengirim sinyal ke child: %v", err)
+		t.Fatalf("Failed to send signal to child: %v", err)
 	}
 
 	// Menunggu exit (reaping)
 	state, err := proc.Wait()
 	if err != nil {
-		t.Fatalf("Gagal wait child: %v", err)
+		t.Fatalf("Failed to wait child: %v", err)
 	}
 
 	if state.ExitCode() == 0 {
-		t.Logf("Proses child berhasil diterminate, Exit Code: %d (tergantung implementasi shell/sleep)", state.ExitCode())
+		t.Logf("Child process successfully terminated, Exit Code: %d (depends on shell/sleep implementation)", state.ExitCode())
 	}
 }
 ```

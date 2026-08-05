@@ -41,20 +41,20 @@ func ExportMillionRows(ctx context.Context, filePath string, totalRows int) erro
 	f := excelize.NewFile()
 	defer func() {
 		if err := f.Close(); err != nil {
-			fmt.Printf("Gagal menutup file: %v\n", err)
+			fmt.Printf("failed to close file: %v\n", err)
 		}
 	}()
 
 	sheetName := "Sheet1"
 	sw, err := f.NewStreamWriter(sheetName)
 	if err != nil {
-		return fmt.Errorf("gagal membuat stream writer: %w", err)
+		return fmt.Errorf("failed to create stream writer: %w", err)
 	}
 
 	// Tulis Header
-	header := []interface{}{"ID", "Nama", "Transaksi", "Waktu", "Status"}
+	header := []interface{}{"ID", "Name", "Transaction", "Time", "Status"}
 	if err := sw.SetRow("A1", header); err != nil {
-		return fmt.Errorf("gagal menulis header: %w", err)
+		return fmt.Errorf("failed to write header: %w", err)
 	}
 
 	// Tulis Baris Data (Batching & Context Cancellation Check)
@@ -63,14 +63,14 @@ func ExportMillionRows(ctx context.Context, filePath string, totalRows int) erro
 		if i%1000 == 0 {
 			select {
 			case <-ctx.Done():
-				return fmt.Errorf("operasi dibatalkan: %w", ctx.Err())
+				return fmt.Errorf("operation cancelled: %w", ctx.Err())
 			default:
 			}
 		}
 
 		cell, err := excelize.CoordinatesToCellName(1, i+1)
 		if err != nil {
-			return fmt.Errorf("koordinat cell tidak valid pada baris %d: %w", i, err)
+			return fmt.Errorf("invalid cell coordinate at row %d: %w", i, err)
 		}
 
 		rowData := []interface{}{
@@ -82,17 +82,17 @@ func ExportMillionRows(ctx context.Context, filePath string, totalRows int) erro
 		}
 
 		if err := sw.SetRow(cell, rowData); err != nil {
-			return fmt.Errorf("gagal menulis baris %d: %w", i, err)
+			return fmt.Errorf("failed to write row %d: %w", i, err)
 		}
 	}
 
 	// PENTING: Wajib Flush sebelum disimpan
 	if err := sw.Flush(); err != nil {
-		return fmt.Errorf("gagal melakukan flush stream writer: %w", err)
+		return fmt.Errorf("failed to flush stream writer: %w", err)
 	}
 
 	if err := f.SaveAs(filePath); err != nil {
-		return fmt.Errorf("gagal menyimpan file %s: %w", filePath, err)
+		return fmt.Errorf("failed to save file %s: %w", filePath, err)
 	}
 
 	return nil
@@ -102,13 +102,13 @@ func ExportMillionRows(ctx context.Context, filePath string, totalRows int) erro
 func ReadStreaming(ctx context.Context, filePath string) (int, error) {
 	f, err := excelize.OpenFile(filePath)
 	if err != nil {
-		return 0, fmt.Errorf("gagal membuka file Excel: %w", err)
+		return 0, fmt.Errorf("failed to open Excel file: %w", err)
 	}
 	defer f.Close()
 
 	rows, err := f.Rows("Sheet1")
 	if err != nil {
-		return 0, fmt.Errorf("gagal membaca baris: %w", err)
+		return 0, fmt.Errorf("failed to read rows: %w", err)
 	}
 
 	count := 0
@@ -117,14 +117,14 @@ func ReadStreaming(ctx context.Context, filePath string) (int, error) {
 		if count%1000 == 0 {
 			select {
 			case <-ctx.Done():
-				return count, fmt.Errorf("pembacaan dibatalkan: %w", ctx.Err())
+				return count, fmt.Errorf("reading cancelled: %w", ctx.Err())
 			default:
 			}
 		}
 		
 		row, err := rows.Columns()
 		if err != nil {
-			return count, fmt.Errorf("gagal memparsing kolom di baris %d: %w", count, err)
+			return count, fmt.Errorf("failed to parse columns at row %d: %w", count, err)
 		}
 		
 		// Proses data baris (simulasi)
@@ -133,7 +133,7 @@ func ReadStreaming(ctx context.Context, filePath string) (int, error) {
 	}
 
 	if err := rows.Error(); err != nil {
-		return count, fmt.Errorf("error selama iterasi baris: %w", err)
+		return count, fmt.Errorf("error during row iteration: %w", err)
 	}
 
 	return count, nil
@@ -154,7 +154,7 @@ func BenchmarkExportMillionRows(b *testing.B) {
 		// Uji dengan 100,000 baris untuk benchmark cepat
 		err := ExportMillionRows(context.Background(), tempFile, 100000)
 		if err != nil {
-			b.Fatalf("Gagal export: %v", err)
+			b.Fatalf("failed to export: %v", err)
 		}
 	}
 }
@@ -180,7 +180,7 @@ func TestStreamWriterReader(t *testing.T) {
 	// Baris data (50000) + 1 baris header
 	expected := totalRows + 1
 	if readCount != expected {
-		t.Errorf("Ekspektasi %d baris, mendapatkan %d baris", expected, readCount)
+		t.Errorf("expected %d rows, got %d rows", expected, readCount)
 	}
 }
 ```

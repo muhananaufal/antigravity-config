@@ -214,7 +214,7 @@ func samarkan(err error, cfg Config) error {
 func BukaPool(ctx context.Context, cfg Config, ttlLease time.Duration) (*sql.DB, error) {
 	db, err := sql.Open("pgx", cfg.DSN().Ungkap())
 	if err != nil {
-		return nil, fmt.Errorf("buka pool untuk host %s: %w", cfg.DBHost, samarkan(err, cfg))
+		return nil, fmt.Errorf("failed to open pool for host %s: %w", cfg.DBHost, samarkan(err, cfg))
 	}
 
 	db.SetConnMaxLifetime(ttlLease * 3 / 4) // margin sebelum lease dicabut
@@ -225,7 +225,7 @@ func BukaPool(ctx context.Context, cfg Config, ttlLease time.Duration) (*sql.DB,
 	defer batal()
 	if err := db.PingContext(pingCtx); err != nil {
 		_ = db.Close()
-		return nil, fmt.Errorf("kredensial baru tidak dapat dipakai: %w", samarkan(err, cfg))
+		return nil, fmt.Errorf("new credentials cannot be used: %w", samarkan(err, cfg))
 	}
 	return db, nil
 }
@@ -266,14 +266,14 @@ func NewConfigManager(ctx context.Context, awal Config, terapkan Terapkan, jedaT
 // buruk itu, dan tidak ada jalan mundur.
 func (cm *ConfigManager) Muat(ctx context.Context, baru Config) error {
 	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("context batal sebelum muat: %w", err)
+		return fmt.Errorf("context canceled before loading: %w", err)
 	}
 
 	poolBaru, err := cm.terapkan(ctx, baru)
 	if err != nil {
 		// Konfigurasi lama DIPERTAHANKAN.
-		slog.ErrorContext(ctx, "konfigurasi baru ditolak, tetap memakai yang lama", "galat", err)
-		return fmt.Errorf("terapkan konfigurasi baru: %w", err)
+		slog.ErrorContext(ctx, "new configuration rejected, retaining old one", "error", err)
+		return fmt.Errorf("failed to apply new configuration: %w", err)
 	}
 
 	lama := cm.pool.Swap(poolBaru)
@@ -286,7 +286,7 @@ func (cm *ConfigManager) Muat(ctx context.Context, baru Config) error {
 		go func() {
 			time.Sleep(cm.jedaTutup)
 			if err := lama.Close(); err != nil {
-				slog.Error("gagal menutup pool lama", "galat", err)
+				slog.Error("failed to close old pool", "error", err)
 			}
 		}()
 	}
@@ -341,26 +341,26 @@ func TestRahasiaTidakBocorLewatFormat(t *testing.T) {
 	}
 	for nama, keluaran := range jalur {
 		if strings.Contains(keluaran, sandiUji) {
-			t.Errorf("BOCOR lewat %s: %s", nama, keluaran)
+			t.Errorf("LEAKED via %s: %s", nama, keluaran)
 		}
 		if !strings.Contains(keluaran, disamarkan) {
-			t.Errorf("%s tidak memuat penanda penyamaran: %s", nama, keluaran)
+			t.Errorf("%s does not contain redaction marker: %s", nama, keluaran)
 		}
 	}
 }
 
 func TestGalatDisamarkanTanpaMemutusRantai(t *testing.T) {
 	cfg := Config{DBPass: sandiUji}
-	asal := errors.New("koneksi gagal: password=" + sandiUji)
+	asal := errors.New("connection failed: password=" + sandiUji)
 	tersamar := samarkan(asal, cfg)
 
 	if strings.Contains(tersamar.Error(), sandiUji) {
-		t.Fatalf("kata sandi masih ada di pesan galat: %s", tersamar)
+		t.Fatalf("password is still present in error message: %s", tersamar)
 	}
 	// errors.Is harus tetap bekerja — penyamaran tidak boleh menghapus
 	// kemampuan pemanggil memeriksa jenis galat.
 	if !errors.Is(tersamar, asal) {
-		t.Fatal("rantai galat terputus oleh penyamaran")
+		t.Fatal("error chain broken by redaction")
 	}
 }
 
@@ -370,7 +370,7 @@ func TestKonfigurasiBurukTidakMenggantikanYangSehat(t *testing.T) {
 	gagalkan := false
 	terapkan := func(context.Context, Config) (*sql.DB, error) {
 		if gagalkan {
-			return nil, errors.New("kredensial ditolak basis data")
+			return nil, errors.New("credentials rejected by database")
 		}
 		return nil, nil // pool nil cukup untuk uji ini
 	}
@@ -382,10 +382,10 @@ func TestKonfigurasiBurukTidakMenggantikanYangSehat(t *testing.T) {
 
 	gagalkan = true
 	if err := cm.Muat(ctx, Config{DBUser: "v_2"}); err == nil {
-		t.Fatal("konfigurasi yang gagal diterapkan justru diterima")
+		t.Fatal("configuration that failed to apply was accepted")
 	}
 	if got := cm.GetConfig().DBUser; got != "v_1" {
-		t.Fatalf("DBUser = %q setelah pemuatan gagal, mau tetap v_1 — kredensial buruk terpasang dan yang sehat hilang", got)
+		t.Fatalf("DBUser = %q after failed load, expected v_1 — bad credentials installed and healthy ones lost", got)
 	}
 }
 
@@ -414,7 +414,7 @@ func TestPembacaanKonkurenSaatRotasi(t *testing.T) {
 					return
 				default:
 					if cm.GetConfig().DBUser == "" {
-						t.Error("konfigurasi terbaca kosong di tengah rotasi")
+						t.Error("configuration read as empty during rotation")
 						return
 					}
 				}
@@ -424,7 +424,7 @@ func TestPembacaanKonkurenSaatRotasi(t *testing.T) {
 
 	for i := 1; i <= 50; i++ {
 		if err := cm.Muat(ctx, Config{DBUser: fmt.Sprintf("v_%d", i)}); err != nil {
-			t.Errorf("Muat ke-%d: %v", i, err)
+			t.Errorf("load attempt %d: %v", i, err)
 		}
 	}
 	close(berhenti)

@@ -83,7 +83,7 @@ func NewGroupcacheManager(selfAddr string, db DBClient, peers []string) *Groupca
 		
 		data, err := db.GetUser(ctx, key)
 		if err != nil {
-			return fmt.Errorf("gagal mengambil data pengguna dari DB: %w", err)
+			return fmt.Errorf("failed to fetch user data from DB: %w", err)
 		}
 
 		// Masukkan data ke Sink
@@ -106,7 +106,7 @@ func (gm *GroupcacheManager) GetUser(ctx context.Context, key string) (string, e
 	// StringSink bertindak sebagai receiver dari data yang ditemukan di cache
 	err := gm.group.Get(ctx, key, groupcache.StringSink(&data))
 	if err != nil {
-		return "", fmt.Errorf("groupcache gagal mendapatkan kunci %s: %w", key, err)
+		return "", fmt.Errorf("groupcache failed to get key %s: %w", key, err)
 	}
 	
 	return data, nil
@@ -163,7 +163,7 @@ func TestGroupcacheSingleFlight(t *testing.T) {
 				t.Errorf("Get error: %v", err)
 			}
 			if result != "Data_Untuk_user_1001" {
-				t.Errorf("Data tidak sesuai")
+				t.Errorf("Data mismatch")
 			}
 			done <- true
 		}()
@@ -175,7 +175,7 @@ func TestGroupcacheSingleFlight(t *testing.T) {
 
 	// Karena ada perlindungan SingleFlight, DB GetUser seharusnya dipanggil maksimal 1 kali saja
 	if mockDB.callCount > 1 {
-		t.Errorf("SingleFlight gagal! DB dipanggil %d kali, padahal seharusnya 1 kali", mockDB.callCount)
+		t.Errorf("SingleFlight failed! DB called %d times, expected 1 time", mockDB.callCount)
 	}
 }
 ```

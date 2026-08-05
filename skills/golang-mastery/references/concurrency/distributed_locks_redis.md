@@ -122,7 +122,7 @@ func TestRedisDistributedMutex(t *testing.T) {
 	// CATATAN: Untuk unit test yang bersih di Production CI/CD, 
 	// Anda WAJIB menggunakan library `alicebob/miniredis/v2` atau `testcontainers-go`.
 	// Untuk keamanan, test ini dilewati secara default jika tak ada instruksi mock eksplisit.
-	t.Skip("Membutuhkan instance redis-server (atau mock seperti miniredis) di localhost:6379")
+	t.Skip("requires running redis-server (or mock like miniredis) on localhost:6379")
 
 	client := redis.NewClient(&redis.Options{Addr: "localhost:6379"})
 	defer client.Close()
@@ -251,7 +251,7 @@ func LockAndKeepAlive(ctx context.Context) {
 ```bash
 # Lock yang tertinggal dan TTL-nya. -1 berarti TANPA kedaluwarsa: bom waktu.
 redis-cli --scan --pattern 'lock:*' | head -20
-redis-cli ttl lock:migrasi-harian
+redis-cli ttl lock:daily-migration
 
 # Apakah lock hilang karena pergantian peran?
 redis-cli info replication | grep -E 'role|master_link_status|slave_repl_offset'
@@ -264,5 +264,5 @@ redis-cli slowlog get 10
 ```bash
 # Job yang berjalan dua kali meninggalkan dua baris "mulai" untuk satu jadwal
 kubectl logs -l app=worker --since=24h \
-  | grep 'job_mulai' | jq -r '.jadwal_id' | sort | uniq -c | awk '$1 > 1'
+  | grep 'job_started' | jq -r '.schedule_id' | sort | uniq -c | awk '$1 > 1'
 ```

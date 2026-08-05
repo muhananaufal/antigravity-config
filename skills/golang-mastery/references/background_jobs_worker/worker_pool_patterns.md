@@ -122,7 +122,7 @@ func ProcessWithSemaphore(ctx context.Context, jobs []Job, limit int64) error {
 	for _, j := range jobs {
 		// Acquire token
 		if err := sem.Acquire(ctx, 1); err != nil {
-			return fmt.Errorf("gagal acquire semaphore: %w", err)
+			return fmt.Errorf("failed to acquire semaphore: %w", err)
 		}
 
 		go func(job Job) {
@@ -145,7 +145,7 @@ func ProcessWithSemaphore(ctx context.Context, jobs []Job, limit int64) error {
 
 	// Wait all acquires (Trick: acquire full weight)
 	if err := sem.Acquire(ctx, limit); err != nil {
-		return fmt.Errorf("gagal menunggu seluruh job selesai: %w", err)
+		return fmt.Errorf("failed to wait for all jobs to complete: %w", err)
 	}
 	close(errChan)
 
@@ -249,7 +249,7 @@ func (s *Server) workerLoop(ctx context.Context, id int) {
 	for {
 		select {
 		case <-s.quit:
-			log.Printf("Worker %d menerima sinyal quit, shutting down...", id)
+			log.Printf("Worker %d received quit signal, shutting down...", id)
 			return
 		case job, ok := <-s.jobQueue:
 			if !ok {
@@ -257,7 +257,7 @@ func (s *Server) workerLoop(ctx context.Context, id int) {
 			}
 			// Simulasi DB Insert batching atau proses lambat
 			time.Sleep(100 * time.Millisecond)
-			log.Printf("Worker %d menyelesaikan job %d", id, job.ID)
+			log.Printf("Worker %d completed job %d", id, job.ID)
 		}
 	}
 }
@@ -273,7 +273,7 @@ func (s *Server) SubmitJob(j Job) error {
 
 // GracefulShutdown menutup server dengan timeout
 func (s *Server) GracefulShutdown(timeout time.Duration) {
-	log.Println("Memulai graceful shutdown...")
+	log.Println("Starting graceful shutdown...")
 	close(s.quit) // Stop semua worker menerima dari s.quit, tapi jobQueue mungkin masih ada data
 
 	done := make(chan struct{})
@@ -284,9 +284,9 @@ func (s *Server) GracefulShutdown(timeout time.Duration) {
 
 	select {
 	case <-done:
-		log.Println("Semua worker berhasil shutdown (graceful).")
+		log.Println("All workers successfully shut down (graceful).")
 	case <-time.After(timeout):
-		log.Println("Timeout tercapai, memaksa exit (hard shutdown).")
+		log.Println("Timeout reached, forcing exit (hard shutdown).")
 	}
 }
 ```

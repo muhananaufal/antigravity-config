@@ -334,20 +334,6 @@ err := ExecuteSerializableTx(ctx, pool, opts, logger, func(ctx context.Context, 
    Yang benar untuk *cleanup*: pakai konteks yang **tidak ikut dibatalkan**, dengan batas waktu pendek agar tetap tidak menggantung.
    ```go
    defer func() {
-       // context.WithoutCancel mempertahankan nilai (TraceID) tetapi memutus
-       // rantai pembatalan, sehingga ROLLBACK benar-benar terkirim ke server
-       // dan koneksinya bisa dipakai ulang.
-       rbCtx, batal := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-       defer batal()
-       if err := tx.Rollback(rbCtx); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
-           slog.ErrorContext(ctx, "rollback gagal", slog.String("error", err.Error()))
-       }
-   }()
-   ```
-
-2. **PgBouncer vs Prepared Statements pada Serializable**
-   Jika infrastruktur Anda menggunakan *PgBouncer* dalam mode *Transaction Pooling*, Anda **tidak bisa** menggunakan prepared statements (`PREPARE ...`) tanpa pengaturan khusus. Secara default, `pgxpool` menyiapkan statement di latar belakang. Anda harus secara eksplisit mendisable cache (misalnya menggunakan parameter DSN `default_query_exec_mode=exec`) jika ada lapisan proxy di tengah, agar *Prepared Statement* tidak tersebar ke koneksi PostgreSQL yang salah. 
-
 3. **Membedakan Serialization Failure dan Exhausted Pool Timeout**
    Ketika koneksi pool habis karena *load* yang berlebihan, error yang dilempar oleh `pool.BeginTx()` adalah timeout koneksi, bukan `pgconn.PgError`. Pastikan filter *retry* (seperti `pgErr.Code == "40001"`) diterapkan secara presisi dengan menggunakan `errors.As`. Mencoba me-retry timeout pool akan memperburuk masalah karena ribuan goroutine Anda akan menambah *delay* antrean dengan eksponensial.
 

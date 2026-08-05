@@ -57,12 +57,12 @@ if err != nil {
 // ✅ GOOD: Menghapus file sebelum bind (bersifat idempotent)
 socketPath := "/tmp/app.sock"
 if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
-    log.Fatalf("gagal menghapus stale socket: %v", err)
+    log.Fatalf("failed to remove stale socket: %v", err)
 }
 
 listener, err := net.Listen("unix", socketPath)
 if err != nil {
-    log.Fatalf("gagal mendengarkan di socket: %v", err)
+    log.Fatalf("failed to listen on socket: %v", err)
 }
 // Pastikan permission aman
 os.Chmod(socketPath, 0600)
@@ -92,7 +92,7 @@ if err != nil {
 // Hanya owner (user yang menjalankan service) yang bisa read/write
 if err := os.Chmod("/tmp/admin.sock", 0600); err != nil {
     listener.Close()
-    log.Fatalf("gagal mengunci permission socket: %v", err)
+    log.Fatalf("failed to lock socket permission: %v", err)
 }
 ```
 

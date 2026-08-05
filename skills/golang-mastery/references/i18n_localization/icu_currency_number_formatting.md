@@ -119,21 +119,21 @@ func TestMoney_FormatLocal(t *testing.T) {
 		expected  string
 	}{
 		{
-			name:      "Rupiah di Indonesia",
+			name:      "Rupiah in Indonesia",
 			amountStr: "1500000.50",
 			currency:  "IDR",
 			lang:      language.Indonesian,
 			expected:  "Rp 1.500.000,50", // Ind format: titik ribuan, koma desimal
 		},
 		{
-			name:      "Euro di Jerman",
+			name:      "Euro in Germany",
 			amountStr: "1500000.50",
 			currency:  "EUR",
 			lang:      language.German,
 			expected:  "1.500.000,50 €", // Jerman: symbol di belakang, titik koma terbalik
 		},
 		{
-			name:      "USD di Amerika",
+			name:      "USD in America",
 			amountStr: "1500000.50",
 			currency:  "USD",
 			lang:      language.AmericanEnglish,

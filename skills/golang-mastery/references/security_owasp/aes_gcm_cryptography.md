@@ -144,23 +144,23 @@ import (
 
 const (
 	aes256KeySize = 32 // 256 bit
-	versiFormat   = 1  // versi format kotak, sekaligus penunjuk kunci
-	panjangHeader = 1  // satu byte versi di depan
+	formatVersion = 1  // versi format kotak, sekaligus penunjuk kunci
+	headerLength  = 1  // satu byte versi di depan
 
 	// NIST SP 800-38D membatasi GCM dengan nonce ACAK 96-bit pada 2^32
 	// pemanggilan per kunci. Di atas itu, peluang dua nonce bertabrakan
 	// (batas ulang tahun) tidak lagi dapat diabaikan — dan SATU tabrakan
 	// saja sudah cukup untuk memulihkan kunci otentikasi GCM dan memalsukan
 	// pesan, bukan sekadar membocorkan satu plaintext.
-	batasEnkripsiPerKunci = 1 << 32
+	maxEncryptionsPerKey = 1 << 32
 )
 
 var (
-	ErrPanjangCiphertext = errors.New("ciphertext terlalu pendek")
-	ErrDataDirusak       = errors.New("dekripsi gagal atau data dirusak")
-	ErrEntropiGagal      = errors.New("gagal membaca entropi acak")
-	ErrVersiKunci        = errors.New("versi kunci tidak dikenal")
-	ErrKuotaKunciHabis   = errors.New("kunci melewati batas aman pemakaian, wajib dirotasi")
+	ErrCiphertextLength = errors.New("ciphertext too short")
+	ErrDataTampered     = errors.New("decryption failed or data tampered")
+	ErrEntropyFailed    = errors.New("failed to read random entropy")
+	ErrKeyVersion       = errors.New("unknown key version")
+	ErrKeyQuotaExceeded = errors.New("key usage limit exceeded, rotation required")
 )
 
 // KeyRing memegang kunci aktif untuk enkripsi DAN kunci lama untuk dekripsi.
@@ -172,44 +172,44 @@ var (
 // byte itu, memutar master key pada tabel berisi jutaan baris berubah dari
 // penggantian konfigurasi menjadi proyek migrasi berminggu-minggu.
 type KeyRing struct {
-	versiAktif     byte
-	kunci          map[byte][]byte
-	jumlahEnkripsi atomic.Uint64
+	activeVersion   byte
+	keys            map[byte][]byte
+	encryptionCount atomic.Uint64
 }
 
-func NewKeyRing(versiAktif byte, kunci map[byte][]byte) (*KeyRing, error) {
-	if _, ada := kunci[versiAktif]; !ada {
-		return nil, fmt.Errorf("versi aktif %d tidak ada di key ring", versiAktif)
+func NewKeyRing(activeVersion byte, keys map[byte][]byte) (*KeyRing, error) {
+	if _, exists := keys[activeVersion]; !exists {
+		return nil, fmt.Errorf("active version %d not found in key ring", activeVersion)
 	}
-	for v, k := range kunci {
+	for v, k := range keys {
 		// aes.NewCipher SEBENARNYA mengembalikan KeySizeError untuk ukuran
 		// yang salah — ia tidak panic, berbeda dari yang sering dinyatakan.
 		// Diperiksa di sini supaya kegagalannya muncul saat start, bukan saat
 		// permintaan pertama menyentuh baris yang salah.
 		if len(k) != aes256KeySize {
-			return nil, fmt.Errorf("kunci versi %d berukuran %d byte, wajib %d", v, len(k), aes256KeySize)
+			return nil, fmt.Errorf("key version %d size is %d bytes, want %d", v, len(k), aes256KeySize)
 		}
 	}
-	return &KeyRing{versiAktif: versiAktif, kunci: kunci}, nil
+	return &KeyRing{activeVersion: activeVersion, keys: keys}, nil
 }
 
-func (kr *KeyRing) kunciUntuk(versi byte) ([]byte, error) {
-	k, ada := kr.kunci[versi]
-	if !ada {
-		return nil, fmt.Errorf("%w: %d", ErrVersiKunci, versi)
+func (kr *KeyRing) keyFor(version byte) ([]byte, error) {
+	k, exists := kr.keys[version]
+	if !exists {
+		return nil, fmt.Errorf("%w: %d", ErrKeyVersion, version)
 	}
 	return k, nil
 }
 
-// gabungAAD mengikat byte versi ke data terautentikasi.
+// combineAAD mengikat byte versi ke data terautentikasi.
 //
 // Tanpa ini, byte versi berada DI LUAR cakupan tag GCM, dan penyerang bisa
 // mengubahnya menjadi versi kunci lain — serangan penurunan versi ke kunci
 // lama yang mungkin sudah diketahui bocor. Aturannya sederhana: apa pun yang
 // berada di luar tag, bisa diubah.
-func gabungAAD(versi byte, ad []byte) []byte {
+func combineAAD(version byte, ad []byte) []byte {
 	out := make([]byte, 0, 1+len(ad))
-	return append(append(out, versi), ad...)
+	return append(append(out, version), ad...)
 }
 
 // DeriveKey menurunkan Data Encryption Key (DEK) aman berukuran 32-byte.
@@ -229,14 +229,14 @@ func DeriveKey(ctx context.Context, masterSecret []byte, salt, info []byte) ([]b
 	return key, nil
 }
 
-func aeadUntuk(key []byte) (cipher.AEAD, error) {
+func aeadFor(key []byte) (cipher.AEAD, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		return nil, fmt.Errorf("inisialisasi cipher gagal: %w", err)
+		return nil, fmt.Errorf("cipher initialization failed: %w", err)
 	}
 	aead, err := cipher.NewGCM(block)
 	if err != nil {
-		return nil, fmt.Errorf("inisialisasi gcm gagal: %w", err)
+		return nil, fmt.Errorf("gcm initialization failed: %w", err)
 	}
 	return aead, nil
 }
@@ -245,22 +245,22 @@ func aeadUntuk(key []byte) (cipher.AEAD, error) {
 // Bentuk keluaran: [1 byte versi kunci][12 byte nonce][ciphertext][16 byte tag]
 func Encrypt(ctx context.Context, kr *KeyRing, plaintext, associatedData []byte) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, fmt.Errorf("context batal: %w", err)
+		return nil, fmt.Errorf("context canceled: %w", err)
 	}
 
 	// Batas pemakaian kunci ditegakkan, bukan sekadar disebut di prosa.
 	// Melewatinya berarti masuk wilayah tabrakan nonce, dan di GCM tabrakan
 	// nonce bukan pelemahan bertahap melainkan keruntuhan total.
-	if kr.jumlahEnkripsi.Add(1) > batasEnkripsiPerKunci {
-		return nil, ErrKuotaKunciHabis
+	if kr.encryptionCount.Add(1) > maxEncryptionsPerKey {
+		return nil, ErrKeyQuotaExceeded
 	}
 
-	versi := kr.versiAktif
-	key, err := kr.kunciUntuk(versi)
+	version := kr.activeVersion
+	key, err := kr.keyFor(version)
 	if err != nil {
 		return nil, err
 	}
-	aead, err := aeadUntuk(key)
+	aead, err := aeadFor(key)
 	if err != nil {
 		return nil, err
 	}
@@ -270,30 +270,30 @@ func Encrypt(ctx context.Context, kr *KeyRing, plaintext, associatedData []byte)
 	// berbeda dari aes.NewCipher yang mengembalikan galat biasa.
 	nonce := make([]byte, aead.NonceSize())
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
-		return nil, ErrEntropiGagal
+		return nil, ErrEntropyFailed
 	}
 
-	out := make([]byte, 0, panjangHeader+len(nonce)+len(plaintext)+aead.Overhead())
-	out = append(out, versi)
+	out := make([]byte, 0, headerLength+len(nonce)+len(plaintext)+aead.Overhead())
+	out = append(out, version)
 	out = append(out, nonce...)
-	return aead.Seal(out, nonce, plaintext, gabungAAD(versi, associatedData)), nil
+	return aead.Seal(out, nonce, plaintext, combineAAD(version, associatedData)), nil
 }
 
 // Decrypt memilih kunci berdasarkan byte versi, lalu membuka segel.
-func Decrypt(ctx context.Context, kr *KeyRing, kotak, associatedData []byte) ([]byte, error) {
+func Decrypt(ctx context.Context, kr *KeyRing, box, associatedData []byte) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, fmt.Errorf("context batal: %w", err)
+		return nil, fmt.Errorf("context canceled: %w", err)
 	}
-	if len(kotak) < panjangHeader+1 {
-		return nil, ErrPanjangCiphertext
+	if len(box) < headerLength+1 {
+		return nil, ErrCiphertextLength
 	}
 
-	versi := kotak[0]
-	key, err := kr.kunciUntuk(versi)
+	version := box[0]
+	key, err := kr.keyFor(version)
 	if err != nil {
 		return nil, err
 	}
-	aead, err := aeadUntuk(key)
+	aead, err := aeadFor(key)
 	if err != nil {
 		return nil, err
 	}
@@ -301,23 +301,22 @@ func Decrypt(ctx context.Context, kr *KeyRing, kotak, associatedData []byte) ([]
 	// Pemeriksaan panjang memakai NonceSize()/Overhead() dari AEAD-nya
 	// sendiri, bukan angka 12 dan 16 yang ditulis tangan. Tanpa ini,
 	// pemotongan slice di bawah bisa panic pada masukan pendek.
-	minimal := panjangHeader + aead.NonceSize() + aead.Overhead()
-	if len(kotak) < minimal {
-		return nil, ErrPanjangCiphertext
+	minimal := headerLength + aead.NonceSize() + aead.Overhead()
+	if len(box) < minimal {
+		return nil, ErrCiphertextLength
 	}
 
-	nonce := kotak[panjangHeader : panjangHeader+aead.NonceSize()]
-	isi := kotak[panjangHeader+aead.NonceSize():]
+	nonce := box[headerLength : headerLength+aead.NonceSize()]
+	body := box[headerLength+aead.NonceSize():]
 
-	plaintext, err := aead.Open(nil, nonce, isi, gabungAAD(versi, associatedData))
+	plaintext, err := aead.Open(nil, nonce, body, combineAAD(version, associatedData))
 	if err != nil {
 		// Galat asli dicatat ke log, TIDAK dikembalikan: membedakan
 		// "tag salah" dari "AD salah" akan menjadi oracle bagi penyerang.
-		return nil, ErrDataDirusak
+		return nil, ErrDataTampered
 	}
 	return plaintext, nil
 }
-
 ```
 
 ```go
@@ -330,14 +329,14 @@ import (
 	"testing"
 )
 
-func keyRingUji(t *testing.T) *KeyRing {
+func testKeyRing(t *testing.T) *KeyRing {
 	t.Helper()
 	ctx := context.Background()
-	k1, err := DeriveKey(ctx, []byte("master-secret-yang-cukup-panjang"), []byte("salt"), []byte("pii-v1"))
+	k1, err := DeriveKey(ctx, []byte("master-secret-sufficiently-long-for-testing"), []byte("salt"), []byte("pii-v1"))
 	if err != nil {
 		t.Fatalf("DeriveKey v1: %v", err)
 	}
-	k2, err := DeriveKey(ctx, []byte("master-secret-yang-cukup-panjang"), []byte("salt"), []byte("pii-v2"))
+	k2, err := DeriveKey(ctx, []byte("master-secret-sufficiently-long-for-testing"), []byte("salt"), []byte("pii-v2"))
 	if err != nil {
 		t.Fatalf("DeriveKey v2: %v", err)
 	}
@@ -348,43 +347,43 @@ func keyRingUji(t *testing.T) *KeyRing {
 	return kr
 }
 
-func TestEnkripsiDekripsi(t *testing.T) {
-	ctx, kr := context.Background(), keyRingUji(t)
-	pt := []byte("Kartu Kredit: 4111-...")
+func TestEncryptDecrypt(t *testing.T) {
+	ctx, kr := context.Background(), testKeyRing(t)
+	pt := []byte("Credit Card: 4111-...")
 	ad := []byte("user-id-5000")
 
-	kotak, err := Encrypt(ctx, kr, pt, ad)
+	box, err := Encrypt(ctx, kr, pt, ad)
 	if err != nil {
 		t.Fatalf("Encrypt: %v", err)
 	}
-	got, err := Decrypt(ctx, kr, kotak, ad)
+	got, err := Decrypt(ctx, kr, box, ad)
 	if err != nil {
 		t.Fatalf("Decrypt: %v", err)
 	}
 	if !bytes.Equal(got, pt) {
-		t.Fatalf("plaintext = %q, mau %q", got, pt)
+		t.Fatalf("plaintext = %q, want %q", got, pt)
 	}
 }
 
 // Sifat TERPENTING di seluruh berkas ini, dan sebelumnya tidak diuji sama
 // sekali: nonce tidak boleh berulang. Anti-Pattern 1 menjelaskan akibatnya
 // panjang lebar, tetapi tidak ada satu pun asersi yang menjaganya.
-func TestNonceTidakPernahBerulang(t *testing.T) {
-	ctx, kr := context.Background(), keyRingUji(t)
-	pt := []byte("plaintext yang sama persis")
+func TestNonceNeverRepeats(t *testing.T) {
+	ctx, kr := context.Background(), testKeyRing(t)
+	pt := []byte("identical plaintext test payload")
 
 	const n = 200
-	terlihat := make(map[string]struct{}, n)
+	seen := make(map[string]struct{}, n)
 	for i := 0; i < n; i++ {
-		kotak, err := Encrypt(ctx, kr, pt, nil)
+		box, err := Encrypt(ctx, kr, pt, nil)
 		if err != nil {
-			t.Fatalf("Encrypt ke-%d: %v", i, err)
+			t.Fatalf("Encrypt #%d: %v", i, err)
 		}
-		nonce := string(kotak[panjangHeader : panjangHeader+12])
-		if _, ada := terlihat[nonce]; ada {
-			t.Fatalf("nonce berulang pada iterasi %d — GCM runtuh total di titik ini", i)
+		nonce := string(box[headerLength : headerLength+12])
+		if _, exists := seen[nonce]; exists {
+			t.Fatalf("nonce repeated on iteration %d - GCM total breakdown", i)
 		}
-		terlihat[nonce] = struct{}{}
+		seen[nonce] = struct{}{}
 	}
 }
 
@@ -392,95 +391,95 @@ func TestNonceTidakPernahBerulang(t *testing.T) {
 // di posisi len-5 dengan komentar "flip 1 bit on the encrypted body" —
 // posisi itu berada di dalam TAG, bukan di badan ciphertext, sehingga badan
 // ciphertext tidak pernah benar-benar diuji.
-func TestPerusakanTiapBagianDitolak(t *testing.T) {
-	ctx, kr := context.Background(), keyRingUji(t)
+func TestTamperingEachPartRejected(t *testing.T) {
+	ctx, kr := context.Background(), testKeyRing(t)
 	ad := []byte("user-id-5000")
-	asli, err := Encrypt(ctx, kr, []byte("rahasia yang cukup panjang untuk diuji"), ad)
+	original, err := Encrypt(ctx, kr, []byte("secret payload sufficiently long for testing"), ad)
 	if err != nil {
 		t.Fatalf("Encrypt: %v", err)
 	}
 
-	posisi := map[string]int{
-		"nonce":  panjangHeader + 3,
-		"badan":  panjangHeader + 12 + 2,
-		"tag":    len(asli) - 3,
+	positions := map[string]int{
+		"nonce": headerLength + 3,
+		"body":  headerLength + 12 + 2,
+		"tag":   len(original) - 3,
 	}
-	for nama, idx := range posisi {
-		t.Run(nama, func(t *testing.T) {
-			rusak := bytes.Clone(asli)
-			rusak[idx] ^= 0x01
-			if _, err := Decrypt(ctx, kr, rusak, ad); !errors.Is(err, ErrDataDirusak) {
-				t.Fatalf("galat = %v, mau ErrDataDirusak", err)
+	for name, idx := range positions {
+		t.Run(name, func(t *testing.T) {
+			corrupted := bytes.Clone(original)
+			corrupted[idx] ^= 0x01
+			if _, err := Decrypt(ctx, kr, corrupted, ad); !errors.Is(err, ErrDataTampered) {
+				t.Fatalf("error = %v, want ErrDataTampered", err)
 			}
 		})
 	}
 }
 
-func TestAssociatedDataMengikatRecord(t *testing.T) {
-	ctx, kr := context.Background(), keyRingUji(t)
-	kotak, err := Encrypt(ctx, kr, []byte("saldo"), []byte("user-id-5000"))
+func TestAssociatedDataBindsRecord(t *testing.T) {
+	ctx, kr := context.Background(), testKeyRing(t)
+	box, err := Encrypt(ctx, kr, []byte("balance"), []byte("user-id-5000"))
 	if err != nil {
 		t.Fatalf("Encrypt: %v", err)
 	}
 	// Ciphertext utuh, tetapi dipindahkan ke baris pengguna lain.
-	if _, err := Decrypt(ctx, kr, kotak, []byte("user-id-5001")); !errors.Is(err, ErrDataDirusak) {
-		t.Fatalf("galat = %v, mau ErrDataDirusak", err)
+	if _, err := Decrypt(ctx, kr, box, []byte("user-id-5001")); !errors.Is(err, ErrDataTampered) {
+		t.Fatalf("error = %v, want ErrDataTampered", err)
 	}
 }
 
 // Byte versi berada di dalam cakupan tag. Menurunkannya ke versi kunci lama
 // harus gagal, bukan berhasil dengan kunci yang salah.
-func TestPenurunanVersiKunciDitolak(t *testing.T) {
-	ctx, kr := context.Background(), keyRingUji(t)
-	kotak, err := Encrypt(ctx, kr, []byte("rahasia"), nil)
+func TestKeyVersionDowngradeRejected(t *testing.T) {
+	ctx, kr := context.Background(), testKeyRing(t)
+	box, err := Encrypt(ctx, kr, []byte("secret"), nil)
 	if err != nil {
 		t.Fatalf("Encrypt: %v", err)
 	}
-	if kotak[0] != 2 {
-		t.Fatalf("versi = %d, mau 2", kotak[0])
+	if box[0] != 2 {
+		t.Fatalf("version = %d, want 2", box[0])
 	}
 
-	turun := bytes.Clone(kotak)
-	turun[0] = 1 // versi kunci lama
-	if _, err := Decrypt(ctx, kr, turun, nil); !errors.Is(err, ErrDataDirusak) {
-		t.Fatalf("galat = %v, mau ErrDataDirusak", err)
+	downgraded := bytes.Clone(box)
+	downgraded[0] = 1 // versi kunci lama
+	if _, err := Decrypt(ctx, kr, downgraded, nil); !errors.Is(err, ErrDataTampered) {
+		t.Fatalf("error = %v, want ErrDataTampered", err)
 	}
 }
 
 // Rotasi kunci: data lama TETAP terbaca tanpa migrasi apa pun.
-func TestDataLamaTetapTerbacaSetelahRotasi(t *testing.T) {
+func TestLegacyDataReadableAfterRotation(t *testing.T) {
 	ctx := context.Background()
-	k1, _ := DeriveKey(ctx, []byte("master-secret-yang-cukup-panjang"), []byte("salt"), []byte("pii-v1"))
-	k2, _ := DeriveKey(ctx, []byte("master-secret-yang-cukup-panjang"), []byte("salt"), []byte("pii-v2"))
+	k1, _ := DeriveKey(ctx, []byte("master-secret-sufficiently-long-for-testing"), []byte("salt"), []byte("pii-v1"))
+	k2, _ := DeriveKey(ctx, []byte("master-secret-sufficiently-long-for-testing"), []byte("salt"), []byte("pii-v2"))
 
-	lama, err := NewKeyRing(1, map[byte][]byte{1: k1})
+	legacy, err := NewKeyRing(1, map[byte][]byte{1: k1})
 	if err != nil {
 		t.Fatalf("NewKeyRing: %v", err)
 	}
-	kotakLama, err := Encrypt(ctx, lama, []byte("data lama"), nil)
+	legacyBox, err := Encrypt(ctx, legacy, []byte("legacy data"), nil)
 	if err != nil {
 		t.Fatalf("Encrypt: %v", err)
 	}
 
 	// Rotasi: v2 jadi aktif, v1 dipertahankan untuk dekripsi.
-	baru, err := NewKeyRing(2, map[byte][]byte{1: k1, 2: k2})
+	rotated, err := NewKeyRing(2, map[byte][]byte{1: k1, 2: k2})
 	if err != nil {
 		t.Fatalf("NewKeyRing: %v", err)
 	}
-	got, err := Decrypt(ctx, baru, kotakLama, nil)
+	got, err := Decrypt(ctx, rotated, legacyBox, nil)
 	if err != nil {
-		t.Fatalf("data lama tidak terbaca setelah rotasi: %v", err)
+		t.Fatalf("legacy data unreadable after rotation: %v", err)
 	}
-	if string(got) != "data lama" {
+	if string(got) != "legacy data" {
 		t.Fatalf("plaintext = %q", got)
 	}
 }
 
-func TestKotakTerlaluPendek(t *testing.T) {
-	ctx, kr := context.Background(), keyRingUji(t)
-	for _, pendek := range [][]byte{{}, {2}, append([]byte{2}, bytes.Repeat([]byte{0}, 20)...)} {
-		if _, err := Decrypt(ctx, kr, pendek, nil); !errors.Is(err, ErrPanjangCiphertext) && !errors.Is(err, ErrVersiKunci) {
-			t.Errorf("panjang %d: galat = %v, mau ErrPanjangCiphertext", len(pendek), err)
+func TestCiphertextTooShort(t *testing.T) {
+	ctx, kr := context.Background(), testKeyRing(t)
+	for _, short := range [][]byte{{}, {2}, append([]byte{2}, bytes.Repeat([]byte{0}, 20)...)} {
+		if _, err := Decrypt(ctx, kr, short, nil); !errors.Is(err, ErrCiphertextLength) && !errors.Is(err, ErrKeyVersion) {
+			t.Errorf("length %d: error = %v, want ErrCiphertextLength", len(short), err)
 		}
 	}
 }

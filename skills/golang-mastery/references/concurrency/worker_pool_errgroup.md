@@ -293,7 +293,7 @@ curl -s 'localhost:6060/debug/pprof/goroutine?debug=1' | grep -B3 -i errgroup
 ```sql
 -- Apakah pool DB yang jadi batas sebenarnya?
 SELECT state, count(*) FROM pg_stat_activity GROUP BY state;
-SELECT count(*) AS terpakai,
-       (SELECT setting::int FROM pg_settings WHERE name='max_connections') AS batas
+SELECT count(*) AS used_connections,
+       (SELECT setting::int FROM pg_settings WHERE name='max_connections') AS max_limit
 FROM pg_stat_activity;
 ```

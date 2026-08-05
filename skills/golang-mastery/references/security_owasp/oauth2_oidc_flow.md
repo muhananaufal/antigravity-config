@@ -108,12 +108,12 @@ import (
 
 // Galat yang dibedakan pemanggil.
 var (
-	ErrStateTidakCocok         = errors.New("auth: state tidak cocok dengan sesi")
-	ErrNonceTidakCocok         = errors.New("auth: nonce tidak cocok dengan sesi")
-	ErrTanpaIDToken            = errors.New("auth: respons tanpa id_token")
-	ErrAlurTidakDikenal        = errors.New("auth: keadaan alur tidak ditemukan atau sudah dipakai")
-	ErrAlurKedaluwarsa         = errors.New("auth: keadaan alur kedaluwarsa")
-	ErrEmailBelumTerverifikasi = errors.New("auth: email belum diverifikasi IdP")
+	ErrStateMismatch    = errors.New("auth: state does not match session")
+	ErrNonceMismatch    = errors.New("auth: nonce does not match session")
+	ErrMissingIDToken   = errors.New("auth: response missing id_token")
+	ErrFlowNotFound     = errors.New("auth: flow state not found or already consumed")
+	ErrFlowExpired      = errors.New("auth: flow state expired")
+	ErrEmailNotVerified = errors.New("auth: email not verified by IdP")
 )
 
 // maksUmurAlur membatasi jarak antara pengalihan ke IdP dan callback.
@@ -152,9 +152,9 @@ type PenyimpanAlur interface {
 
 // Klien membungkus verifier OIDC dan konfigurasi OAuth2.
 type Klien struct {
-	penyedia    *oidc.Provider
-	verifier    *oidc.IDTokenVerifier
-	oauth       oauth2.Config
+	penyedia     *oidc.Provider
+	verifier     *oidc.IDTokenVerifier
+	oauth        oauth2.Config
 	epRevocation string
 	epEndSession string
 }
@@ -167,7 +167,7 @@ type Klien struct {
 func Baru(ctx context.Context, k Konfig) (*Klien, error) {
 	p, err := oidc.NewProvider(ctx, k.IssuerURL)
 	if err != nil {
-		return nil, fmt.Errorf("discovery OIDC %q: %w", k.IssuerURL, err)
+		return nil, fmt.Errorf("OIDC discovery %q: %w", k.IssuerURL, err)
 	}
 	scope := k.Scope
 	if len(scope) == 0 {
@@ -209,11 +209,11 @@ func Baru(ctx context.Context, k Konfig) (*Klien, error) {
 func (c *Klien) MulaiAlur(ctx context.Context, simpan PenyimpanAlur) (urlOtorisasi string, err error) {
 	state, err := acak32()
 	if err != nil {
-		return "", fmt.Errorf("buat state: %w", err)
+		return "", fmt.Errorf("generate state: %w", err)
 	}
 	nonce, err := acak32()
 	if err != nil {
-		return "", fmt.Errorf("buat nonce: %w", err)
+		return "", fmt.Errorf("generate nonce: %w", err)
 	}
 	// oauth2.GenerateVerifier tersedia sejak x/oauth2 v0.15 dan menghasilkan
 	// verifier yang sudah sesuai RFC 7636 (43–128 karakter, himpunan
@@ -223,7 +223,7 @@ func (c *Klien) MulaiAlur(ctx context.Context, simpan PenyimpanAlur) (urlOtorisa
 
 	k := KeadaanAlur{State: state, Nonce: nonce, Verifier: verifier, Dibuat: time.Now()}
 	if err := simpan.Simpan(ctx, k); err != nil {
-		return "", fmt.Errorf("simpan keadaan alur: %w", err)
+		return "", fmt.Errorf("store flow state: %w", err)
 	}
 
 	// S256ChallengeOption mengirim HASH verifier, bukan verifier-nya.
@@ -251,7 +251,7 @@ type Identitas struct {
 // permintaan CSRF tidak pernah sampai menghubungi IdP.
 func (c *Klien) SelesaikanAlur(ctx context.Context, simpan PenyimpanAlur, stateDariURL, code string) (*Identitas, error) {
 	if stateDariURL == "" {
-		return nil, ErrStateTidakCocok
+		return nil, ErrStateMismatch
 	}
 
 	// 1. CSRF + sekali pakai. Pencarian berkunci-state MENGGANTIKAN
@@ -260,30 +260,30 @@ func (c *Klien) SelesaikanAlur(ctx context.Context, simpan PenyimpanAlur, stateD
 	// kedua dengan state yang sama pasti gagal.
 	k, err := simpan.AmbilSekali(ctx, stateDariURL)
 	if err != nil {
-		return nil, ErrAlurTidakDikenal
+		return nil, ErrFlowNotFound
 	}
 
 	// 2. Umur alur. Kasus Tepi 3: keadaan yang tersimpan selamanya berarti
 	// authorization code lama masih bisa ditukar.
 	if time.Since(k.Dibuat) > maksUmurAlur {
-		return nil, ErrAlurKedaluwarsa
+		return nil, ErrFlowExpired
 	}
 
 	// 3. Tukar code + verifier PKCE. IdP memeriksa S256(verifier) == challenge.
 	tok, err := c.oauth.Exchange(ctx, code, oauth2.VerifierOption(k.Verifier))
 	if err != nil {
-		return nil, fmt.Errorf("tukar authorization code: %w", err)
+		return nil, fmt.Errorf("exchange authorization code: %w", err)
 	}
 
 	mentah, ok := tok.Extra("id_token").(string)
 	if !ok || mentah == "" {
-		return nil, ErrTanpaIDToken
+		return nil, ErrMissingIDToken
 	}
 
 	// 4. Verifikasi tanda tangan (JWKS), iss, aud, dan exp.
 	idToken, err := c.verifier.Verify(ctx, mentah)
 	if err != nil {
-		return nil, fmt.Errorf("verifikasi id_token: %w", err)
+		return nil, fmt.Errorf("verify id_token: %w", err)
 	}
 
 	// 5. Replay: nonce di dalam token WAJIB cocok dengan yang disimpan sesi.
@@ -293,7 +293,7 @@ func (c *Klien) SelesaikanAlur(ctx context.Context, simpan PenyimpanAlur, stateD
 	// `microservices_grpc/grpc_interceptors_middleware.md` sudah dikoreksi
 	// menjadi subtle.ConstantTimeCompare untuk token bearer.
 	if subtle.ConstantTimeCompare([]byte(idToken.Nonce), []byte(k.Nonce)) != 1 {
-		return nil, ErrNonceTidakCocok
+		return nil, ErrNonceMismatch
 	}
 
 	var klaim struct {
@@ -302,7 +302,7 @@ func (c *Klien) SelesaikanAlur(ctx context.Context, simpan PenyimpanAlur, stateD
 		Nama          string `json:"name"`
 	}
 	if err := idToken.Claims(&klaim); err != nil {
-		return nil, fmt.Errorf("baca klaim: %w", err)
+		return nil, fmt.Errorf("read claims: %w", err)
 	}
 
 	return &Identitas{
@@ -330,7 +330,7 @@ func (c *Klien) SelesaikanAlur(ctx context.Context, simpan PenyimpanAlur, stateD
 // akun lama bila terverifikasi DAN IdP-nya memang Anda percayai.
 func (i *Identitas) BolehTautkanLewatEmail() error {
 	if !i.EmailTerverif || i.Email == "" {
-		return ErrEmailBelumTerverifikasi
+		return ErrEmailNotVerified
 	}
 	return nil
 }
@@ -391,27 +391,27 @@ func PasangCookieAlur(w http.ResponseWriter, nilai string, responsFormPost bool)
 // tanpa memberi jalan melakukannya.
 func (c *Klien) Cabut(ctx context.Context, token, tipe string) error {
 	if c.epRevocation == "" {
-		return errors.New("IdP tidak menyediakan revocation_endpoint")
+		return errors.New("IdP does not provide revocation_endpoint")
 	}
 	form := url.Values{"token": {token}, "token_type_hint": {tipe}}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.epRevocation,
 		strings.NewReader(form.Encode()))
 	if err != nil {
-		return fmt.Errorf("bangun permintaan pencabutan: %w", err)
+		return fmt.Errorf("build revocation request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.SetBasicAuth(c.oauth.ClientID, c.oauth.ClientSecret)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("panggil pencabutan: %w", err)
+		return fmt.Errorf("execute revocation request: %w", err)
 	}
 	defer resp.Body.Close()
 	// RFC 7009: server mengembalikan 200 bahkan untuk token yang tidak
 	// dikenal, supaya tidak menjadi oracle keberadaan token.
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("pencabutan ditolak: %d", resp.StatusCode)
+		return fmt.Errorf("revocation rejected: %d", resp.StatusCode)
 	}
 	return nil
 }
@@ -450,11 +450,11 @@ import (
 // didefinisikan — blok ujinya tidak kompilasi sama sekali.
 func konfigUjiOAuth() oauth2.Config {
 	return oauth2.Config{
-		ClientID:    "klien-uji",
-		RedirectURL: "https://app.contoh.id/callback",
+		ClientID:    "test-client",
+		RedirectURL: "https://app.example.com/callback",
 		Endpoint: oauth2.Endpoint{
-			AuthURL:  "https://idp.contoh.id/authorize",
-			TokenURL: "https://idp.contoh.id/token",
+			AuthURL:  "https://idp.example.com/authorize",
+			TokenURL: "https://idp.example.com/token",
 		},
 		Scopes: []string{"openid", "email"},
 	}
@@ -481,7 +481,7 @@ func (p *penyimpanMemori) AmbilSekali(_ context.Context, state string) (KeadaanA
 	defer p.mu.Unlock()
 	k, ada := p.entri[state]
 	if !ada {
-		return KeadaanAlur{}, errors.New("tidak ditemukan")
+		return KeadaanAlur{}, errors.New("not found")
 	}
 	delete(p.entri, state) // sekali pakai
 	return k, nil
@@ -490,22 +490,22 @@ func (p *penyimpanMemori) AmbilSekali(_ context.Context, state string) (KeadaanA
 func TestSelesaikanAlur_StateSalahDitolakSebelumMenghubungiIdP(t *testing.T) {
 	// Permintaan CSRF tidak boleh sampai memicu panggilan jaringan ke IdP.
 	// Klien tanpa endpoint asli sudah cukup membuktikannya: kalau Exchange
-	// sempat dipanggil, galat yang muncul bukan ErrAlurTidakDikenal.
+	// sempat dipanggil, galat yang muncul bukan ErrFlowNotFound.
 	c := &Klien{}
 	simpan := newPenyimpanMemori()
-	_ = simpan.Simpan(context.Background(), KeadaanAlur{State: "state-benar", Dibuat: time.Now()})
+	_ = simpan.Simpan(context.Background(), KeadaanAlur{State: "state-valid", Dibuat: time.Now()})
 
-	_, err := c.SelesaikanAlur(context.Background(), simpan, "state-penyerang", "code")
-	if !errors.Is(err, ErrAlurTidakDikenal) {
-		t.Fatalf("mau ErrAlurTidakDikenal, dapat %v", err)
+	_, err := c.SelesaikanAlur(context.Background(), simpan, "state-attacker", "code")
+	if !errors.Is(err, ErrFlowNotFound) {
+		t.Fatalf("want ErrFlowNotFound, got %v", err)
 	}
 }
 
 func TestSelesaikanAlur_StateKosongDitolak(t *testing.T) {
 	c := &Klien{}
 	_, err := c.SelesaikanAlur(context.Background(), newPenyimpanMemori(), "", "code")
-	if !errors.Is(err, ErrStateTidakCocok) {
-		t.Fatalf("state kosong WAJIB ditolak, dapat %v", err)
+	if !errors.Is(err, ErrStateMismatch) {
+		t.Fatalf("empty state MUST be rejected, got %v", err)
 	}
 }
 
@@ -521,8 +521,8 @@ func TestSelesaikanAlur_KeadaanSekaliPakai(t *testing.T) {
 	_, _ = c.SelesaikanAlur(context.Background(), simpan, "s1", "code")
 
 	_, err := c.SelesaikanAlur(context.Background(), simpan, "s1", "code")
-	if !errors.Is(err, ErrAlurTidakDikenal) {
-		t.Fatalf("pemakaian kedua = %v, mau ErrAlurTidakDikenal", err)
+	if !errors.Is(err, ErrFlowNotFound) {
+		t.Fatalf("second use = %v, want ErrFlowNotFound", err)
 	}
 }
 
@@ -532,13 +532,13 @@ func TestSelesaikanAlur_KeadaanKedaluwarsaDitolak(t *testing.T) {
 	c := &Klien{}
 	simpan := newPenyimpanMemori()
 	_ = simpan.Simpan(context.Background(), KeadaanAlur{
-		State:  "s-lama",
+		State:  "s-old",
 		Dibuat: time.Now().Add(-maksUmurAlur - time.Minute),
 	})
 
-	_, err := c.SelesaikanAlur(context.Background(), simpan, "s-lama", "code")
-	if !errors.Is(err, ErrAlurKedaluwarsa) {
-		t.Fatalf("galat = %v, mau ErrAlurKedaluwarsa", err)
+	_, err := c.SelesaikanAlur(context.Background(), simpan, "s-old", "code")
+	if !errors.Is(err, ErrFlowExpired) {
+		t.Fatalf("err = %v, want ErrFlowExpired", err)
 	}
 }
 
@@ -560,14 +560,14 @@ func TestMulaiAlur_NilaiAcakBerbedaDanS256(t *testing.T) {
 	q2 := uraiKueri(t, u2)
 	for _, p := range []string{"state", "nonce", "code_challenge"} {
 		if q1.Get(p) == q2.Get(p) {
-			t.Errorf("%s WAJIB berbeda tiap alur", p)
+			t.Errorf("%s MUST differ per flow", p)
 		}
 		if q1.Get(p) == "" {
-			t.Errorf("%s tidak dikirim", p)
+			t.Errorf("%s not sent", p)
 		}
 	}
 	if q1.Get("code_challenge_method") != "S256" {
-		t.Fatal("metode PKCE WAJIB S256; 'plain' tidak memberi perlindungan")
+		t.Fatal("PKCE method MUST be S256; 'plain' provides no protection")
 	}
 
 	// Yang dikirim WAJIB hash verifier, bukan verifier-nya.
@@ -577,21 +577,21 @@ func TestMulaiAlur_NilaiAcakBerbedaDanS256(t *testing.T) {
 
 	sum := sha256.Sum256([]byte(k.Verifier))
 	if mau := base64.RawURLEncoding.EncodeToString(sum[:]); q1.Get("code_challenge") != mau {
-		t.Fatal("challenge harus S256(verifier)")
+		t.Fatal("challenge must be S256(verifier)")
 	}
 	if strings.Contains(u1, k.Verifier) {
-		t.Fatal("verifier BOCOR ke URL otorisasi")
+		t.Fatal("verifier LEAKED into authorization URL")
 	}
 	if len(k.Verifier) < 43 {
-		t.Errorf("verifier PKCE minimal 43 karakter, dapat %d", len(k.Verifier))
+		t.Errorf("PKCE verifier minimum 43 characters, got %d", len(k.Verifier))
 	}
 }
 
 func TestCookieSesiDanCookieAlurPunyaSameSiteBerbeda(t *testing.T) {
 	w := httptest.NewRecorder()
-	PasangCookieSesi(w, "sesi-123", time.Hour)
-	PasangCookieAlur(w, "alur-abc", false)
-	PasangCookieAlur(w, "alur-post", true)
+	PasangCookieSesi(w, "session-123", time.Hour)
+	PasangCookieAlur(w, "flow-abc", false)
+	PasangCookieAlur(w, "flow-post", true)
 
 	kue := map[string]*http.Cookie{}
 	for _, c := range w.Result().Cookies() {
@@ -600,38 +600,38 @@ func TestCookieSesiDanCookieAlurPunyaSameSiteBerbeda(t *testing.T) {
 
 	sesi := kue["__Host-sesi"]
 	if sesi == nil {
-		t.Fatal("cookie sesi tidak memakai awalan __Host-")
+		t.Fatal("session cookie does not use __Host- prefix")
 	}
 	if !sesi.HttpOnly || !sesi.Secure {
-		t.Error("HttpOnly dan Secure wajib pada cookie sesi")
+		t.Error("HttpOnly and Secure required on session cookie")
 	}
 	// Cookie sesi TIDAK perlu Lax: ia ditulis setelah callback, tidak pernah
 	// dibaca saat browser kembali dari IdP.
 	if sesi.SameSite != http.SameSiteStrictMode {
-		t.Errorf("SameSite cookie sesi = %v, mau Strict", sesi.SameSite)
+		t.Errorf("session cookie SameSite = %v, want Strict", sesi.SameSite)
 	}
 	if strings.Count(sesi.Value, ".") == 2 {
-		t.Error("nilai cookie berbentuk JWT — seharusnya ID sesi sisi server")
+		t.Error("cookie value looks like JWT - should be server-side session ID")
 	}
 
 	alur := kue["__Host-alur"]
 	if alur == nil {
-		t.Fatal("cookie alur tidak ditulis")
+		t.Fatal("flow cookie was not set")
 	}
 	// Cookie terakhir dengan nama sama menang di map: itu varian form_post.
 	if alur.SameSite != http.SameSiteNoneMode {
-		t.Errorf("SameSite cookie alur (form_post) = %v, mau None — Lax tidak terkirim pada POST lintas situs", alur.SameSite)
+		t.Errorf("flow cookie SameSite (form_post) = %v, want None - Lax not sent on cross-site POST", alur.SameSite)
 	}
 }
 
 func TestBolehTautkanLewatEmail(t *testing.T) {
-	belum := &Identitas{Email: "korban@contoh.id", EmailTerverif: false}
-	if err := belum.BolehTautkanLewatEmail(); !errors.Is(err, ErrEmailBelumTerverifikasi) {
-		t.Fatalf("galat = %v, mau ErrEmailBelumTerverifikasi — penautan lewat email tak terverifikasi adalah pengambilalihan akun", err)
+	belum := &Identitas{Email: "victim@example.com", EmailTerverif: false}
+	if err := belum.BolehTautkanLewatEmail(); !errors.Is(err, ErrEmailNotVerified) {
+		t.Fatalf("err = %v, want ErrEmailNotVerified - linking via unverified email is account takeover", err)
 	}
-	sudah := &Identitas{Email: "asli@contoh.id", EmailTerverif: true}
+	sudah := &Identitas{Email: "legit@example.com", EmailTerverif: true}
 	if err := sudah.BolehTautkanLewatEmail(); err != nil {
-		t.Fatalf("email terverifikasi ditolak: %v", err)
+		t.Fatalf("verified email rejected: %v", err)
 	}
 }
 
@@ -639,7 +639,7 @@ func uraiKueri(t *testing.T, u string) url.Values {
 	t.Helper()
 	parsed, err := url.Parse(u)
 	if err != nil {
-		t.Fatalf("urai URL: %v", err)
+		t.Fatalf("parse URL: %v", err)
 	}
 	return parsed.Query()
 }
@@ -793,10 +793,10 @@ echo "$ID_TOKEN" | cut -d. -f2 | base64 -d 2>/dev/null | jq '{iss, aud, sub, exp
 
 # Alasan kegagalan login, dikelompokkan -- pola tak terduga layak diselidiki
 kubectl logs -l app=api --since=1h \
-  | jq -r 'select(.event=="login_gagal") | .alasan' | sort | uniq -c | sort -rn
+  | jq -r 'select(.event=="login_failed") | .reason' | sort | uniq -c | sort -rn
 
 # Pemakaian ulang refresh token = sinyal pencurian
-kubectl logs -l app=api --since=24h | grep -c 'refresh_dipakai_ulang'
+kubectl logs -l app=api --since=24h | grep -c 'refresh_token_reused'
 
 # Clock skew: selisih beberapa detik saja sudah cukup menolak token
 for n in $(kubectl get nodes -o name); do kubectl debug "$n" -it --image=busybox -- date -u 2>/dev/null; done

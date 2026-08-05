@@ -347,7 +347,7 @@ WHERE data_type IN ('double precision','real')
   AND column_name ~ '(harga|jumlah|saldo|amount|price|balance|total)';
 
 -- Jumlah bagian harus persis sama dengan total yang tersimpan
-SELECT p.id, p.total, sum(i.subtotal) AS jumlah_item, p.total - sum(i.subtotal) AS selisih
-FROM pesanan p JOIN item_pesanan i ON i.pesanan_id = p.id
+SELECT p.id, p.total, sum(i.subtotal) AS item_count, p.total - sum(i.subtotal) AS diff
+FROM orders p JOIN order_items i ON i.order_id = p.id
 GROUP BY p.id, p.total HAVING p.total <> sum(i.subtotal) LIMIT 20;
 ```

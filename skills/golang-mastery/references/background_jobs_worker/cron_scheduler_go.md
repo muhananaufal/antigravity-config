@@ -69,7 +69,7 @@ import (
 func InitRobfigCron(logger *slog.Logger) *cron.Cron {
 	location, err := time.LoadLocation("Asia/Jakarta")
 	if err != nil {
-		logger.Error("Gagal memuat timezone", "error", err)
+		logger.Error("Failed to load timezone", "error", err)
 		location = time.UTC
 	}
 
@@ -85,12 +85,12 @@ func InitRobfigCron(logger *slog.Logger) *cron.Cron {
 
 	// Contoh penjadwalan
 	_, err = c.AddFunc("0 0 12 * * *", func() {
-		logger.Info("Job dieksekusi tepat jam 12:00:00 WIB", "time", time.Now().In(location))
+		logger.Info("Job executed exactly at 12:00:00 WIB", "time", time.Now().In(location))
 		// Simulasi proses lama
 		time.Sleep(2 * time.Second)
 	})
 	if err != nil {
-		logger.Error("Gagal menjadwalkan job", "error", err)
+		logger.Error("Failed to schedule job", "error", err)
 	}
 
 	return c
@@ -161,7 +161,7 @@ func InitDistributedCron(redisClient redis.UniversalClient, logger *slog.Logger)
 	_, err = s.NewJob(
 		gocron.CronJob("*/5 * * * *", false), // Eksekusi setiap 5 menit
 		gocron.NewTask(func(jobCtx context.Context) {
-			logger.Info("Menjalankan tugas terdistribusi, saya memegang lock!")
+			logger.Info("Running distributed task, I hold the lock!")
 			// Pekerjaan penting dilakukan di sini...
 		}),
 		gocron.WithName("distributed-cleanup-task"),
@@ -194,18 +194,18 @@ import (
 var (
 	cronJobDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "cron_job_duration_seconds",
-		Help:    "Durasi eksekusi cron job.",
+		Help:    "Cron job execution duration.",
 		Buckets: prometheus.DefBuckets,
 	}, []string{"job_name"})
 
 	cronJobStatus = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "cron_job_total",
-		Help: "Jumlah eksekusi job berdasarkan status sukses/gagal.",
+		Help: "Total job executions by success/failure status.",
 	}, []string{"job_name", "status"}) // status: "success", "error"
 
 	cronLastRun = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "cron_job_last_run_timestamp",
-		Help: "Waktu terakhir cron job dieksekusi (Unix timestamp).",
+		Help: "Last time cron job was executed (Unix timestamp).",
 	}, []string{"job_name"})
 )
 
@@ -267,7 +267,7 @@ func (d *DynamicCronManager) WatchForScheduleChanges(ctx context.Context, curren
 	for {
 		select {
 		case <-ctx.Done():
-			d.logger.Info("Berhenti memonitor perubahan jadwal")
+			d.logger.Info("Stopped monitoring schedule changes")
 			return
 		case <-ticker.C:
 			newCron, err := d.fetchCron()
@@ -275,7 +275,7 @@ func (d *DynamicCronManager) WatchForScheduleChanges(ctx context.Context, curren
 				continue // Error mengambil db atau tidak ada perubahan
 			}
 			
-			d.logger.Info("Mendeteksi perubahan jadwal cron", "old", currentCron, "new", newCron)
+			d.logger.Info("Detected cron schedule change", "old", currentCron, "new", newCron)
 			
 			// Perbarui job di scheduler
 			err = d.scheduler.Update(
@@ -286,7 +286,7 @@ func (d *DynamicCronManager) WatchForScheduleChanges(ctx context.Context, curren
 			if err == nil {
 				currentCron = newCron
 			} else {
-				d.logger.Error("Gagal mengupdate jadwal", "error", err)
+				d.logger.Error("Failed to update schedule", "error", err)
 			}
 		}
 	}
@@ -427,7 +427,7 @@ func TestMyImportantTask_Success(t *testing.T) {
 	mockAPI.CallAPI() // asumsikan dipanggil dalam jobs.MyImportantTask
 	
 	if !mockAPI.Called {
-		t.Error("Diharapkan API dipanggil, ternyata tidak")
+		t.Error("Expected API to be called, but it was not")
 	}
 }
 
@@ -439,7 +439,7 @@ func TestMyImportantTask_Timeout(t *testing.T) {
 	time.Sleep(5 * time.Millisecond) // buat context expire
 
 	if ctx.Err() != context.DeadlineExceeded {
-		t.Errorf("Diharapkan context DeadlineExceeded, namun %v", ctx.Err())
+		t.Errorf("Expected context DeadlineExceeded, got %v", ctx.Err())
 	}
 }
 ```
@@ -498,7 +498,7 @@ func TestDistributedLocking(t *testing.T) {
 	wg.Wait()
 
 	// Assertions: Walaupun 5 pod berebut, hanya ada TEPAT 1 eksekusi
-	assert.Equal(t, int32(1), atomic.LoadInt32(&jobExecutionCount), "Hanya 1 job yang boleh tereksekusi")
+	assert.Equal(t, int32(1), atomic.LoadInt32(&jobExecutionCount), "Only 1 job should be executed")
 }
 ```
 
@@ -542,13 +542,13 @@ func TestCronLifecycle(t *testing.T) {
 	
 	// Ambil count
 	count := atomic.LoadInt32(&runCount)
-	assert.GreaterOrEqual(t, count, int32(2), "Job harus dijalankan setidaknya 2x")
+	assert.GreaterOrEqual(t, count, int32(2), "Job must be run at least twice")
 	
 	// Pastikan tidak bertambah lagi
 	time.Sleep(1500 * time.Millisecond)
 	countAfterStop := atomic.LoadInt32(&runCount)
 	
-	assert.Equal(t, count, countAfterStop, "Job tidak boleh jalan lagi setelah cron di Stop()")
+	assert.Equal(t, count, countAfterStop, "Job must not run again after cron is stopped")
 }
 ```
 

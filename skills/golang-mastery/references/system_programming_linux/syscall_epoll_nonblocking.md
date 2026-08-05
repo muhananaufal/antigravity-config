@@ -197,7 +197,7 @@ func NewEpollPoller() (*EpollPoller, error) {
 	// Buat epoll instance (EPOLL_CLOEXEC sangat penting untuk keamanan fork)
 	epfd, err := unix.EpollCreate1(unix.EPOLL_CLOEXEC)
 	if err != nil {
-		return nil, fmt.Errorf("gagal membuat epoll: %w", err)
+		return nil, fmt.Errorf("failed to create epoll: %w", err)
 	}
 	return &EpollPoller{epfd: epfd}, nil
 }
@@ -267,7 +267,7 @@ func TestEpollPipe(t *testing.T) {
 	// Buat POSIX Pipe (Komunikasi searah antar thread/proses)
 	var pipefds [2]int
 	if err := syscall.Pipe(pipefds[:]); err != nil {
-		t.Fatalf("Gagal membuat pipe: %v", err)
+		t.Fatalf("Failed to create pipe: %v", err)
 	}
 	readFd := pipefds[0]
 	writeFd := pipefds[1]
@@ -278,22 +278,22 @@ func TestEpollPipe(t *testing.T) {
 	// Inisialisasi Epoll
 	poller, err := NewEpollPoller()
 	if err != nil {
-		t.Fatalf("Gagal inisialisasi epoll: %v", err)
+		t.Fatalf("Failed to initialize epoll: %v", err)
 	}
 	defer poller.Close()
 
 	// Daftarkan READ sisi pipe ke epoll
 	if err := poller.Add(readFd); err != nil {
-		t.Fatalf("Gagal add readFd: %v", err)
+		t.Fatalf("Failed to add readFd: %v", err)
 	}
 
 	// Tes timeout: epoll harus mereturn empty list setelah 100ms
 	fds, err := poller.Wait(context.Background(), 100)
 	if err != nil {
-		t.Fatalf("Wait gagal: %v", err)
+		t.Fatalf("Wait failed: %v", err)
 	}
 	if len(fds) > 0 {
-		t.Errorf("Harusnya tidak ada event, karena tidak ada yang menulis")
+		t.Errorf("Should have no events, because nothing was written")
 	}
 
 	// Goroutine menulis ke Pipe
@@ -304,7 +304,7 @@ func TestEpollPipe(t *testing.T) {
 
 	fds, err = poller.Wait(context.Background(), -1)
 	if err != nil {
-		t.Fatalf("Wait gagal: %v", err)
+		t.Fatalf("Wait failed: %v", err)
 	}
 	if len(fds) != 1 || fds[0] != int32(readFd) {
 		t.Fatalf("Expected 1 event for readFd, got %v", fds)
@@ -313,10 +313,10 @@ func TestEpollPipe(t *testing.T) {
 	buf := make([]byte, 100)
 	n, err := syscall.Read(readFd, buf)
 	if err != nil {
-		t.Fatalf("Gagal baca: %v", err)
+		t.Fatalf("Failed to read: %v", err)
 	}
 	if string(buf[:n]) != "HELLO EPOLL" {
-		t.Errorf("Salah baca data: %s", string(buf[:n]))
+		t.Errorf("Read incorrect data: %s", string(buf[:n]))
 	}
 }
 
@@ -343,7 +343,7 @@ func TestEpoll_ContextCancellation(t *testing.T) {
 
 func TestEpoll_RootRequired_PrivilegedPort(t *testing.T) {
 	if os.Getuid() != 0 {
-		t.Skip("Skip test yang butuh akses root (Binding Privileged Port < 1024)")
+		t.Skip("Skip test that requires root access (Binding Privileged Port < 1024)")
 	}
 	
 	fd, err := unix.Socket(unix.AF_INET, unix.SOCK_STREAM, unix.IPPROTO_TCP)

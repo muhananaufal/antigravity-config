@@ -124,24 +124,24 @@ const (
 )
 
 // Produk adalah tipe domain — tidak tahu apa-apa soal CLI.
-type Produk struct {
+type Product struct {
 	SKU   string `json:"sku"`
-	Nama  string `json:"nama"`
+	Nama  string `json:"name"`
 	Harga int64  `json:"harga"`
 }
 
 // OpsiList adalah parameter murni, tanpa jejak cobra.
-type OpsiList struct {
+type ListOpts struct {
 	Tenant string
 	Limit  int
 }
 
 // ErrTidakAda dikembalikan domain, dipetakan CLI menjadi kode keluar 4.
-var ErrTidakAda = errors.New("produk tidak ditemukan")
+var ErrNotFound = errors.New("produk tidak ditemukan")
 
 // Store adalah antarmuka domain — inilah yang dipalsukan saat menguji CLI.
 type Store interface {
-	ListProduk(ctx context.Context, o OpsiList) ([]Produk, error)
+	ListProducts(ctx context.Context, o ListOpts) ([]Product, error)
 }
 
 // App menyatukan dependensi. Tidak ada satu pun variabel global.
@@ -150,7 +150,7 @@ type App struct {
 }
 
 // Opsi global yang diwarisi seluruh subperintah.
-type opsiRoot struct {
+type rootOpts struct {
 	verbose bool
 	format  string // "table" atau "json"
 }
@@ -158,7 +158,7 @@ type opsiRoot struct {
 // NewRootCmd membangun seluruh pohon perintah.
 // Fungsi, bukan variabel paket — tiap test mendapat pohon yang bersih.
 func NewRootCmd(app *App) *cobra.Command {
-	o := &opsiRoot{}
+	o := &rootOpts{}
 
 	root := &cobra.Command{
 		Use:   "katalog",
@@ -180,7 +180,7 @@ func NewRootCmd(app *App) *cobra.Command {
 }
 
 // newProdukCmd adalah grup kata benda; ia sendiri tidak melakukan apa-apa.
-func newProdukCmd(app *App, o *opsiRoot) *cobra.Command {
+func newProdukCmd(app *App, o *rootOpts) *cobra.Command {
 	c := &cobra.Command{
 		Use:   "produk",
 		Short: "Operasi pada produk",
@@ -189,8 +189,8 @@ func newProdukCmd(app *App, o *opsiRoot) *cobra.Command {
 	return c
 }
 
-func newProdukListCmd(app *App, o *opsiRoot) *cobra.Command {
-	var opsi OpsiList
+func newProdukListCmd(app *App, o *rootOpts) *cobra.Command {
+	var opts ListOpts
 
 	c := &cobra.Command{
 		Use:   "list",
@@ -203,27 +203,27 @@ func newProdukListCmd(app *App, o *opsiRoot) *cobra.Command {
 
 			if o.verbose {
 				fmt.Fprintf(cmd.ErrOrStderr(), "mengambil produk tenant=%q limit=%d\n",
-					opsi.Tenant, opsi.Limit)
+					opts.Tenant, opts.Limit)
 			}
 
 			// Satu panggilan ke domain. Tidak ada logika bisnis di sini.
-			items, err := app.Store.ListProduk(ctx, opsi)
+			items, err := app.Store.ListProducts(ctx, opts)
 			if err != nil {
 				return err
 			}
-			return tulisProduk(cmd.OutOrStdout(), items, o.format)
+			return writeProducts(cmd.OutOrStdout(), items, o.format)
 		},
 	}
 
 	f := c.Flags()
-	f.StringVar(&opsi.Tenant, "tenant", "", "saring berdasarkan tenant")
-	f.IntVar(&opsi.Limit, "limit", 50, "jumlah maksimum baris")
+	f.StringVar(&opts.Tenant, "tenant", "", "saring berdasarkan tenant")
+	f.IntVar(&opts.Limit, "limit", 50, "jumlah maksimum lines")
 	return c
 }
 
 // tulisProduk memformat keluaran. Menerima io.Writer, bukan menulis ke
 // os.Stdout langsung — inilah yang membuatnya bisa diuji.
-func tulisProduk(w io.Writer, items []Produk, format string) error {
+func writeProducts(w io.Writer, items []Product, format string) error {
 	switch format {
 	case "json":
 		enc := json.NewEncoder(w)
@@ -237,12 +237,12 @@ func tulisProduk(w io.Writer, items []Produk, format string) error {
 		}
 		return tw.Flush()
 	default:
-		return fmt.Errorf("%w: format %q tidak dikenal", errPemakaian, format)
+		return fmt.Errorf("%w: unknown format %q", errUsage, format)
 	}
 }
 
 // errPemakaian menandai kesalahan yang layak kode keluar 2.
-var errPemakaian = errors.New("kesalahan pemakaian")
+var errUsage = errors.New("usage error")
 
 // Execute menjalankan CLI dan memetakan error ke kode keluar.
 // Inilah SATU-SATUNYA tempat os.Exit boleh muncul.
@@ -263,9 +263,9 @@ func Execute(app *App) int {
 	switch {
 	case errors.Is(err, context.Canceled):
 		return 130 // konvensi: dihentikan sinyal
-	case errors.Is(err, errPemakaian):
+	case errors.Is(err, errUsage):
 		return ExitUsage
-	case errors.Is(err, ErrTidakAda):
+	case errors.Is(err, ErrNotFound):
 		return ExitNotFound
 	default:
 		return ExitError
@@ -307,19 +307,19 @@ import (
 
 // storePalsu menggantikan database. Karena CLI hanya bergantung pada
 // antarmuka Store, tidak ada satu pun test yang butuh koneksi nyata.
-type storePalsu struct {
-	items []Produk
+type fakeStore struct {
+	items []Product
 	err   error
-	opsi  OpsiList // merekam apa yang diterima domain
+	opts  ListOpts // merekam apa yang diterima domain
 }
 
-func (s *storePalsu) ListProduk(_ context.Context, o OpsiList) ([]Produk, error) {
-	s.opsi = o
+func (s *fakeStore) ListProducts(_ context.Context, o ListOpts) ([]Product, error) {
+	s.opts = o
 	return s.items, s.err
 }
 
 // jalankan menjalankan CLI dengan argumen tertentu dan menangkap keluarannya.
-func jalankan(t *testing.T, app *App, args ...string) (stdout, stderr string, err error) {
+func run(t *testing.T, app *App, args ...string) (stdout, stderr string, err error) {
 	t.Helper()
 	var out, errOut bytes.Buffer
 	root := NewRootCmd(app)
@@ -330,51 +330,51 @@ func jalankan(t *testing.T, app *App, args ...string) (stdout, stderr string, er
 	return out.String(), errOut.String(), err
 }
 
-func TestProdukList_FormatTable(t *testing.T) {
-	app := &App{Store: &storePalsu{items: []Produk{
+func TestProductList_FormatTable(t *testing.T) {
+	app := &App{Store: &fakeStore{items: []Product{
 		{SKU: "A-1", Nama: "Apel", Harga: 12000},
 	}}}
-	out, _, err := jalankan(t, app, "produk", "list")
+	out, _, err := run(t, app, "produk", "list")
 	if err != nil {
 		t.Fatalf("tak terduga: %v", err)
 	}
 	if !strings.Contains(out, "A-1") || !strings.Contains(out, "Apel") {
-		t.Fatalf("keluaran tidak memuat data: %q", out)
+		t.Fatalf("keluaran tidak loading data: %q", out)
 	}
 }
 
-func TestProdukList_FormatJSON(t *testing.T) {
-	app := &App{Store: &storePalsu{items: []Produk{
+func TestProductList_FormatJSON(t *testing.T) {
+	app := &App{Store: &fakeStore{items: []Product{
 		{SKU: "A-1", Nama: "Apel", Harga: 12000},
 	}}}
-	out, _, err := jalankan(t, app, "produk", "list", "--format", "json")
+	out, _, err := run(t, app, "produk", "list", "--format", "json")
 	if err != nil {
 		t.Fatalf("tak terduga: %v", err)
 	}
-	var got []Produk
+	var got []Product
 	if err := json.Unmarshal([]byte(out), &got); err != nil {
 		t.Fatalf("keluaran bukan JSON valid: %v\n%s", err, out)
 	}
 	if len(got) != 1 || got[0].SKU != "A-1" {
-		t.Fatalf("isi JSON salah: %+v", got)
+		t.Fatalf("content JSON salah: %+v", got)
 	}
 }
 
-func TestProdukList_FlagDiteruskanKeDomain(t *testing.T) {
-	s := &storePalsu{}
+func TestProductList_FlagDiteruskanKeDomain(t *testing.T) {
+	s := &fakeStore{}
 	app := &App{Store: s}
-	if _, _, err := jalankan(t, app, "produk", "list", "--tenant", "acme", "--limit", "7"); err != nil {
+	if _, _, err := run(t, app, "produk", "list", "--tenant", "acme", "--limit", "7"); err != nil {
 		t.Fatalf("tak terduga: %v", err)
 	}
-	if s.opsi.Tenant != "acme" || s.opsi.Limit != 7 {
-		t.Fatalf("opsi tidak diteruskan: %+v", s.opsi)
+	if s.opts.Tenant != "acme" || s.opts.Limit != 7 {
+		t.Fatalf("opts tidak diteruskan: %+v", s.opts)
 	}
 }
 
-func TestVerbose_KeStderrBukanStdout(t *testing.T) {
+func TestVerbose_ToStderrNotStdout(t *testing.T) {
 	// Ini menjaga kontrak pipeline: stdout HANYA data.
-	app := &App{Store: &storePalsu{items: []Produk{{SKU: "A-1"}}}}
-	out, errOut, err := jalankan(t, app, "produk", "list", "--verbose", "--format", "json")
+	app := &App{Store: &fakeStore{items: []Product{{SKU: "A-1"}}}}
+	out, errOut, err := run(t, app, "produk", "list", "--verbose", "--format", "json")
 	if err != nil {
 		t.Fatalf("tak terduga: %v", err)
 	}
@@ -386,25 +386,25 @@ func TestVerbose_KeStderrBukanStdout(t *testing.T) {
 	}
 }
 
-func TestFormatTidakDikenal_KodeKeluarPemakaian(t *testing.T) {
-	app := &App{Store: &storePalsu{}}
-	_, _, err := jalankan(t, app, "produk", "list", "--format", "xml")
-	if !errors.Is(err, errPemakaian) {
-		t.Fatalf("mau errPemakaian, dapat %v", err)
+func TestUnknownFormat_UsageExitCode(t *testing.T) {
+	app := &App{Store: &fakeStore{}}
+	_, _, err := run(t, app, "produk", "list", "--format", "xml")
+	if !errors.Is(err, errUsage) {
+		t.Fatalf("mau errUsage, dapat %v", err)
 	}
 }
 
-func TestErrorDomain_DipetakanKeKodeKeluar(t *testing.T) {
-	app := &App{Store: &storePalsu{err: ErrTidakAda}}
-	_, _, err := jalankan(t, app, "produk", "list")
-	if !errors.Is(err, ErrTidakAda) {
-		t.Fatalf("mau ErrTidakAda, dapat %v", err)
+func TestDomainError_MappedToExitCode(t *testing.T) {
+	app := &App{Store: &fakeStore{err: ErrNotFound}}
+	_, _, err := run(t, app, "produk", "list")
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("mau ErrNotFound, dapat %v", err)
 	}
 }
 
-func TestArgumenBerlebih_Ditolak(t *testing.T) {
-	app := &App{Store: &storePalsu{}}
-	if _, _, err := jalankan(t, app, "produk", "list", "argumen-liar"); err == nil {
+func TestExtraArgs_Rejected(t *testing.T) {
+	app := &App{Store: &fakeStore{}}
+	if _, _, err := run(t, app, "produk", "list", "argumen-liar"); err == nil {
 		t.Fatal("cobra.NoArgs seharusnya menolak argumen tambahan")
 	}
 }
@@ -422,11 +422,11 @@ var listCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		db, err := sql.Open("pgx", dsn)
 		if err != nil {
-			fmt.Println("gagal:", err) // ke stdout, merusak pipeline
+			fmt.Println("failed:", err) // ke stdout, merusak pipeline
 			os.Exit(1)                 // defer di atas TIDAK jalan
 		}
 		defer db.Close() // tidak pernah tercapai bila error di bawah
-		rows, _ := db.Query(`SELECT sku, nama FROM produk`)
+		rows, _ := db.Query(`SELECT sku, name FROM produk`)
 		for rows.Next() { /* ... */ }
 	},
 }
@@ -460,14 +460,14 @@ app order list       app order refund
 
 ```go
 fmt.Println("Memproses...")   // ke stdout, merusak `app list | jq`
-fmt.Printf("%v\n", hasil)     // tidak bisa ditangkap test
+fmt.Printf("%v\n", result)     // tidak bisa ditangkap test
 ```
 
 **✅ BENAR — selalu lewat writer perintah**
 
 ```go
 fmt.Fprintln(cmd.ErrOrStderr(), "Memproses...")  // progres -> stderr
-fmt.Fprintf(cmd.OutOrStdout(), "%v\n", hasil)    // data -> stdout
+fmt.Fprintf(cmd.OutOrStdout(), "%v\n", result)    // data -> stdout
 ```
 
 ## Kasus Tepi Produksi

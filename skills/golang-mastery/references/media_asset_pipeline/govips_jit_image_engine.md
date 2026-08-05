@@ -119,7 +119,7 @@ func (e *VipsEngine) processSingle(job Job) error {
 	// 1. Muat gambar langsung via vips (JIT decoding)
 	img, err := vips.NewImageFromFile(job.InputPath)
 	if err != nil {
-		return fmt.Errorf("gagal memuat file: %w", err)
+		return fmt.Errorf("failed to load file: %w", err)
 	}
 	// PENTING: Manual memory management objek C!
 	defer img.Close()
@@ -127,7 +127,7 @@ func (e *VipsEngine) processSingle(job Job) error {
 	// 2. Resize menggunakan filter presisi (Lanczos3 default)
 	err = img.Thumbnail(job.Width, job.Height, vips.InterestingCentre)
 	if err != nil {
-		return fmt.Errorf("gagal melakukan resize thumbnail: %w", err)
+		return fmt.Errorf("failed to resize thumbnail: %w", err)
 	}
 
 	// 3. Ekspor ke WebP (Lossy, Quality 80%)
@@ -136,7 +136,7 @@ func (e *VipsEngine) processSingle(job Job) error {
 	
 	bytes, _, err := img.ExportWebp(ep)
 	if err != nil {
-		return fmt.Errorf("gagal export ke WebP: %w", err)
+		return fmt.Errorf("failed to export to WebP: %w", err)
 	}
 
 	// 4. Simpan ke disk (di luar CGO memory lifecycle)
@@ -169,7 +169,7 @@ func TestGovipsWorkerPool(t *testing.T) {
 	for _, res := range results {
 		// Log error jika fixture tak ditemukan
 		if res.Err != nil {
-			t.Logf("Job %s error: %v (Dianggap lulus jika IO fail karena mock)", res.ID, res.Err)
+			t.Logf("Job %s error: %v (Considered passed if IO fails due to mock)", res.ID, res.Err)
 		}
 	}
 }

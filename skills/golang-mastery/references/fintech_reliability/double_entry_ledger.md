@@ -253,17 +253,17 @@ PostTransaction(ctx, db, txID, []LedgerEntry{
 
 ```sql
 -- Invarian paling mendasar: setiap transaksi WAJIB seimbang
-SELECT transaksi_id, sum(debit) AS d, sum(kredit) AS k
-FROM jurnal GROUP BY transaksi_id HAVING sum(debit) <> sum(kredit) LIMIT 20;
+SELECT transaction_id, sum(debit) AS d, sum(credit) AS k
+FROM ledger GROUP BY transaction_id HAVING sum(debit) <> sum(credit) LIMIT 20;
 
 -- Saldo tersimpan vs hasil hitung ulang dari jurnal
-SELECT a.id, a.saldo,
-       coalesce(sum(j.debit) - sum(j.kredit), 0) AS saldo_hitung,
-       a.saldo - coalesce(sum(j.debit) - sum(j.kredit), 0) AS selisih
-FROM akun a LEFT JOIN jurnal j ON j.akun_id = a.id
-GROUP BY a.id, a.saldo HAVING a.saldo <> coalesce(sum(j.debit) - sum(j.kredit), 0);
+SELECT a.id, a.balance,
+       coalesce(sum(j.debit) - sum(j.credit), 0) AS calculated_balance,
+       a.balance - coalesce(sum(j.debit) - sum(j.credit), 0) AS diff
+FROM account a LEFT JOIN ledger j ON j.account_id = a.id
+GROUP BY a.id, a.balance HAVING a.balance <> coalesce(sum(j.debit) - sum(j.credit), 0);
 
 -- Apakah append-only benar-benar ditegakkan izin database?
 SELECT grantee, privilege_type FROM information_schema.table_privileges
-WHERE table_name = 'jurnal' AND privilege_type IN ('UPDATE','DELETE');
+WHERE table_name = 'ledger' AND privilege_type IN ('UPDATE','DELETE');
 ```

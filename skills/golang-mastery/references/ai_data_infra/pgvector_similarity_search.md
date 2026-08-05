@@ -249,11 +249,11 @@ graph LR;
 ```sql
 -- Rencana WAJIB menunjukkan Index Scan, bukan Seq Scan
 EXPLAIN ANALYZE
-SELECT id, embedding <=> $1 AS jarak FROM dokumen ORDER BY embedding <=> $1 LIMIT 10;
+SELECT id, embedding <=> $1 AS distance FROM documents ORDER BY embedding <=> $1 LIMIT 10;
 
 -- Index vektor yang ada dan ukurannya
-SELECT indexrelname, pg_size_pretty(pg_relation_size(indexrelid)) AS ukuran, idx_scan
-FROM pg_stat_user_indexes WHERE relname = 'dokumen';
+SELECT indexrelname, pg_size_pretty(pg_relation_size(indexrelid)) AS size, idx_scan
+FROM pg_stat_user_indexes WHERE relname = 'documents';
 
 -- Parameter recall: naikkan untuk hasil lebih akurat, dengan ongkos latensi
 SHOW hnsw.ef_search;

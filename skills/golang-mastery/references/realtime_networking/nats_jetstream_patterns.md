@@ -242,7 +242,7 @@ func runEmbeddedServer(t *testing.T) *server.Server {
 	}
 	go s.Start()
 	if !s.ReadyForConnections(5 * time.Second) {
-		t.Fatal("Embedded NATS tidak siap")
+		t.Fatal("Embedded NATS not ready")
 	}
 	return s
 }
@@ -255,14 +255,14 @@ func TestJetStreamPullWorker(t *testing.T) {
 	clientUrl := s.ClientURL()
 	nc, err := nats.Connect(clientUrl)
 	if err != nil {
-		t.Fatalf("Gagal konek: %v", err)
+		t.Fatalf("Failed to connect: %v", err)
 	}
 	defer nc.Close()
 
 	// 2. Inisialisasi Worker
 	worker, err := NewPullWorker(nc, "ORDERS_STREAM", "orders.>", "order_processor")
 	if err != nil {
-		t.Fatalf("Gagal init worker: %v", err)
+		t.Fatalf("Failed to init worker: %v", err)
 	}
 
 	// 3. Publish Dummy Data

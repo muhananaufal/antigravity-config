@@ -94,20 +94,20 @@ import (
 //
 // Satu tempat, bukan tersebar di tiap handler -- itulah yang mencegah
 // 404 dan 500 tertukar secara acak antar endpoint.
-func pesanAman(c codes.Code) string {
+func safeMessage(c codes.Code) string {
 	switch c {
 	case codes.NotFound:
-		return "Data yang diminta tidak ada."
+		return "Requested data not found."
 	case codes.InvalidArgument:
-		return "Permintaan tidak valid."
+		return "Invalid request."
 	case codes.PermissionDenied:
-		return "Anda tidak punya akses ke sumber daya ini."
+		return "You do not have access to this resource."
 	case codes.Unauthenticated:
-		return "Autentikasi diperlukan."
+		return "Authentication required."
 	case codes.DeadlineExceeded:
-		return "Permintaan melebihi batas waktu."
+		return "Request deadline exceeded."
 	default:
-		return "Terjadi kesalahan pada server."
+		return "An internal server error occurred."
 	}
 }
 
@@ -160,8 +160,8 @@ func RegisterUserServiceHandlerClient(ctx context.Context, mux *runtime.ServeMux
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(runtime.HTTPStatusFromCode(st.Code()))
 			_ = json.NewEncoder(w).Encode(map[string]string{
-				"kode":  st.Code().String(),
-				"pesan": pesanAman(st.Code()),
+				"code":    st.Code().String(),
+				"message": safeMessage(st.Code()),
 			})
 			return
 		}
@@ -253,13 +253,13 @@ func TestGRPCGateway_HTTPBridge(t *testing.T) {
 		// Uji memeriksa KODE, bukan kalimat internal. Meng-assert
 		// "user 999 not found in database" justru MENGUNCI kebocoran
 		// informasi sebagai perilaku yang diharapkan.
-		var badan struct{ Kode, Pesan string }
-		_ = json.NewDecoder(resp.Body).Decode(&badan)
-		if badan.Kode != codes.NotFound.String() {
-			t.Errorf("mau kode NotFound, dapat %q", badan.Kode)
+		var body struct{ Code, Message string }
+		_ = json.NewDecoder(resp.Body).Decode(&body)
+		if body.Code != codes.NotFound.String() {
+			t.Errorf("mau kode NotFound, dapat %q", body.Code)
 		}
-		if strings.Contains(badan.Pesan, "database") {
-			t.Errorf("detail internal bocor ke klien: %q", badan.Pesan)
+		if strings.Contains(body.Message, "database") {
+			t.Errorf("detail internal bocor ke klien: %q", body.Message)
 		}
 	})
 }

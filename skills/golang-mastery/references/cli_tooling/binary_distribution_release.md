@@ -116,76 +116,76 @@ import (
 //
 // Bila kosong, Info() jatuh ke runtime/debug.ReadBuildInfo().
 var (
-	versi   string
+	version   string
 	commit  string
-	tanggal string
+	date string
 )
 
 // Info memuat seluruh identitas biner.
 type Info struct {
-	Versi    string `json:"versi"`
+	Version    string `json:"version"`
 	Commit   string `json:"commit"`
-	Kotor    bool   `json:"kotor"`
-	Tanggal  string `json:"tanggal"`
-	GoVersi  string `json:"go_versi"`
+	Dirty    bool   `json:"dirty"`
+	Date  string `json:"date"`
+	GoVer  string `json:"go_versi"`
 	Platform string `json:"platform"`
-	Modul    string `json:"modul,omitempty"`
+	Module    string `json:"modul,omitempty"`
 }
 
 // Baca menyusun Info dari ldflags bila ada, atau dari build info.
-func Baca() Info {
+func Read() Info {
 	i := Info{
-		Versi:    versi,
+		Version:    version,
 		Commit:   commit,
-		Tanggal:  tanggal,
-		GoVersi:  runtime.Version(),
+		Date:  date,
+		GoVer:  runtime.Version(),
 		Platform: runtime.GOOS + "/" + runtime.GOARCH,
 	}
 
 	bi, ok := debug.ReadBuildInfo()
 	if !ok {
-		i.lengkapiKosong()
+		i.fillEmpty()
 		return i
 	}
-	i.Modul = bi.Main.Path
+	i.Module = bi.Main.Path
 
 	// bi.Main.Version bernilai "(devel)" untuk build lokal, atau tag
 	// sebenarnya bila dipasang lewat `go install modul@v1.4.2`.
-	if i.Versi == "" && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
-		i.Versi = bi.Main.Version
+	if i.Version == "" && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
+		i.Version = bi.Main.Version
 	}
 
 	for _, s := range bi.Settings {
 		switch s.Key {
 		case "vcs.revision":
 			if i.Commit == "" {
-				i.Commit = pendekkan(s.Value)
+				i.Commit = shorten(s.Value)
 			}
 		case "vcs.time":
-			if i.Tanggal == "" {
-				i.Tanggal = s.Value
+			if i.Date == "" {
+				i.Date = s.Value
 			}
 		case "vcs.modified":
-			i.Kotor = s.Value == "true"
+			i.Dirty = s.Value == "true"
 		}
 	}
-	i.lengkapiKosong()
+	i.fillEmpty()
 	return i
 }
 
-func (i *Info) lengkapiKosong() {
-	if i.Versi == "" {
-		i.Versi = "dev"
+func (i *Info) fillEmpty() {
+	if i.Version == "" {
+		i.Version = "dev"
 	}
 	if i.Commit == "" {
 		i.Commit = "tidak diketahui"
 	}
-	if i.Tanggal == "" {
-		i.Tanggal = "tidak diketahui"
+	if i.Date == "" {
+		i.Date = "tidak diketahui"
 	}
 }
 
-func pendekkan(sha string) string {
+func shorten(sha string) string {
 	if len(sha) > 7 {
 		return sha[:7]
 	}
@@ -194,11 +194,11 @@ func pendekkan(sha string) string {
 
 // String memberi bentuk satu baris, cocok untuk log dan User-Agent.
 func (i Info) String() string {
-	s := i.Versi
+	s := i.Version
 	if i.Commit != "tidak diketahui" {
 		s += "+" + i.Commit
 	}
-	if i.Kotor {
+	if i.Dirty {
 		s += "-dirty"
 	}
 	return s
@@ -206,21 +206,21 @@ func (i Info) String() string {
 
 // Tulis mencetak versi dalam format panjang atau JSON.
 // JSON penting agar skrip bisa memeriksa versi tanpa mengurai teks bebas.
-func (i Info) Tulis(w io.Writer, sebagaiJSON bool) error {
-	if sebagaiJSON {
+func (i Info) Write(w io.Writer, asJSON bool) error {
+	if asJSON {
 		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")
 		return enc.Encode(i)
 	}
-	kotor := ""
-	if i.Kotor {
-		kotor = " (dirty)"
+	dirty := ""
+	if i.Dirty {
+		dirty = " (dirty)"
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "katalog %s\n", i.Versi)
-	fmt.Fprintf(&b, "  commit  : %s%s\n", i.Commit, kotor)
-	fmt.Fprintf(&b, "  dibangun: %s\n", i.Tanggal)
-	fmt.Fprintf(&b, "  go      : %s\n", i.GoVersi)
+	fmt.Fprintf(&b, "katalog %s\n", i.Version)
+	fmt.Fprintf(&b, "  commit  : %s%s\n", i.Commit, dirty)
+	fmt.Fprintf(&b, "  dibangun: %s\n", i.Date)
+	fmt.Fprintf(&b, "  go      : %s\n", i.GoVer)
 	fmt.Fprintf(&b, "  platform: %s\n", i.Platform)
 	_, err := io.WriteString(w, b.String())
 	return err
@@ -231,16 +231,16 @@ Disambungkan ke cobra:
 
 ```go
 func newVersionCmd() *cobra.Command {
-	var sebagaiJSON bool
+	var asJSON bool
 	c := &cobra.Command{
 		Use:   "version",
-		Short: "Tampilkan versi biner",
+		Short: "Tampilkan version biner",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return version.Baca().Tulis(cmd.OutOrStdout(), sebagaiJSON)
+			return version.Read().Write(cmd.OutOrStdout(), asJSON)
 		},
 	}
-	c.Flags().BoolVar(&sebagaiJSON, "json", false, "keluarkan sebagai JSON")
+	c.Flags().BoolVar(&asJSON, "json", false, "keluarkan sebagai JSON")
 	return c
 }
 ```
@@ -302,75 +302,75 @@ import (
 	"testing"
 )
 
-func TestBaca_JatuhKeDefaultSaatKosong(t *testing.T) {
-	versi, commit, tanggal = "", "", ""
-	i := Baca()
-	if i.Versi == "" || i.Commit == "" || i.Tanggal == "" {
-		t.Fatalf("field wajib tidak boleh kosong: %+v", i)
+func TestRead_JatuhKeDefaultSaatKosong(t *testing.T) {
+	version, commit, date = "", "", ""
+	i := Read()
+	if i.Version == "" || i.Commit == "" || i.Date == "" {
+		t.Fatalf("field required tidak boleh empty: %+v", i)
 	}
 	if i.Platform == "" || !strings.Contains(i.Platform, "/") {
 		t.Fatalf("platform salah bentuk: %q", i.Platform)
 	}
 }
 
-func TestBaca_LdflagsMenang(t *testing.T) {
-	versi, commit, tanggal = "v1.4.2", "3f9a1c2", "2026-08-05T10:04:00Z"
-	t.Cleanup(func() { versi, commit, tanggal = "", "", "" })
+func TestRead_LdflagsMenang(t *testing.T) {
+	version, commit, date = "v1.4.2", "3f9a1c2", "2026-08-05T10:04:00Z"
+	t.Cleanup(func() { version, commit, date = "", "", "" })
 
-	i := Baca()
-	if i.Versi != "v1.4.2" || i.Commit != "3f9a1c2" {
+	i := Read()
+	if i.Version != "v1.4.2" || i.Commit != "3f9a1c2" {
 		t.Fatalf("ldflags harus menang: %+v", i)
 	}
 }
 
-func TestString_MenandaiDirty(t *testing.T) {
-	i := Info{Versi: "v1.4.2", Commit: "3f9a1c2", Kotor: true}
+func TestString_MarksDirty(t *testing.T) {
+	i := Info{Version: "v1.4.2", Commit: "3f9a1c2", Dirty: true}
 	if got := i.String(); got != "v1.4.2+3f9a1c2-dirty" {
 		t.Fatalf("mau v1.4.2+3f9a1c2-dirty, dapat %q", got)
 	}
 }
 
-func TestString_TanpaCommitTidakMenambahPlus(t *testing.T) {
-	i := Info{Versi: "dev", Commit: "tidak diketahui"}
+func TestString_WithoutCommitNoPlus(t *testing.T) {
+	i := Info{Version: "dev", Commit: "tidak diketahui"}
 	if got := i.String(); got != "dev" {
 		t.Fatalf("mau dev, dapat %q", got)
 	}
 }
 
-func TestTulis_JSONBisaDiurai(t *testing.T) {
+func TestWrite_JSONBisaDiurai(t *testing.T) {
 	var b bytes.Buffer
-	i := Info{Versi: "v1.4.2", Commit: "3f9a1c2", Platform: "linux/amd64"}
-	if err := i.Tulis(&b, true); err != nil {
+	i := Info{Version: "v1.4.2", Commit: "3f9a1c2", Platform: "linux/amd64"}
+	if err := i.Write(&b, true); err != nil {
 		t.Fatalf("tak terduga: %v", err)
 	}
 	var got Info
 	if err := json.Unmarshal(b.Bytes(), &got); err != nil {
 		t.Fatalf("keluaran bukan JSON valid: %v\n%s", err, b.String())
 	}
-	if got.Versi != "v1.4.2" {
-		t.Fatalf("versi tidak terbawa: %+v", got)
+	if got.Version != "v1.4.2" {
+		t.Fatalf("version tidak terbawa: %+v", got)
 	}
 }
 
-func TestTulis_TeksMemuatSeluruhField(t *testing.T) {
+func TestWrite_TeksMemuatSeluruhField(t *testing.T) {
 	var b bytes.Buffer
-	i := Info{Versi: "v1.4.2", Commit: "3f9a1c2", Kotor: true,
-		Tanggal: "2026-08-05T10:04:00Z", GoVersi: "go1.24.1", Platform: "linux/amd64"}
-	if err := i.Tulis(&b, false); err != nil {
+	i := Info{Version: "v1.4.2", Commit: "3f9a1c2", Dirty: true,
+		Date: "2026-08-05T10:04:00Z", GoVer: "go1.24.1", Platform: "linux/amd64"}
+	if err := i.Write(&b, false); err != nil {
 		t.Fatalf("tak terduga: %v", err)
 	}
-	for _, wajib := range []string{"v1.4.2", "3f9a1c2", "(dirty)", "go1.24.1", "linux/amd64"} {
-		if !strings.Contains(b.String(), wajib) {
-			t.Fatalf("keluaran tidak memuat %q:\n%s", wajib, b.String())
+	for _, required := range []string{"v1.4.2", "3f9a1c2", "(dirty)", "go1.24.1", "linux/amd64"} {
+		if !strings.Contains(b.String(), required) {
+			t.Fatalf("keluaran tidak loading %q:\n%s", required, b.String())
 		}
 	}
 }
 
-func TestPendekkan(t *testing.T) {
-	if got := pendekkan("3f9a1c2d4e5f6789"); got != "3f9a1c2" {
+func TestShorten(t *testing.T) {
+	if got := shorten("3f9a1c2d4e5f6789"); got != "3f9a1c2" {
 		t.Fatalf("mau 3f9a1c2, dapat %q", got)
 	}
-	if got := pendekkan("abc"); got != "abc" {
+	if got := shorten("abc"); got != "abc" {
 		t.Fatalf("sha pendek harus dibiarkan, dapat %q", got)
 	}
 }
@@ -381,7 +381,7 @@ func TestPendekkan(t *testing.T) {
 **❌ SALAH — versi di-hardcode di kode**
 
 ```go
-const Versi = "v1.4.0" // lupa dinaikkan saat rilis v1.4.1, v1.4.2, ...
+const Version = "v1.4.0" // lupa dinaikkan saat rilis v1.4.1, v1.4.2, ...
 ```
 
 Setelah beberapa rilis, angkanya berbohong. Laporan bug menyebut v1.4.0 padahal yang berjalan v1.4.3, dan Anda mencari bug di kode yang salah.

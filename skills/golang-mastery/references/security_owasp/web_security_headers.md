@@ -323,7 +323,7 @@ func CSRF(kunci []byte, sumber SumberOtentikasi) func(http.Handler) http.Handler
 				return
 			}
 			if !periksaTokenCSRF(kunci, idSesi, r.Header.Get(namaHeaderCSRF)) {
-				http.Error(w, "token CSRF tidak valid", http.StatusForbidden)
+				http.Error(w, "invalid CSRF token", http.StatusForbidden)
 				return
 			}
 			next.ServeHTTP(w, r)
@@ -437,7 +437,7 @@ func TestCORS_OriginTidakDikenalTidakDipantulkan(t *testing.T) {
 	h.ServeHTTP(w, r)
 
 	if got := w.Header().Get("Access-Control-Allow-Origin"); got != "" {
-		t.Fatalf("origin asing TIDAK BOLEH diizinkan, dapat %q", got)
+		t.Fatalf("foreign origin MUST NOT be allowed, got %q", got)
 	}
 }
 
@@ -451,10 +451,10 @@ func TestCORS_TidakPernahWildcardBersamaKredensial(t *testing.T) {
 	asal := w.Header().Get("Access-Control-Allow-Origin")
 	kred := w.Header().Get("Access-Control-Allow-Credentials")
 	if asal == "*" && kred == "true" {
-		t.Fatal("kombinasi terlarang: wildcard + kredensial")
+		t.Fatal("forbidden combination: wildcard + credentials")
 	}
 	if asal != "https://app.contoh.id" {
-		t.Fatalf("origin yang diizinkan harus dikembalikan persis, dapat %q", asal)
+		t.Fatalf("allowed origin must be returned exactly, got %q", asal)
 	}
 }
 
@@ -468,7 +468,7 @@ func TestCORS_VaryOriginSelaluAda(t *testing.T) {
 	h.ServeHTTP(w, r)
 
 	if !strings.Contains(w.Header().Get("Vary"), "Origin") {
-		t.Fatal("Vary: Origin WAJIB ada agar cache tidak tercampur")
+		t.Fatal("Vary: Origin MUST be present to prevent cache mixing")
 	}
 }
 
@@ -484,17 +484,17 @@ func TestCORS_PreflightDijawab204DanBerhenti(t *testing.T) {
 	h.ServeHTTP(w, r)
 
 	if w.Code != http.StatusNoContent {
-		t.Fatalf("preflight harus 204, dapat %d", w.Code)
+		t.Fatalf("preflight must be 204, got %d", w.Code)
 	}
 	if dipanggil {
-		t.Fatal("preflight tidak boleh diteruskan ke handler")
+		t.Fatal("preflight must not be passed to handler")
 	}
 	if w.Header().Get("Access-Control-Allow-Headers") == "" {
-		t.Error("preflight harus menyebutkan header yang diizinkan")
+		t.Error("preflight must specify allowed headers")
 	}
 }
 
-var kunciCSRFUji = []byte("kunci-hmac-csrf-yang-cukup-panjang")
+var kunciCSRFUji = []byte("csrf-hmac-test-secret-key-32bytes")
 
 // sumberCookie menirukan lapisan otentikasi yang melaporkan bahwa permintaan
 // ini terautentikasi oleh COOKIE untuk sesi tertentu.
@@ -509,7 +509,7 @@ func TestCSRF_MutasiTanpaTokenDitolak(t *testing.T) {
 	h.ServeHTTP(w, r)
 
 	if w.Code != http.StatusForbidden {
-		t.Fatalf("mutasi berbasis cookie tanpa token CSRF harus 403, dapat %d", w.Code)
+		t.Fatalf("cookie-based mutation without CSRF token must be 403, got %d", w.Code)
 	}
 }
 
@@ -529,7 +529,7 @@ func TestCSRF_TokenSesiLainDitolak(t *testing.T) {
 	h.ServeHTTP(w, r)
 
 	if w.Code != http.StatusForbidden {
-		t.Fatalf("token milik sesi lain diterima (%d) — double-submit tanpa ikatan sesi bisa ditanam lewat subdomain", w.Code)
+		t.Fatalf("token from another session accepted (%d) — double-submit without session binding can be planted via subdomain", w.Code)
 	}
 }
 
@@ -546,7 +546,7 @@ func TestCSRF_TokenSesiSendiriDiterima(t *testing.T) {
 	h.ServeHTTP(w, r)
 
 	if w.Code != http.StatusOK {
-		t.Fatalf("token sah ditolak, dapat %d", w.Code)
+		t.Fatalf("valid token rejected, got %d", w.Code)
 	}
 }
 
@@ -561,18 +561,18 @@ func TestCSRF_PelewatanBergantungKredensialBukanHeader(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 	if w.Code != http.StatusOK {
-		t.Fatalf("otentikasi bearer tidak butuh CSRF, dapat %d", w.Code)
+		t.Fatalf("bearer authentication does not require CSRF, got %d", w.Code)
 	}
 
 	// Header Authorization sampah + sesi cookie yang sah: CSRF TETAP berlaku.
 	// Versi sebelumnya melewatkannya hanya karena header itu ada.
 	h2 := CSRF(kunciCSRFUji, sumberCookie("sesi-1"))(handlerOK())
 	r2 := httptest.NewRequest(http.MethodPost, "/transfer", nil)
-	r2.Header.Set("Authorization", "Bearer sampah")
+	r2.Header.Set("Authorization", "Bearer invalid_garbage_token")
 	w2 := httptest.NewRecorder()
 	h2.ServeHTTP(w2, r2)
 	if w2.Code != http.StatusForbidden {
-		t.Fatalf("header Authorization sampah melewatkan CSRF pada sesi cookie, dapat %d", w2.Code)
+		t.Fatalf("garbage Authorization header bypassed CSRF on cookie session, got %d", w2.Code)
 	}
 }
 
@@ -583,7 +583,7 @@ func TestCSRF_MetodeAmanDilewatkan(t *testing.T) {
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, r)
 		if w.Code != http.StatusOK {
-			t.Errorf("%s harus lolos tanpa token, dapat %d", m, w.Code)
+			t.Errorf("%s must pass without token, got %d", m, w.Code)
 		}
 	}
 }
@@ -596,14 +596,14 @@ func TestCookieCSRFMemakaiAwalanHost(t *testing.T) {
 	c := w.Result().Cookies()[0]
 
 	if !strings.HasPrefix(c.Name, "__Host-") {
-		t.Fatalf("nama cookie %q tanpa awalan __Host- — subdomain bisa menuliskannya untuk domain induk", c.Name)
+		t.Fatalf("cookie name %q without __Host- prefix — subdomain can write it for parent domain", c.Name)
 	}
 	if !c.Secure || c.Path != "/" || c.Domain != "" {
-		t.Errorf("awalan __Host- menuntut Secure, Path=/, dan tanpa Domain; dapat secure=%v path=%q domain=%q",
+		t.Errorf("__Host- prefix requires Secure, Path=/, and no Domain; got secure=%v path=%q domain=%q",
 			c.Secure, c.Path, c.Domain)
 	}
 	if c.HttpOnly {
-		t.Error("cookie CSRF harus terbaca JS agar bisa dikirim balik sebagai header")
+		t.Error("CSRF cookie must be readable by JS to be sent back as a header")
 	}
 }
 
@@ -619,12 +619,12 @@ func TestHeader_APIMemasangKebijakanKetat(t *testing.T) {
 	}
 	for k, v := range mau {
 		if got := w.Header().Get(k); got != v {
-			t.Errorf("%s: mau %q, dapat %q", k, v, got)
+			t.Errorf("%s: expected %q, got %q", k, v, got)
 		}
 	}
 	csp := w.Header().Get("Content-Security-Policy")
 	if !strings.Contains(csp, "frame-ancestors 'none'") {
-		t.Error("frame-ancestors 'none' wajib untuk mencegah clickjacking")
+		t.Error("frame-ancestors 'none' is mandatory to prevent clickjacking")
 	}
 }
 
@@ -644,7 +644,7 @@ func TestHeader_HSTSDiBalikProksiTLS(t *testing.T) {
 	h.ServeHTTP(w, r)
 
 	if !strings.Contains(w.Header().Get("Strict-Transport-Security"), "max-age=") {
-		t.Fatal("HSTS hilang di balik terminator TLS — topologi paling umum di Kubernetes")
+		t.Fatal("HSTS missing behind TLS terminator — most common topology in Kubernetes")
 	}
 }
 
@@ -661,7 +661,7 @@ func TestHeader_HSTSTidakDipasangDiHTTPPolos(t *testing.T) {
 	h.ServeHTTP(w, r)
 
 	if w.Header().Get("Strict-Transport-Security") != "" {
-		t.Fatal("X-Forwarded-Proto dari klien dipercaya tanpa proxy tepercaya")
+		t.Fatal("X-Forwarded-Proto from client trusted without trusted proxy")
 	}
 }
 
@@ -676,7 +676,7 @@ func TestCORS_VaryAdaMeskiTanpaOrigin(t *testing.T) {
 	h.ServeHTTP(w, r)
 
 	if !strings.Contains(w.Header().Get("Vary"), "Origin") {
-		t.Fatal("Vary: Origin hilang pada respons tanpa Origin — cache akan tercampur")
+		t.Fatal("Vary: Origin missing on response without Origin — cache will be mixed")
 	}
 }
 ```

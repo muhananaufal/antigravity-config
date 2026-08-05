@@ -251,7 +251,7 @@ func TestWriteFrame_Success(t *testing.T) {
 	var buf bytes.Buffer
 	err := WriteFrame(&buf, 0x05, []byte("HELLO"))
 	if err != nil {
-		t.Fatalf("Gagal write frame: %v", err)
+		t.Fatalf("Failed to write frame: %v", err)
 	}
 	expected := []byte{0xA1, 0x01, 0x05, 0x00, 0x05, 'H', 'E', 'L', 'L', 'O'}
 	if !bytes.Equal(buf.Bytes(), expected) {
@@ -268,7 +268,7 @@ func TestReadFrame_SlowConnectionFragmented(t *testing.T) {
 
 	frame, err := ReadFrame(mockConn)
 	if err != nil {
-		t.Fatalf("ReadFrame gagal menangani fragmentasi: %v", err)
+		t.Fatalf("ReadFrame failed to handle fragmentation: %v", err)
 	}
 	if string(frame.Payload) != "HELLO" {
 		t.Errorf("Payload mismatch, got: %s", frame.Payload)

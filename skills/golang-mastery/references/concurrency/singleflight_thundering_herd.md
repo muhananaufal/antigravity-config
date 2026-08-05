@@ -131,7 +131,7 @@ func TestSingleflightStampede(t *testing.T) {
 	// Luncurkan 500 goroutine serentak bagai Thundering Herd!
 	for i := 0; i < concurrency; i++ {
 		go func() {
-			val, err := repo.GetUserProfile(ctx, "user-kritis-99")
+			val, err := repo.GetUserProfile(ctx, "user-critical-99")
 			if err != nil {
 				errCh <- err
 				return
@@ -145,7 +145,7 @@ func TestSingleflightStampede(t *testing.T) {
 	for i := 0; i < concurrency; i++ {
 		select {
 		case val := <-resultsCh:
-			if val != "Profile_Data_For_user-kritis-99" {
+			if val != "Profile_Data_For_user-critical-99" {
 				t.Fatalf("unexpected output data: %v", val)
 			}
 			successCount++

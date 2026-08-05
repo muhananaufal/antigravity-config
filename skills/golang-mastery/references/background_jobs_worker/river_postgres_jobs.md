@@ -93,11 +93,11 @@ type SendWelcomeEmailWorker struct {
 }
 
 func (w *SendWelcomeEmailWorker) Work(ctx context.Context, job *river.Job[SendWelcomeEmailArgs]) error {
-    w.logger.InfoContext(ctx, "Mengirim email", "user_id", job.Args.UserID, "email", job.Args.Email)
+    w.logger.InfoContext(ctx, "Sending email", "user_id", job.Args.UserID, "email", job.Args.Email)
     
     // Simulasi pengiriman email
     if job.Args.Email == "" {
-        return fmt.Errorf("email kosong: tidak valid") // Akan memicu retry
+        return fmt.Errorf("empty email: invalid") // Akan memicu retry
     }
     
     // Sukses
@@ -375,7 +375,7 @@ func setupTestDB(t *testing.T) (*pgxpool.Pool, *river.Client[pgxpool.Tx], *Dummy
 	// Gunakan test DB! Pastikan schema River sudah di-migrate di DB ini.
 	pool, err := pgxpool.New(ctx, "postgres://postgres:postgres@localhost:5432/river_test?sslmode=disable")
 	if err != nil {
-		t.Skip("Database tidak tersedia, skip test.")
+		t.Skip("Database not available, skipping test.")
 	}
 	
 	// Bersihkan tabel sebelum test (Clean State)
@@ -416,7 +416,7 @@ func TestRiver_Integration_ExecuteJobSuccessfully(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verifikasi worker berjalan
-	assert.True(t, worker.executed, "Worker seharusnya tereksekusi dengan sukses")
+	assert.True(t, worker.executed, "Worker should have executed successfully")
 }
 
 // 2. Integration Test: Job Uniqueness (Mencegah Duplicate Insertion)
@@ -442,7 +442,7 @@ func TestRiver_Integration_JobUniqueness(t *testing.T) {
 	
 	// Verifikasi: res2.JobUniqueSkipped harus true, tidak ada job baru yg di-insert
 	assert.True(t, res2.UniqueSkipped)
-	assert.Nil(t, res2.Job, "Job kedua harus diskip karena unik")
+	assert.Nil(t, res2.Job, "Second job should be skipped because it is unique")
 }
 
 // 3. Integration Test: Job Retry & Status Discarded
@@ -481,7 +481,7 @@ func TestRiver_Integration_JobFailureAndRetry(t *testing.T) {
 	err = pool.QueryRow(ctx, "SELECT state, attempts FROM river_job WHERE id = $1", jobID).Scan(&state, &attempts)
 	
 	require.NoError(t, err)
-	assert.Equal(t, river.JobStateRetryable, state, "State harus retryable setelah gagal pertama")
+	assert.Equal(t, river.JobStateRetryable, state, "State should be retryable after first failure")
 	assert.Equal(t, 1, attempts)
 }
 ```

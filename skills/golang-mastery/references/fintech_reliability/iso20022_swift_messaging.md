@@ -295,14 +295,14 @@ CreDtTm: time.Now().Format("2006-01-02 15:04:05") // Ditolak oleh XSD Bank
 
 ```bash
 # Validasi terhadap XSD resmi SEBELUM mengirim -- ini gerbang yang paling murah
-xmllint --noout --schema pain.001.001.09.xsd pesan.xml
+xmllint --noout --schema pain.001.001.09.xsd message.xml
 
 # Pesan yang ditolak, dikelompokkan berdasarkan alasan
 kubectl logs -l app=swift --since=24h \
-  | jq -r 'select(.event=="pesan_ditolak") | .alasan' | sort | uniq -c | sort -rn
+  | jq -r 'select(.event=="message_rejected") | .reason' | sort | uniq -c | sort -rn
 ```
 
 ```sql
 -- Pengenal pesan yang muncul lebih dari sekali: pengiriman ulang, harus dideduplikasi
-SELECT msg_id, count(*) FROM pesan_masuk GROUP BY 1 HAVING count(*) > 1 LIMIT 20;
+SELECT msg_id, count(*) FROM incoming_messages GROUP BY 1 HAVING count(*) > 1 LIMIT 20;
 ```

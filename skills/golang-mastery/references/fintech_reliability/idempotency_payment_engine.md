@@ -339,20 +339,20 @@ if !result { /* Sudah terkunci oleh orang lain! */ }
 
 ```sql
 -- Pembayaran yang tersangkut di keadaan tidak diketahui: WAJIB direkonsiliasi
-SELECT status, count(*), min(dibuat_pada) AS tertua
-FROM pembayaran GROUP BY 1;
+SELECT status, count(*), min(created_at) AS oldest
+FROM payments GROUP BY 1;
 
-SELECT id, referensi_penyedia, now() - dibuat_pada AS umur
-FROM pembayaran
-WHERE status IN ('diproses','tidak_diketahui') AND dibuat_pada < now() - interval '15 minutes'
-ORDER BY dibuat_pada LIMIT 20;
+SELECT id, provider_reference, now() - created_at AS age
+FROM payments
+WHERE status IN ('processing','unknown') AND created_at < now() - interval '15 minutes'
+ORDER BY created_at LIMIT 20;
 
 -- Kemungkinan debit ganda: satu niat, dua referensi penyedia
-SELECT niat_id, count(DISTINCT referensi_penyedia) AS jumlah
-FROM pembayaran GROUP BY 1 HAVING count(DISTINCT referensi_penyedia) > 1;
+SELECT intent_id, count(DISTINCT provider_reference) AS count
+FROM payments GROUP BY 1 HAVING count(DISTINCT provider_reference) > 1;
 ```
 
 ```bash
-kubectl logs -l app=payment --since=24h | grep -c 'timeout penyedia'
+kubectl logs -l app=payment --since=24h | grep -c 'provider timeout'
 curl -s localhost:9090/metrics | grep -E 'payment_(duplicate|unknown|reconciled)_total'
 ```

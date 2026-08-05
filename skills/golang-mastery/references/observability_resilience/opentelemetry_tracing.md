@@ -78,7 +78,7 @@ import (
 // dan sesudah itu tidak ada cara memisahkannya lagi.
 type KonfigTracing struct {
 	NamaLayanan  string
-	VersiLayanan string
+	ServiceVersion string
 	Lingkungan   string // "production", "staging", "dev"
 	Endpoint     string
 	Rasio        float64 // head sampling untuk trace yang DIMULAI di sini
@@ -98,7 +98,7 @@ func InitTracerProvider(ctx context.Context, k KonfigTracing) (*sdktrace.TracerP
 		resource.Default(),
 		resource.NewWithAttributes(semconv.SchemaURL,
 			semconv.ServiceName(k.NamaLayanan),
-			semconv.ServiceVersion(k.VersiLayanan),
+			semconv.ServiceVersion(k.ServiceVersion),
 			semconv.DeploymentEnvironment(k.Lingkungan),
 		),
 	)
@@ -162,7 +162,7 @@ func InitTracerProvider(ctx context.Context, k KonfigTracing) (*sdktrace.TracerP
 	// bawaan OTel dan tidak pernah masuk sistem log terstruktur Anda —
 	// sehingga span yang dijatuhkan benar-benar tidak terlihat oleh siapa pun.
 	otel.SetErrorHandler(otel.ErrorHandlerFunc(func(err error) {
-		slog.Error("kegagalan otel", "galat", err)
+		slog.Error("otel failure", "error", err)
 	}))
 
 	return tp, nil
@@ -199,16 +199,16 @@ func (p *ProsesorPembayaran) Proses(ctx context.Context, idPesanan string, jumla
 	}
 
 	if jumlahSen <= 0 {
-		err := fmt.Errorf("jumlah pembayaran tidak valid: %d", jumlahSen)
+		err := fmt.Errorf("invalid payment amount: %d", jumlahSen)
 		span.RecordError(err)
-		span.SetStatus(codes.Error, "validasi pembayaran gagal")
+		span.SetStatus(codes.Error, "payment validation failed")
 		return err
 	}
 
 	span.AddEvent("memanggil API bank")
-	if err := p.panggilBank(ctx, idPesanan); err != nil {
+	if err := p.callBank(ctx, idPesanan); err != nil {
 		span.RecordError(err)
-		span.SetStatus(codes.Error, "panggilan bank gagal")
+		span.SetStatus(codes.Error, "bank call failed")
 		return err
 	}
 
@@ -222,7 +222,7 @@ func (p *ProsesorPembayaran) Proses(ctx context.Context, idPesanan string, jumla
 	return nil
 }
 
-func (p *ProsesorPembayaran) panggilBank(ctx context.Context, idPesanan string) error {
+func (p *ProsesorPembayaran) callBank(ctx context.Context, idPesanan string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.bankURL, nil)
 	if err != nil {
 		return fmt.Errorf("bangun request bank: %w", err)
@@ -285,18 +285,18 @@ import (
 // Kedua, uji lama memanggil otel.SetTracerProvider dan TIDAK pernah
 // memulihkannya, sehingga setiap uji sesudahnya berjalan di atas provider yang
 // sudah di-shutdown, dan hasilnya bergantung urutan eksekusi.
-func tracerUji(t *testing.T) *tracetest.InMemoryExporter {
+func testTracer(t *testing.T) *tracetest.InMemoryExporter {
 	t.Helper()
 	exp := tracetest.NewInMemoryExporter()
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exp))
 
-	sebelumnya := otel.GetTracerProvider()
+	previous := otel.GetTracerProvider()
 	otel.SetTracerProvider(tp)
 	t.Cleanup(func() {
 		if err := tp.Shutdown(context.Background()); err != nil {
 			t.Errorf("shutdown tp uji: %v", err)
 		}
-		otel.SetTracerProvider(sebelumnya)
+		otel.SetTracerProvider(previous)
 	})
 	return exp
 }
@@ -310,7 +310,7 @@ func cariSpan(t *testing.T, exp *tracetest.InMemoryExporter, nama string) tracet
 		}
 		ada = append(ada, s.Name)
 	}
-	t.Fatalf("span %q tidak ditemukan; yang terekam: %v", nama, ada)
+	t.Fatalf("span %q not found; recorded: %v", nama, ada)
 	return tracetest.SpanStub{}
 }
 
@@ -318,19 +318,19 @@ func cariSpan(t *testing.T, exp *tracetest.InMemoryExporter, nama string) tracet
 // memeriksa `err != nil` — status span, yang menjadi inti seluruh berkas,
 // tidak pernah diperiksa sama sekali.
 func TestSpanDitandaiGagalSaatValidasiGagal(t *testing.T) {
-	exp := tracerUji(t)
+	exp := testTracer(t)
 
 	p := NewProsesorPembayaran("http://tidak-dipakai.invalid")
 	if err := p.Proses(context.Background(), "ord-123", -5000); err == nil {
-		t.Fatal("mau galat untuk jumlah negatif, dapat nil")
+		t.Fatal("want error for negative amount, got nil")
 	}
 
 	span := cariSpan(t, exp, "ProsesPembayaran")
 	if span.Status.Code != codes.Error {
-		t.Fatalf("status span = %v, mau Error", span.Status.Code)
+		t.Fatalf("span status = %v, want Error", span.Status.Code)
 	}
 	if len(span.Events) == 0 {
-		t.Fatal("RecordError tidak menghasilkan event apa pun")
+		t.Fatal("RecordError produced no events")
 	}
 }
 
@@ -338,7 +338,7 @@ func TestSpanDitandaiGagalSaatValidasiGagal(t *testing.T) {
 // TIDAK boleh menyetel codes.Ok, karena Ok bersifat final dan mengunci span
 // dari penandaan galat oleh lapisan di atasnya.
 func TestJalurSuksesMembiarkanStatusUnset(t *testing.T) {
-	exp := tracerUji(t)
+	exp := testTracer(t)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -352,7 +352,7 @@ func TestJalurSuksesMembiarkanStatusUnset(t *testing.T) {
 
 	span := cariSpan(t, exp, "ProsesPembayaran")
 	if span.Status.Code != codes.Unset {
-		t.Fatalf("status = %v, mau Unset — codes.Ok final dan mengunci span dari penandaan galat", span.Status.Code)
+		t.Fatalf("status = %v, want Unset — codes.Ok is final and locks span from error marking", span.Status.Code)
 	}
 	// otelhttp WAJIB menghasilkan span anak untuk panggilan keluar; kalau tidak,
 	// header W3C juga tidak ter-inject dan trace putus di batas ini.
@@ -372,7 +372,7 @@ func TestJalurSuksesMembiarkanStatusUnset(t *testing.T) {
 func (s *Service) HandleDB(r *http.Request) error {
     ctx, span := s.tracer.Start(context.Background(), "QueryDB")
     defer span.End()
-    return s.repo.Ambil(ctx)
+    return s.repo.Get(ctx)
 }
 ```
 
@@ -381,7 +381,7 @@ func (s *Service) HandleDB(r *http.Request) error {
 func (s *Service) HandleDB(r *http.Request) error {
     ctx, span := s.tracer.Start(r.Context(), "QueryDB")
     defer span.End()
-    return s.repo.Ambil(ctx)
+    return s.repo.Get(ctx)
 }
 ```
 
@@ -421,7 +421,7 @@ if err != nil {
 // GOOD: eksplisit mengubah status ke Error
 if err != nil {
     span.RecordError(err)                      // detail lengkap masuk ke event
-    span.SetStatus(codes.Error, "query gagal") // deskripsi STABIL, bukan err.Error()
+    span.SetStatus(codes.Error, "query failed") // deskripsi STABIL, bukan err.Error()
     return err
 }
 ```

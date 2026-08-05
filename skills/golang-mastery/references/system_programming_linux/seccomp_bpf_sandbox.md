@@ -100,7 +100,7 @@ err := unix.Prctl(unix.PR_SET_SECCOMP, unix.SECCOMP_MODE_FILTER, uintptr(unsafe.
 ```go
 // ✅ GOOD: Panggil No New Privs terlebih dahulu
 if err := unix.Prctl(unix.PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0); err != nil {
-    log.Fatalf("Gagal set NO_NEW_PRIVS: %v", err)
+    log.Fatalf("Failed to set NO_NEW_PRIVS: %v", err)
 }
 // Baru panggil SECCOMP_MODE_FILTER
 ```

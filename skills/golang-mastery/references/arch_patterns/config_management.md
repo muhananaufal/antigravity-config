@@ -121,11 +121,11 @@ func LoadConfigWithFallback(basePath string, env string) (*Config, error) {
 			// config dan menyala dengan setelan yang SALAH — bukan gagal.
 			// Fungsi LoadConfig di §1 sudah membedakan keduanya dengan benar;
 			// yang ini tidak, di berkas yang sama.
-			var tidakAda viper.ConfigFileNotFoundError
-			if !errors.As(err, &tidakAda) {
-				return nil, fmt.Errorf("config env %q rusak: %w", env, err)
+			var notFound viper.ConfigFileNotFoundError
+			if !errors.As(err, &notFound) {
+				return nil, fmt.Errorf("env config %q corrupted: %w", env, err)
 			}
-			slog.Warn("tidak ada config khusus environment, memakai base", "env", env)
+			slog.Warn("no environment-specific config found, using base", "env", env)
 		}
 	}
 
@@ -147,12 +147,12 @@ func LoadConfigWithFallback(basePath string, env string) (*Config, error) {
 	// kebetulan ada di YAML, dan diam-diam salah untuk yang tidak. Ikat
 	// setiap kunci secara eksplisit — atau beri SetDefault untuk semuanya,
 	// yang punya efek sama karena defaultnya masuk AllSettings.
-	for _, kunci := range []string{
+	for _, key := range []string{
 		"server.http_port", "server.grpc_port",
 		"database.url", "auth.provider", "auth.secret_key",
 	} {
-		if err := v.BindEnv(kunci); err != nil {
-			return nil, fmt.Errorf("ikat env untuk %q: %w", kunci, err)
+		if err := v.BindEnv(key); err != nil {
+			return nil, fmt.Errorf("bind env for %q: %w", key, err)
 		}
 	}
 
@@ -208,14 +208,14 @@ func ValidateConfig(cfg *Config) error {
 	// operator mendapat stack trace saat boot.
 	var vErrs validator.ValidationErrors
 	if !errors.As(err, &vErrs) {
-		return fmt.Errorf("validasi konfigurasi tidak dapat dijalankan: %w", err)
+		return fmt.Errorf("failed to run config validation: %w", err)
 	}
 
-	pesan := make([]string, 0, len(vErrs))
+	messages := make([]string, 0, len(vErrs))
 	for _, e := range vErrs {
-		pesan = append(pesan, fmt.Sprintf("field %q gagal pada aturan %q", e.Namespace(), e.Tag()))
+		messages = append(messages, fmt.Sprintf("field %q failed on tag %q", e.Namespace(), e.Tag()))
 	}
-	return fmt.Errorf("konfigurasi tidak valid: %s", strings.Join(pesan, "; "))
+	return fmt.Errorf("invalid config: %s", strings.Join(messages, "; "))
 }
 ```
 

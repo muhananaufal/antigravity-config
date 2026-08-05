@@ -339,7 +339,7 @@ func TestComputeNotionalSIMD(t *testing.T) {
 
 	expected := int64((100 * 2) + (150 * 3) + (200 * 1))
 	if result := book.ComputeNotionalValueSIMD(); result != expected {
-		t.Fatalf("Salah hitung: got %d, expected %d", result, expected)
+		t.Fatalf("Mismatch: got %d, expected %d", result, expected)
 	}
 }
 

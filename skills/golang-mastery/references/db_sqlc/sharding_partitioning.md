@@ -430,10 +430,10 @@ func TestSebar_MengumpulkanSemuaShard(t *testing.T) {
 
 	gabung, err := Gabung(hasil)
 	if err != nil {
-		t.Fatalf("tidak boleh galat: %v", err)
+		t.Fatalf("must not error: %v", err)
 	}
 	if len(gabung) != 8 {
-		t.Fatalf("mau 8 baris dari 4 shard, dapat %d", len(gabung))
+		t.Fatalf("want 8 rows from 4 shards, got %d", len(gabung))
 	}
 }
 
@@ -453,16 +453,16 @@ func TestSebar_KegagalanSatuShardTerlihat(t *testing.T) {
 
 	gabung, err := Gabung(hasil)
 	if err == nil {
-		t.Fatal("kegagalan shard WAJIB muncul sebagai galat")
+		t.Fatal("shard failure MUST appear as error")
 	}
 	if !errors.Is(err, rusak) {
-		t.Fatalf("galat asal harus terbungkus, dapat %v", err)
+		t.Fatalf("original error must be wrapped, got %v", err)
 	}
 	if !strings.Contains(err.Error(), "db-2") {
-		t.Fatalf("galat harus menyebut shard yang gagal: %v", err)
+		t.Fatalf("error must mention failed shard: %v", err)
 	}
 	if len(gabung) != 3 {
-		t.Fatalf("shard sehat tetap memberi hasil, dapat %d", len(gabung))
+		t.Fatalf("healthy shards still yield results, got %d", len(gabung))
 	}
 }
 

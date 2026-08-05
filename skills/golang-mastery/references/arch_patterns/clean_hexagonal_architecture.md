@@ -95,12 +95,12 @@ type User struct {
 //
 // Jam adalah dependensi INFRASTRUKTUR. Ia masuk lewat pintu yang sama dengan
 // repository — dari luar ke dalam, bukan diambil diam-diam dari dalam.
-func (u *User) Deactivate(sekarang time.Time) error {
+func (u *User) Deactivate(now time.Time) error {
 	if !u.IsActive {
-		return fmt.Errorf("%w: pengguna sudah nonaktif", ErrInvalidState)
+		return fmt.Errorf("%w: user is already inactive", ErrInvalidState)
 	}
 	u.IsActive = false
-	u.UpdatedAt = sekarang.UTC()
+	u.UpdatedAt = now.UTC()
 	return nil
 }
 
@@ -115,28 +115,28 @@ type UserRepository interface {
 }
 
 // Jam adalah Port keluar, sejajar dengan UserRepository.
-type Jam interface{ Sekarang() time.Time }
+type Clock interface{ Now() time.Time }
 
 // JamSistem adalah Adapter-nya; di uji, gantikan dengan jam beku.
-type JamSistem struct{}
+type SystemClock struct{}
 
-func (JamSistem) Sekarang() time.Time { return time.Now() }
+func (SystemClock) Now() time.Time { return time.Now() }
 
 // UserUsecase mengorkestrasi alur aplikasi.
 type UserUsecase struct {
-	repo UserRepository
-	jam  Jam
+	repo  UserRepository
+	clock Clock
 }
 
 // NewUserUsecase adalah konstruktor untuk Dependency Injection.
-func NewUserUsecase(repo UserRepository, jam Jam) *UserUsecase {
+func NewUserUsecase(repo UserRepository, clock Clock) *UserUsecase {
 	if repo == nil {
-		panic("UserRepository tidak boleh nil")
+		panic("user repository cannot be nil")
 	}
-	if jam == nil {
-		panic("Jam tidak boleh nil")
+	if clock == nil {
+		panic("clock cannot be nil")
 	}
-	return &UserUsecase{repo: repo, jam: jam}
+	return &UserUsecase{repo: repo, clock: clock}
 }
 
 // DeactivateUser mengorkestrasi pengambilan data, mutasi entity, dan persistensi.
@@ -151,7 +151,7 @@ func (uc *UserUsecase) DeactivateUser(ctx context.Context, id string) error {
 	}
 
 	// 2. Eksekusi Business Logic di Entity — waktu diteruskan dari luar
-	if err := user.Deactivate(uc.jam.Sekarang()); err != nil {
+	if err := user.Deactivate(uc.clock.Now()); err != nil {
 		return fmt.Errorf("cannot deactivate user %s: %w", id, err)
 	}
 
@@ -212,8 +212,8 @@ func (r *InMemoryUserRepository) GetByID(ctx context.Context, id string) (*User,
 	// berhenti mengisolasi: array pendukung slice/map tetap dibagi, pemanggil
 	// bisa menulis ke dalamnya, dan gejalanya baru muncul jauh dari sini.
 	// Menambah field referensi ke User BERARTI menambah penyalinannya di sini.
-	salinan := *u
-	return &salinan, nil
+	copied := *u
+	return &copied, nil
 }
 
 func (r *InMemoryUserRepository) Save(ctx context.Context, u *User) error {
@@ -226,8 +226,8 @@ func (r *InMemoryUserRepository) Save(ctx context.Context, u *User) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	salinan := *u
-	r.data[u.ID] = &salinan
+	copied := *u
+	r.data[u.ID] = &copied
 	return nil
 }
 
@@ -238,62 +238,62 @@ func (r *InMemoryUserRepository) Save(ctx context.Context, u *User) error {
 // jamBeku adalah Adapter uji untuk Port Jam. Inilah imbalan konkret dari
 // menyuntikkan jam: waktu jadi nilai yang bisa DIASERSI, bukan sesuatu yang
 // hanya bisa dicek "kira-kira sekitar sekarang" dengan toleransi.
-type jamBeku struct{ t time.Time }
+type frozenClock struct{ t time.Time }
 
-func (j jamBeku) Sekarang() time.Time { return j.t }
+func (j frozenClock) Now() time.Time { return j.t }
 
 func TestUserUsecase_DeactivateUser(t *testing.T) {
 	ctx := context.Background()
 	// Sengaja bukan UTC: membuktikan Deactivate menormalkan zona waktu.
-	beku := jamBeku{t: time.Date(2024, 3, 1, 10, 30, 0, 0, time.FixedZone("WIB", 7*3600))}
+	frozen := frozenClock{t: time.Date(2024, 3, 1, 10, 30, 0, 0, time.FixedZone("WIB", 7*3600))}
 
 	t.Run("Success Deactivation", func(t *testing.T) {
 		repo := NewInMemoryUserRepository()
-		uc := NewUserUsecase(repo, beku)
+		uc := NewUserUsecase(repo, frozen)
 
 		// Eksekusi
 		err := uc.DeactivateUser(ctx, "u-123")
 		if err != nil {
-			t.Fatalf("galat tak terduga: %v", err)
+			t.Fatalf("unexpected error: %v", err)
 		}
 
 		// Verifikasi State di Repo
 		u, err := repo.GetByID(ctx, "u-123")
 		if err != nil {
-			t.Fatalf("GetByID setelah Save: %v", err)
+			t.Fatalf("GetByID after Save: %v", err)
 		}
 		if u.IsActive {
-			t.Errorf("pengguna seharusnya nonaktif")
+			t.Errorf("user should be inactive")
 		}
 		// Assersi eksak — mustahil ditulis kalau entity memanggil time.Now().
-		if want := beku.t.UTC(); !u.UpdatedAt.Equal(want) {
-			t.Errorf("UpdatedAt = %v, mau %v", u.UpdatedAt, want)
+		if want := frozen.t.UTC(); !u.UpdatedAt.Equal(want) {
+			t.Errorf("UpdatedAt = %v, want %v", u.UpdatedAt, want)
 		}
 	})
 
 	t.Run("Fails When Already Inactive", func(t *testing.T) {
 		repo := NewInMemoryUserRepository()
-		uc := NewUserUsecase(repo, beku)
+		uc := NewUserUsecase(repo, frozen)
 
 		err := uc.DeactivateUser(ctx, "u-456")
 		if err == nil {
-			t.Fatal("mengharapkan galat, dapat nil")
+			t.Fatal("expected error, got nil")
 		}
 		if !errors.Is(err, ErrInvalidState) {
-			t.Errorf("mengharapkan ErrInvalidState, dapat %v", err)
+			t.Errorf("expected ErrInvalidState, got %v", err)
 		}
 	})
 
 	t.Run("Fails When User Not Found", func(t *testing.T) {
 		repo := NewInMemoryUserRepository()
-		uc := NewUserUsecase(repo, beku)
+		uc := NewUserUsecase(repo, frozen)
 
 		err := uc.DeactivateUser(ctx, "u-999")
 		if err == nil {
-			t.Fatal("mengharapkan galat, dapat nil")
+			t.Fatal("expected error, got nil")
 		}
 		if !errors.Is(err, ErrUserNotFound) {
-			t.Errorf("mengharapkan ErrUserNotFound, dapat %v", err)
+			t.Errorf("expected ErrUserNotFound, got %v", err)
 		}
 	})
 
@@ -307,14 +307,14 @@ func TestUserUsecase_DeactivateUser(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GetByID: %v", err)
 		}
-		u1.Email = "diretas@example.com"
+		u1.Email = "hacked@example.com"
 
 		u2, err := repo.GetByID(ctx, "u-123")
 		if err != nil {
-			t.Fatalf("GetByID kedua: %v", err)
+			t.Fatalf("second GetByID: %v", err)
 		}
-		if u2.Email == "diretas@example.com" {
-			t.Error("mutasi pada hasil GetByID bocor ke penyimpanan")
+		if u2.Email == "hacked@example.com" {
+			t.Error("mutation on GetByID result leaked to storage")
 		}
 	})
 
@@ -329,7 +329,7 @@ func TestUserUsecase_DeactivateUser(t *testing.T) {
 	// `arch_patterns/ddd_aggregate_repository.md`.
 	t.Run("Akses Serentak Aman", func(t *testing.T) {
 		repo := NewInMemoryUserRepository()
-		uc := NewUserUsecase(repo, beku)
+		uc := NewUserUsecase(repo, frozen)
 
 		var wg sync.WaitGroup
 		for i := 0; i < 50; i++ {

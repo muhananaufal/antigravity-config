@@ -461,7 +461,7 @@ func TestMPSCRingBuffer_SlowConsumer(t *testing.T) {
 	
 	err := rb.Offer(ctx, &TickEvent{Price: 30})
 	if err != ErrBufferFull {
-		t.Fatalf("Slow consumer tidak terdeteksi, harusnya penuh. Err: %v", err)
+		t.Fatalf("Slow consumer undetected, should be full. Err: %v", err)
 	}
 }
 ```

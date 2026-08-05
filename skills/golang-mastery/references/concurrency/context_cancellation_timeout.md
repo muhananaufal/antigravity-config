@@ -249,6 +249,6 @@ go tool pprof -base g1.pb.gz g2.pb.gz
 
 # Sisa deadline yang benar-benar sampai ke lapisan terdalam.
 # Catat ini sebagai field log: time.Until(deadline) saat masuk repository.
-kubectl logs -l app=api --since=15m | jq -r 'select(.sisa_deadline_ms) | .sisa_deadline_ms' \
+kubectl logs -l app=api --since=15m | jq -r 'select(.remaining_deadline_ms) | .remaining_deadline_ms' \
   | sort -n | head -20
 ```

@@ -224,7 +224,7 @@ func extractIDs(data []User) []int {
    ```go
    func launchWorker() {
        jobId := 10 // Skalar Integer
-       go func() { fmt.Println("Kerjakan job", jobId) }()
+       go func() { fmt.Println("processing job", jobId) }()
    }
    ```
    *Edge Case:* Goroutine anak diluncurkan secara asinkron (kapan jadual eksekusinya ditentukan sembarang oleh *P Scheduler*). Ini berarti, Goroutine anak bisa berjalan **jauh setelah** fungsi `launchWorker` selesai dan terhapus *Stack* utamanya. Agar `jobId` tak hancur terbakar, Escape Analysis memindahkannya paksa ke Heap!

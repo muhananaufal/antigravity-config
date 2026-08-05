@@ -138,12 +138,12 @@ import (
 )
 
 var (
-	ErrRantaiPutus    = errors.New("rantai audit terputus")
-	ErrHashTidakCocok = errors.New("hash tidak cocok: entri telah diubah")
-	ErrUrutanLoncat   = errors.New("nomor urut melompat: ada entri yang dihapus")
+	ErrBrokenChain  = errors.New("audit chain is broken")
+	ErrHashMismatch = errors.New("hash mismatch: entry has been tampered with")
+	ErrSequenceGap  = errors.New("sequence gap: entry has been deleted")
 )
 
-const batasNilai = 2000 // sesuai Kasus Tepi 2
+const maxValLength = 2000 // sesuai Kasus Tepi 2
 
 type AuditEvent struct {
 	// Seq menutup celah yang tidak bisa ditutup rantai hash: penghapusan
@@ -153,17 +153,17 @@ type AuditEvent struct {
 	Timestamp string            `json:"ts"`
 	Action    string            `json:"action"`
 	ActorID   string            `json:"actor_id"`
-	// Hasil ada karena percobaan yang GAGAL adalah sinyal paling berharga
+	// Outcome ada karena percobaan yang GAGAL adalah sinyal paling berharga
 	// saat investigasi. Bagian "Kapan JANGAN Pakai Ini" menuntutnya dan
-	// perintah bash di bawah menyaring `.hasil` — field yang sebelumnya
-	// tidak pernah dipancarkan kode mana pun.
-	Hasil    string            `json:"hasil"` // "sukses" | "gagal"
-	Payload  map[string]string `json:"payload"`
-	PrevHash string            `json:"prev_hash"`
-	Hash     string            `json:"hash"`
+	// perintah bash di bawah menyaring `.outcome` — field yang dipancarkan
+	// untuk audit trail.
+	Outcome   string            `json:"outcome"` // "success" | "failure"
+	Payload   map[string]string `json:"payload"`
+	PrevHash  string            `json:"prev_hash"`
+	Hash      string            `json:"hash"`
 }
 
-// hashAkar adalah titik awal rantai.
+// rootHash adalah titik awal rantai.
 //
 // Ia TIDAK BOLEH diturunkan dari kunci HMAC. Versi sebelumnya menyetel
 // `lastHash = hex.EncodeToString(secretKey)`, dan nilai itu ditulis ke
@@ -172,12 +172,12 @@ type AuditEvent struct {
 // membaca log audit — dan log audit dibaca banyak orang — bisa memalsukan
 // seluruh rantai sejak awal. Titik awal yang benar adalah nilai publik yang
 // memang tidak rahasia.
-func hashAkar(idAliran string) string {
-	h := sha256.Sum256([]byte("audit-chain-root:" + idAliran))
+func rootHash(streamID string) string {
+	h := sha256.Sum256([]byte("audit-chain-root:" + streamID))
 	return hex.EncodeToString(h[:])
 }
 
-// hitungHash menghitung HMAC atas SELURUH ruas yang mengikat, dengan awalan
+// calculateHash menghitung HMAC atas SELURUH ruas yang mengikat, dengan awalan
 // panjang di setiap ruas.
 //
 // Dua koreksi kriptografis terhadap versi sebelumnya:
@@ -193,7 +193,7 @@ func hashAkar(idAliran string) string {
 //     IDENTIK dengan `action="AB", actor="C"`. Penyerang yang bisa memengaruhi
 //     dua ruas bersebelahan dapat menyusun peristiwa berbeda dengan hash yang
 //     sama persis — dan verifikasi akan menyatakannya sah.
-func hitungHash(kunci []byte, e AuditEvent) (string, error) {
+func calculateHash(key []byte, e AuditEvent) (string, error) {
 	// json.Marshal atas map[string]string mengurutkan kunci, sehingga
 	// keluarannya deterministik. Itu SYARAT, bukan kebetulan: begitu Payload
 	// berubah menjadi tipe yang serialisasinya tidak stabil, verifikasi akan
@@ -206,46 +206,46 @@ func hitungHash(kunci []byte, e AuditEvent) (string, error) {
 		return "", fmt.Errorf("marshal payload: %w", err)
 	}
 
-	mac := hmac.New(sha256.New, kunci)
+	mac := hmac.New(sha256.New, key)
 	var lp [8]byte
-	tulis := func(b []byte) {
+	write := func(b []byte) {
 		binary.BigEndian.PutUint64(lp[:], uint64(len(b)))
 		mac.Write(lp[:])
 		mac.Write(b)
 	}
 	binary.BigEndian.PutUint64(lp[:], e.Seq)
 	mac.Write(lp[:])
-	tulis([]byte(e.PrevHash))
-	tulis([]byte(e.Timestamp))
-	tulis([]byte(e.Action))
-	tulis([]byte(e.ActorID))
-	tulis([]byte(e.Hasil))
-	tulis(payload)
+	write([]byte(e.PrevHash))
+	write([]byte(e.Timestamp))
+	write([]byte(e.Action))
+	write([]byte(e.ActorID))
+	write([]byte(e.Outcome))
+	write(payload)
 
 	return hex.EncodeToString(mac.Sum(nil)), nil
 }
 
-var kunciSensitif = []string{
-	"password", "sandi", "token", "secret", "rahasia", "ssn", "nik",
-	"credit_card", "kartu", "cvv", "authorization", "api_key",
+var sensitiveKeys = []string{
+	"password", "token", "secret", "ssn", "credit_card", "cvv",
+	"authorization", "api_key",
 }
 
-// polaNilaiRahasia menangkap rahasia dari BENTUKNYA, bukan dari nama fieldnya.
+// secretValuePattern menangkap rahasia dari BENTUKNYA, bukan dari nama fieldnya.
 //
 // Penyaringan berbasis nama saja adalah yang dilarang bagian "Kapan JANGAN
 // Pakai Ini" di berkas ini, dan yang didaftarkan tabel deteksi sebagai
 // penyebab "rahasia ditemukan di sistem log" — tetapi versi sebelumnya hanya
 // melakukan itu. Rahasia berpindah field, dan field baru muncul tanpa
 // penyaringnya pernah tahu.
-var polaNilaiRahasia = regexp.MustCompile(
+var secretValuePattern = regexp.MustCompile(
 	`sk_live_[0-9A-Za-z]+|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|` +
 		`eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]+|-----BEGIN [A-Z ]*PRIVATE KEY-----|` +
 		`\b[45][0-9]{15}\b`)
 
-func namaSensitif(k string) bool {
-	rendah := strings.ToLower(k)
-	for _, s := range kunciSensitif {
-		if strings.Contains(rendah, s) {
+func isSensitiveKey(k string) bool {
+	lower := strings.ToLower(k)
+	for _, s := range sensitiveKeys {
+		if strings.Contains(lower, s) {
 			return true
 		}
 	}
@@ -253,32 +253,32 @@ func namaSensitif(k string) bool {
 }
 
 func scrubPII(data map[string]string) map[string]string {
-	hasil := make(map[string]string, len(data))
+	result := make(map[string]string, len(data))
 	for k, v := range data {
-		if namaSensitif(k) {
-			hasil[k] = "[REDACTED]"
+		if isSensitiveKey(k) {
+			result[k] = "[REDACTED]"
 			continue
 		}
-		hasil[k] = potongAman(polaNilaiRahasia.ReplaceAllString(v, "[REDACTED]"))
+		result[k] = safeTruncate(secretValuePattern.ReplaceAllString(v, "[REDACTED]"))
 	}
-	return hasil
+	return result
 }
 
-// potongAman memotong pada batas RUNE, bukan byte.
+// safeTruncate memotong pada batas RUNE, bukan byte.
 //
 // `v[:512]` memotong di tengah rune multi-byte dan menghasilkan UTF-8 tidak
 // valid. Go menggantinya dengan U+FFFD saat encoding JSON, sehingga isinya
 // rusak diam-diam — dan pada log audit, isi yang rusak berarti bukti yang
-// rusak. (Versi sebelumnya juga memakai 512 sementara prosanya menyebut 2000.)
-func potongAman(s string) string {
-	if len(s) <= batasNilai {
+// rusak.
+func safeTruncate(s string) string {
+	if len(s) <= maxValLength {
 		return s
 	}
-	potong := s[:batasNilai]
-	for len(potong) > 0 && !utf8.ValidString(potong) {
-		potong = potong[:len(potong)-1]
+	cut := s[:maxValLength]
+	for len(cut) > 0 && !utf8.ValidString(cut) {
+		cut = cut[:len(cut)-1]
 	}
-	return potong + "...[TRUNCATED]"
+	return cut + "...[TRUNCATED]"
 }
 
 // Sink menulis entri ke penyimpanan audit.
@@ -288,7 +288,7 @@ func potongAman(s string) string {
 // dan pada laju tinggi itu menjadikan audit logging sebagai penyempitan
 // layanan, yang pada gilirannya membuat orang tergoda mematikannya.
 type Sink interface {
-	Tulis(ctx context.Context, e AuditEvent) error
+	Write(ctx context.Context, e AuditEvent) error
 }
 
 type SecureLogger struct {
@@ -299,20 +299,20 @@ type SecureLogger struct {
 	sink     Sink
 }
 
-func NewSecureLogger(kunciHMAC []byte, idAliran string, sink Sink) *SecureLogger {
+func NewSecureLogger(hmacKey []byte, streamID string, sink Sink) *SecureLogger {
 	return &SecureLogger{
-		lastHash: hashAkar(idAliran),
-		hmacKey:  kunciHMAC,
+		lastHash: rootHash(streamID),
+		hmacKey:  hmacKey,
 		sink:     sink,
 	}
 }
 
-func (s *SecureLogger) LogEvent(ctx context.Context, action, actor, hasil string, payload map[string]string) error {
+func (s *SecureLogger) LogEvent(ctx context.Context, action, actor, outcome string, payload map[string]string) error {
 	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("context batal: %w", err)
+		return fmt.Errorf("context canceled: %w", err)
 	}
 
-	bersih := scrubPII(payload)
+	clean := scrubPII(payload)
 
 	// Hanya bagian yang WAJIB berurutan yang dikerjakan di dalam kunci.
 	s.mu.Lock()
@@ -322,11 +322,11 @@ func (s *SecureLogger) LogEvent(ctx context.Context, action, actor, hasil string
 		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
 		Action:    action,
 		ActorID:   actor,
-		Hasil:     hasil,
-		Payload:   bersih,
+		Outcome:   outcome,
+		Payload:   clean,
 		PrevHash:  s.lastHash,
 	}
-	h, err := hitungHash(s.hmacKey, e)
+	h, err := calculateHash(s.hmacKey, e)
 	if err != nil {
 		s.seq-- // jangan tinggalkan lubang nomor urut
 		s.mu.Unlock()
@@ -340,45 +340,45 @@ func (s *SecureLogger) LogEvent(ctx context.Context, action, actor, hasil string
 	// entri yang hilang lalu menjadi lubang nomor urut yang TERDETEKSI,
 	// jauh lebih baik daripada rantai yang mulus tetapi diam-diam kehilangan
 	// peristiwa.
-	if err := s.sink.Tulis(ctx, e); err != nil {
-		return fmt.Errorf("tulis entri audit seq %d: %w", e.Seq, err)
+	if err := s.sink.Write(ctx, e); err != nil {
+		return fmt.Errorf("write audit entry seq %d: %w", e.Seq, err)
 	}
 	return nil
 }
 
-// Kepala mengembalikan hash terakhir, untuk diterbitkan sebagai checkpoint.
-func (s *SecureLogger) Kepala() (uint64, string) {
+// Head mengembalikan hash terakhir, untuk diterbitkan sebagai checkpoint.
+func (s *SecureLogger) Head() (uint64, string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.seq, s.lastHash
 }
 
-// Verifikasi memeriksa seluruh rantai.
+// Verify memeriksa seluruh rantai.
 //
 // Keterbatasan yang tidak boleh disembunyikan: rantai hash mendeteksi
 // **perubahan**, tetapi TIDAK mendeteksi **pemotongan**. Penyerang yang
 // menghapus N entri TERAKHIR meninggalkan rantai yang sempurna valid — dan
 // itulah justru yang akan ia lakukan, karena jejaknya ada di ujung. Nomor
 // urut menutup lubang di tengah; untuk ujung rantai, satu-satunya jawaban
-// adalah menerbitkan checkpoint (nilai Kepala) secara berkala ke penyimpanan
+// adalah menerbitkan checkpoint (nilai Head) secara berkala ke penyimpanan
 // lain yang tidak dikuasai penyerang yang sama.
-func Verifikasi(kunci []byte, idAliran string, rantai []AuditEvent) error {
-	harap := hashAkar(idAliran)
-	for i, e := range rantai {
+func Verify(key []byte, streamID string, chain []AuditEvent) error {
+	expected := rootHash(streamID)
+	for i, e := range chain {
 		if e.Seq != uint64(i+1) {
-			return fmt.Errorf("%w: entri ke-%d bernomor %d", ErrUrutanLoncat, i, e.Seq)
+			return fmt.Errorf("%w: entry #%d has seq %d", ErrSequenceGap, i, e.Seq)
 		}
-		if e.PrevHash != harap {
-			return fmt.Errorf("%w: entri seq %d", ErrRantaiPutus, e.Seq)
+		if e.PrevHash != expected {
+			return fmt.Errorf("%w: entry seq %d", ErrBrokenChain, e.Seq)
 		}
-		h, err := hitungHash(kunci, e)
+		h, err := calculateHash(key, e)
 		if err != nil {
-			return fmt.Errorf("entri seq %d: %w", e.Seq, err)
+			return fmt.Errorf("entry seq %d: %w", e.Seq, err)
 		}
 		if !hmac.Equal([]byte(h), []byte(e.Hash)) {
-			return fmt.Errorf("%w: entri seq %d", ErrHashTidakCocok, e.Seq)
+			return fmt.Errorf("%w: entry seq %d", ErrHashMismatch, e.Seq)
 		}
-		harap = e.Hash
+		expected = e.Hash
 	}
 	return nil
 }
@@ -396,152 +396,152 @@ import (
 	"unicode/utf8"
 )
 
-type sinkMemori struct {
-	mu    sync.Mutex
-	entri []AuditEvent
+type memorySink struct {
+	mu      sync.Mutex
+	entries []AuditEvent
 }
 
-func (s *sinkMemori) Tulis(_ context.Context, e AuditEvent) error {
+func (s *memorySink) Write(_ context.Context, e AuditEvent) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.entri = append(s.entri, e)
+	s.entries = append(s.entries, e)
 	return nil
 }
 
-// Salin mengembalikan SALINAN. Versi sebelumnya mengembalikan slice internal
+// Clone mengembalikan SALINAN. Versi sebelumnya mengembalikan slice internal
 // apa adanya, sehingga pemanggil bisa mengubah entri milik logger — dan
 // ujinya memang melakukannya.
-func (s *sinkMemori) Salin() []AuditEvent {
+func (s *memorySink) Clone() []AuditEvent {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return append([]AuditEvent(nil), s.entri...)
+	return append([]AuditEvent(nil), s.entries...)
 }
 
-const idAliran = "api-produksi"
+const testStreamID = "api-production"
 
-var kunciUji = []byte("kunci-hmac-audit-yang-cukup-panjang")
+var testHMACKey = []byte("hmac-audit-key-that-is-sufficiently-long-and-secure")
 
-func loggerUji() (*SecureLogger, *sinkMemori) {
-	s := &sinkMemori{}
-	return NewSecureLogger(kunciUji, idAliran, s), s
+func testLogger() (*SecureLogger, *memorySink) {
+	s := &memorySink{}
+	return NewSecureLogger(testHMACKey, testStreamID, s), s
 }
 
 // Uji terpenting di berkas ini. Versi sebelumnya menyetel hash akar ke
 // hex(kunci HMAC), sehingga kunci itu terbit sebagai prev_hash pada entri
 // pertama — dan seluruh mekanisme anti-tamper runtuh bagi siapa pun yang
 // bisa membaca log.
-func TestKunciHMACTidakPernahMunculDiKeluaran(t *testing.T) {
-	lg, sink := loggerUji()
-	if err := lg.LogEvent(context.Background(), "LOGIN", "usr_1", "sukses", nil); err != nil {
+func TestHMACKeyNeverLeakedInOutput(t *testing.T) {
+	lg, sink := testLogger()
+	if err := lg.LogEvent(context.Background(), "LOGIN", "usr_1", "success", nil); err != nil {
 		t.Fatalf("LogEvent: %v", err)
 	}
 
-	e := sink.Salin()[0]
-	kunciHex := "6b756e63692d686d61632d61756469742d79616e672d63756b75702d70616e6a616e67"
-	for nama, nilai := range map[string]string{"prev_hash": e.PrevHash, "hash": e.Hash} {
-		if strings.Contains(nilai, kunciHex) || strings.Contains(nilai, string(kunciUji)) {
-			t.Fatalf("kunci HMAC bocor lewat %s: %s", nama, nilai)
+	e := sink.Clone()[0]
+	keyHex := "686d61632d61756469742d6b65792d746861742d69732d73756666696369656e746c792d6c6f6e672d616e642d736563757265"
+	for name, val := range map[string]string{"prev_hash": e.PrevHash, "hash": e.Hash} {
+		if strings.Contains(val, keyHex) || strings.Contains(val, string(testHMACKey)) {
+			t.Fatalf("HMAC key leaked via %s: %s", name, val)
 		}
 	}
 }
 
 // Timestamp WAJIB ikut ditandatangani. Tanpa itu, penyerang memindahkan waktu
 // kejadian apa pun tanpa merusak rantai.
-func TestPerubahanTimestampTerdeteksi(t *testing.T) {
-	lg, sink := loggerUji()
+func TestTimestampTamperingDetected(t *testing.T) {
+	lg, sink := testLogger()
 	ctx := context.Background()
 	for i := 0; i < 3; i++ {
-		if err := lg.LogEvent(ctx, "AKSI", "usr_1", "sukses", nil); err != nil {
+		if err := lg.LogEvent(ctx, "ACTION", "usr_1", "success", nil); err != nil {
 			t.Fatalf("LogEvent: %v", err)
 		}
 	}
 
-	rantai := sink.Salin()
-	if err := Verifikasi(kunciUji, idAliran, rantai); err != nil {
-		t.Fatalf("rantai utuh dinyatakan rusak: %v", err)
+	chain := sink.Clone()
+	if err := Verify(testHMACKey, testStreamID, chain); err != nil {
+		t.Fatalf("unmodified chain reported as invalid: %v", err)
 	}
 
-	rantai[1].Timestamp = "2020-01-01T00:00:00Z"
-	if err := Verifikasi(kunciUji, idAliran, rantai); !errors.Is(err, ErrHashTidakCocok) {
-		t.Fatalf("galat = %v, mau ErrHashTidakCocok — timestamp tidak ikut ditandatangani", err)
+	chain[1].Timestamp = "2020-01-01T00:00:00Z"
+	if err := Verify(testHMACKey, testStreamID, chain); !errors.Is(err, ErrHashMismatch) {
+		t.Fatalf("error = %v, want ErrHashMismatch — timestamp was not signed", err)
 	}
 }
 
 // Ruas tanpa awalan panjang bersifat ambigu: ("A","BC") dan ("AB","C")
 // menghasilkan masukan MAC yang identik.
-func TestRuasTidakAmbigu(t *testing.T) {
-	a := AuditEvent{Seq: 1, PrevHash: "p", Timestamp: "t", Action: "A", ActorID: "BC", Hasil: "sukses"}
-	b := AuditEvent{Seq: 1, PrevHash: "p", Timestamp: "t", Action: "AB", ActorID: "C", Hasil: "sukses"}
+func TestFieldsNonAmbiguous(t *testing.T) {
+	a := AuditEvent{Seq: 1, PrevHash: "p", Timestamp: "t", Action: "A", ActorID: "BC", Outcome: "success"}
+	b := AuditEvent{Seq: 1, PrevHash: "p", Timestamp: "t", Action: "AB", ActorID: "C", Outcome: "success"}
 
-	ha, err := hitungHash(kunciUji, a)
+	ha, err := calculateHash(testHMACKey, a)
 	if err != nil {
-		t.Fatalf("hitungHash a: %v", err)
+		t.Fatalf("calculateHash a: %v", err)
 	}
-	hb, err := hitungHash(kunciUji, b)
+	hb, err := calculateHash(testHMACKey, b)
 	if err != nil {
-		t.Fatalf("hitungHash b: %v", err)
+		t.Fatalf("calculateHash b: %v", err)
 	}
 	if ha == hb {
-		t.Fatal("dua peristiwa berbeda menghasilkan hash identik — ruas tidak diberi awalan panjang")
+		t.Fatal("two different events generated identical hash — fields not length-prefixed")
 	}
 }
 
 // Penghapusan di TENGAH terdeteksi lewat nomor urut, bukan lewat hash.
-func TestPenghapusanDiTengahTerdeteksi(t *testing.T) {
-	lg, sink := loggerUji()
+func TestMiddleDeletionDetected(t *testing.T) {
+	lg, sink := testLogger()
 	ctx := context.Background()
 	for i := 0; i < 4; i++ {
-		if err := lg.LogEvent(ctx, "AKSI", "usr_1", "sukses", nil); err != nil {
+		if err := lg.LogEvent(ctx, "ACTION", "usr_1", "success", nil); err != nil {
 			t.Fatalf("LogEvent: %v", err)
 		}
 	}
 
-	rantai := sink.Salin()
-	dipotong := append(rantai[:1:1], rantai[2:]...) // buang entri seq 2
-	if err := Verifikasi(kunciUji, idAliran, dipotong); !errors.Is(err, ErrUrutanLoncat) {
-		t.Fatalf("galat = %v, mau ErrUrutanLoncat", err)
+	chain := sink.Clone()
+	deleted := append(chain[:1:1], chain[2:]...) // buang entri seq 2
+	if err := Verify(testHMACKey, testStreamID, deleted); !errors.Is(err, ErrSequenceGap) {
+		t.Fatalf("error = %v, want ErrSequenceGap", err)
 	}
 }
 
 // Rahasia dikenali dari BENTUK NILAI, bukan hanya dari nama field.
-func TestPenyaringanBerbasisBentukNilai(t *testing.T) {
-	lg, sink := loggerUji()
-	muatan := map[string]string{
-		"password": "rahasia-asli",
-		"catatan":  "kunci deploy: AKIAIOSFODNN7EXAMPLE dan token ghp_" + strings.Repeat("a", 36),
-		"nama":     "jane doe",
+func TestScrubbingByValuePattern(t *testing.T) {
+	lg, sink := testLogger()
+	payload := map[string]string{
+		"password": "original-secret",
+		"notes":    "deploy key: AKIAIOSFODNN7EXAMPLE and token ghp_" + strings.Repeat("a", 36),
+		"username": "jane doe",
 	}
-	if err := lg.LogEvent(context.Background(), "DEPLOY", "usr_1", "sukses", muatan); err != nil {
+	if err := lg.LogEvent(context.Background(), "DEPLOY", "usr_1", "success", payload); err != nil {
 		t.Fatalf("LogEvent: %v", err)
 	}
 
-	e := sink.Salin()[0]
+	e := sink.Clone()[0]
 	if e.Payload["password"] != "[REDACTED]" {
-		t.Errorf("field bernama sensitif tidak disamarkan: %q", e.Payload["password"])
+		t.Errorf("sensitive field name was not redacted: %q", e.Payload["password"])
 	}
-	// Field bernama "catatan" tidak terdaftar sensitif; hanya penyaringan
+	// Field bernama "notes" tidak terdaftar sensitif; hanya penyaringan
 	// berbasis pola yang bisa menangkap isinya.
-	if strings.Contains(e.Payload["catatan"], "AKIAIOSFODNN7EXAMPLE") {
-		t.Errorf("kunci AWS lolos ke log: %q", e.Payload["catatan"])
+	if strings.Contains(e.Payload["notes"], "AKIAIOSFODNN7EXAMPLE") {
+		t.Errorf("AWS key leaked to log: %q", e.Payload["notes"])
 	}
-	if strings.Contains(e.Payload["catatan"], "ghp_aaaa") {
-		t.Errorf("token GitHub lolos ke log: %q", e.Payload["catatan"])
+	if strings.Contains(e.Payload["notes"], "ghp_aaaa") {
+		t.Errorf("GitHub token leaked to log: %q", e.Payload["notes"])
 	}
-	if e.Payload["nama"] != "jane doe" {
-		t.Errorf("data non-sensitif ikut berubah: %q", e.Payload["nama"])
+	if e.Payload["username"] != "jane doe" {
+		t.Errorf("non-sensitive data unexpectedly altered: %q", e.Payload["username"])
 	}
 }
 
-func TestPemotonganAmanUTF8(t *testing.T) {
-	panjang := strings.Repeat("é", batasNilai) // 2 byte per rune
-	hasil := potongAman(panjang)
+func TestSafeTruncateUTF8(t *testing.T) {
+	longStr := strings.Repeat("é", maxValLength) // 2 byte per rune
+	result := safeTruncate(longStr)
 
-	if !strings.HasSuffix(hasil, "...[TRUNCATED]") {
-		t.Fatal("nilai panjang tidak dipotong")
+	if !strings.HasSuffix(result, "...[TRUNCATED]") {
+		t.Fatal("long value was not truncated")
 	}
-	inti := strings.TrimSuffix(hasil, "...[TRUNCATED]")
-	if !utf8.ValidString(inti) {
-		t.Fatal("pemotongan menghasilkan UTF-8 tidak valid — bukti audit rusak diam-diam")
+	core := strings.TrimSuffix(result, "...[TRUNCATED]")
+	if !utf8.ValidString(core) {
+		t.Fatal("truncation produced invalid UTF-8 — audit evidence silently corrupted")
 	}
 }
 ```
@@ -572,7 +572,7 @@ func TestPemotonganAmanUTF8(t *testing.T) {
 # Rantai hash TIDAK mendeteksi pemotongan di ujung -- bandingkan nomor urut
 # terakhir dengan checkpoint yang diterbitkan ke penyimpanan terpisah.
 kubectl logs -l app=api --since=24h | jq -rs 'map(.seq) | max'
-aws s3 cp s3://audit-checkpoints/api-produksi/latest.json - | jq -r '.seq'
+aws s3 cp s3://audit-checkpoints/api-production/latest.json - | jq -r '.seq'
 ```
 
 ```bash
@@ -584,8 +584,8 @@ kubectl logs -l app=api --since=1h \
 kubectl logs -l app=api --since=1h | grep -oE '\b[45][0-9]{15}\b' | head
 
 # Apakah kegagalan ikut diaudit?
-kubectl logs -l app=audit --since=24h | jq -r '.hasil' | sort | uniq -c
+kubectl logs -l app=audit --since=24h | jq -r '.outcome' | sort | uniq -c
 
 # Retensi audit vs retensi log aplikasi -- keduanya harus berbeda
-kubectl get pvc -l app=audit -o custom-columns='NAMA:.metadata.name,UKURAN:.spec.resources.requests.storage'
+kubectl get pvc -l app=audit -o custom-columns='NAME:.metadata.name,SIZE:.spec.resources.requests.storage'
 ```

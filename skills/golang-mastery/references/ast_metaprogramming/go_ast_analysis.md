@@ -83,12 +83,12 @@ func AnalyzeFuncCalls(dir string, targetFuncFullName string) ([]FuncCallReport, 
 	// 2. Load paket Go
 	pkgs, err := packages.Load(cfg, "./...")
 	if err != nil {
-		return nil, fmt.Errorf("gagal me-load packages pada direktori %s: %w", dir, err)
+		return nil, fmt.Errorf("failed to load packages in directory %s: %w", dir, err)
 	}
 
 	// 3. Validasi Error dari Loading
 	if packages.PrintErrors(pkgs) > 0 {
-		return nil, fmt.Errorf("ditemukan error saat me-load paket, pastikan kode bisa dikompilasi")
+		return nil, fmt.Errorf("error found while loading packages, ensure code compiles")
 	}
 
 	var reports []FuncCallReport
@@ -158,7 +158,7 @@ func TestAnalyzeFuncCalls(t *testing.T) {
 	// Setup direktori workspace sementara yang terisolasi
 	dir, err := os.MkdirTemp("", "asttest-*")
 	if err != nil {
-		t.Fatalf("gagal membuat direktori temp: %v", err)
+		t.Fatalf("failed to create temp directory: %v", err)
 	}
 	defer os.RemoveAll(dir)
 
@@ -173,13 +173,13 @@ import (
 func Println(s string) {} // Fungsi custom dengan nama Println
 
 func main() {
-	fmt.Println("Halo Dunia")           // Target: Baris 10
+	fmt.Println("Hello World")           // Target: Baris 10
 	aliasedFmt.Println("Alias import")  // Target: Baris 11
 	Println("Custom func call")         // BUKAN Target
 }
 `
 	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte(src), 0644); err != nil {
-		t.Fatalf("gagal menulis source file: %v", err)
+		t.Fatalf("failed to write source file: %v", err)
 	}
 
 	// Go module mutlak diperlukan untuk x/tools/go/packages beroperasi normal 
@@ -187,24 +187,24 @@ func main() {
 go 1.21
 `
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(mod), 0644); err != nil {
-		t.Fatalf("gagal menulis go.mod: %v", err)
+		t.Fatalf("failed to write go.mod: %v", err)
 	}
 
 	// Eksekusi fungsi utama
 	reports, err := AnalyzeFuncCalls(dir, "fmt.Println")
 	if err != nil {
-		t.Fatalf("AnalyzeFuncCalls gagal tak terduga: %v", err)
+		t.Fatalf("AnalyzeFuncCalls failed unexpectedly: %v", err)
 	}
 
 	// Validasi Output
 	if len(reports) != 2 {
-		t.Errorf("diharapkan menemukan 2 call (fmt.Println dan aliasedFmt.Println), mendapat %d", len(reports))
+		t.Errorf("expected to find 2 calls (fmt.Println and aliasedFmt.Println), got %d", len(reports))
 	}
 
 	// Memastikan custom Println tidak ter-detect
 	for _, r := range reports {
 		if r.FuncName != "fmt.Println" {
-			t.Errorf("mendapatkan target yang salah direvolve: %s", r.FuncName)
+			t.Errorf("resolved to incorrect target: %s", r.FuncName)
 		}
 	}
 }

@@ -130,7 +130,7 @@ func NewPriceCalculator(tiers []DiscountTier) (*PriceCalculator, error) {
 			return nil, fmt.Errorf("diskon %d di luar rentang basis poin [0, 10000]", t.DiskonBasis)
 		}
 		if t.MinQty < 0 {
-			return nil, fmt.Errorf("minQty %d tidak boleh negatif", t.MinQty)
+			return nil, fmt.Errorf("minQty %d cannot be negative", t.MinQty)
 		}
 	}
 
@@ -156,7 +156,7 @@ func NewPriceCalculator(tiers []DiscountTier) (*PriceCalculator, error) {
 // bilangan bulat, propertinya benar secara eksak dan toleransinya tidak perlu.
 func (c *PriceCalculator) Calculate(hargaSatuanSen int64, qty int) (int64, error) {
 	if hargaSatuanSen < 0 {
-		return 0, fmt.Errorf("harga satuan tidak boleh negatif: %d", hargaSatuanSen)
+		return 0, fmt.Errorf("unit price cannot be negative: %d", hargaSatuanSen)
 	}
 	if qty <= 0 {
 		return 0, fmt.Errorf("qty harus positif: %d", qty)
@@ -240,7 +240,7 @@ func TestTierPemanggilTidakMemengaruhiKalkulator(t *testing.T) {
 		t.Fatalf("Calculate: %v", err)
 	}
 	if sebelum != sesudah {
-		t.Fatalf("perubahan slice pemanggil mengubah hasil kalkulator: %d -> %d", sebelum, sesudah)
+		t.Fatalf("caller slice mutation changed calculator result: %d -> %d", sebelum, sesudah)
 	}
 }
 
@@ -349,7 +349,7 @@ func TestProperty_SortModelBased(t *testing.T) {
 		UrutSisip(got) // implementasi yang diuji, BUKAN pembungkus oracle
 
 		if !slices.Equal(got, harap) {
-			t.Fatalf("hasil berbeda dari oracle\n  masukan: %v\n  dapat  : %v\n  mau    : %v",
+			t.Fatalf("result differs from oracle\n  input: %v\n  got  : %v\n  want : %v",
 				input, got, harap)
 		}
 	})

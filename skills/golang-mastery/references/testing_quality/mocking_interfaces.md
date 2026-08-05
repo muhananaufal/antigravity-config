@@ -90,8 +90,8 @@ func NewCheckoutService(g PaymentGateway, l AuditLogger) *CheckoutService {
 // Galat validasi sebagai sentinel, supaya uji bisa memeriksanya dengan
 // errors.Is alih-alih mencocokkan teks.
 var (
-	ErrJumlahTidakValid = errors.New("jumlah harus positif")
-	ErrTokenKosong      = errors.New("token pembayaran wajib ada")
+	ErrJumlahTidakValid = errors.New("amount must be positive")
+	ErrTokenKosong      = errors.New("payment token is required")
 )
 
 // ProcessOrder memproses pesanan dan mencatat audit log.
@@ -110,9 +110,9 @@ func (s *CheckoutService) ProcessOrder(ctx context.Context, amountSen int64, tok
 			"amount_minor": amountSen,
 			"error":        err.Error(),
 		}); errLog != nil {
-			slog.ErrorContext(ctx, "audit charge_failed gagal dicatat", "galat", errLog)
+			slog.ErrorContext(ctx, "failed to log audit charge_failed", "error", errLog)
 		}
-		return "", fmt.Errorf("charge gagal: %w", err)
+		return "", fmt.Errorf("charge failed: %w", err)
 	}
 
 	if err := s.logger.Log(ctx, "charge_success", map[string]any{
@@ -123,8 +123,8 @@ func (s *CheckoutService) ProcessOrder(ctx context.Context, amountSen int64, tok
 		// terlihat. fmt.Printf menulis ke stdout tanpa level, tanpa korelasi,
 		// dan tidak akan pernah memicu alert apa pun; padahal audit yang
 		// gagal diam-diam persis yang ingin Anda ketahui.
-		slog.ErrorContext(ctx, "audit charge_success gagal dicatat",
-			"galat", err, "tx_id", txID)
+		slog.ErrorContext(ctx, "failed to log audit charge_success",
+			"error", err, "tx_id", txID)
 	}
 
 	return txID, nil
@@ -224,7 +224,7 @@ func TestCheckoutService_ProcessOrder(t *testing.T) {
 		wantErr   error // sentinel, bukan bool: "ada galat" tidak membedakan galat yang SALAH
 	}{
 		{
-			name:      "sukses — charge dan audit sama-sama berhasil",
+			name:      "success — charge and audit both succeed",
 			amountSen: 15_000,
 			token:     "tok_visa_success",
 			setupMock: func(gw *MockPaymentGateway, log *MockAuditLogger) {
@@ -240,13 +240,13 @@ func TestCheckoutService_ProcessOrder(t *testing.T) {
 			wantTxID: "txn_abc123",
 		},
 		{
-			name:      "gateway gagal — audit charge_failed tetap dicatat",
+			name:      "gateway fails — audit charge_failed is still logged",
 			amountSen: 9_999,
 			token:     "tok_declined",
 			setupMock: func(gw *MockPaymentGateway, log *MockAuditLogger) {
 				gw.EXPECT().
 					Charge(gomock.Any(), gomock.Eq(int64(9_999)), "tok_declined").
-					Return("", errors.New("kartu ditolak")).
+					Return("", errors.New("card declined")).
 					Times(1)
 				log.EXPECT().
 					Log(gomock.Any(), "charge_failed", gomock.Any()).
@@ -260,7 +260,7 @@ func TestCheckoutService_ProcessOrder(t *testing.T) {
 			// panggilan yang tidak diharapkan. `Times(0)` di sini hanya
 			// mengulang jaminan yang sudah ada, dan menyiratkan bahwa tanpa
 			// baris itu panggilan liar akan lolos — padahal tidak.
-			name:      "validasi — jumlah negatif ditolak sebelum menyentuh gateway",
+			name:      "validation — negative amount rejected before reaching gateway",
 			amountSen: -1_000,
 			token:     "tok_any",
 			setupMock: func(*MockPaymentGateway, *MockAuditLogger) {},
@@ -269,14 +269,14 @@ func TestCheckoutService_ProcessOrder(t *testing.T) {
 		{
 			// Cabang ini sama sekali tidak diuji pada versi sebelumnya,
 			// meski validasinya ada dua.
-			name:      "validasi — token kosong ditolak",
+			name:      "validation — empty token rejected",
 			amountSen: 5_000,
 			token:     "",
 			setupMock: func(*MockPaymentGateway, *MockAuditLogger) {},
 			wantErr:   ErrTokenKosong,
 		},
 		{
-			name:      "audit gagal tidak membatalkan pesanan",
+			name:      "audit failure does not cancel order",
 			amountSen: 5_000,
 			token:     "tok_ok",
 			setupMock: func(gw *MockPaymentGateway, log *MockAuditLogger) {
@@ -286,7 +286,7 @@ func TestCheckoutService_ProcessOrder(t *testing.T) {
 					Times(1)
 				log.EXPECT().
 					Log(gomock.Any(), "charge_success", gomock.Any()).
-					Return(errors.New("layanan audit mati")).
+					Return(errors.New("audit service is down")).
 					Times(1)
 			},
 			wantTxID: "txn_xyz", // order tetap sukses
@@ -320,7 +320,7 @@ func TestCheckoutService_ProcessOrder(t *testing.T) {
 }
 
 // errKartuDitolak dipakai tabel di atas agar asersinya bisa memakai errors.Is.
-var errKartuDitolak = errors.New("kartu ditolak")
+var errKartuDitolak = errors.New("card declined")
 
 // TestCheckoutService_DoAndReturn contoh DoAndReturn untuk efek samping.
 func TestCheckoutService_DoAndReturn(t *testing.T) {
@@ -338,7 +338,7 @@ func TestCheckoutService_DoAndReturn(t *testing.T) {
 		Charge(gomock.Any(), gomock.Any(), gomock.Any()).
 		DoAndReturn(func(ctx context.Context, amountSen int64, token string) (string, error) {
 			if amountSen > 100_000 {
-				return "", errors.New("jumlah melebihi batas")
+				return "", errors.New("amount exceeds limit")
 			}
 			return fmt.Sprintf("txn_%s", token), nil
 		})

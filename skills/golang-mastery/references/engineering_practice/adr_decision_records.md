@@ -107,7 +107,7 @@ var (
 )
 
 // ErrInvalidName ditandai bila nama berkas tidak mengikuti pola NNNN-judul.md.
-var ErrInvalidName = errors.New("adr: nama berkas harus NNNN-judul-kebab.md")
+var ErrInvalidName = errors.New("adr: filename must follow NNNN-kebab-case-title.md pattern")
 
 // ParseFile mengurai satu berkas ADR menjadi Record.
 func ParseFile(fsys fs.FS, path string) (Record, error) {
@@ -118,12 +118,12 @@ func ParseFile(fsys fs.FS, path string) (Record, error) {
 	}
 	var id int
 	if _, err := fmt.Sscanf(m[1], "%d", &id); err != nil {
-		return Record{}, fmt.Errorf("%s: id tidak terbaca: %w", base, err)
+		return Record{}, fmt.Errorf("%s: failed to read id: %w", base, err)
 	}
 
 	f, err := fsys.Open(path)
 	if err != nil {
-		return Record{}, fmt.Errorf("buka %s: %w", path, err)
+		return Record{}, fmt.Errorf("open %s: %w", path, err)
 	}
 	defer f.Close()
 
@@ -177,7 +177,7 @@ func ParseFile(fsys fs.FS, path string) (Record, error) {
 		}
 	}
 	if err := sc.Err(); err != nil {
-		return Record{}, fmt.Errorf("baca %s: %w", path, err)
+		return Record{}, fmt.Errorf("read %s: %w", path, err)
 	}
 	return rec, nil
 }
@@ -214,7 +214,7 @@ func Lint(fsys fs.FS, dir string) ([]Record, []Finding, error) {
 		return nil
 	})
 	if err != nil {
-		return nil, nil, fmt.Errorf("telusuri %s: %w", dir, err)
+		return nil, nil, fmt.Errorf("walk %s: %w", dir, err)
 	}
 
 	sort.Slice(recs, func(i, j int) bool { return recs[i].ID < recs[j].ID })
@@ -232,20 +232,20 @@ func Lint(fsys fs.FS, dir string) ([]Record, []Finding, error) {
 	for i := range recs {
 		r := &recs[i]
 		if r.ID == 0 {
-			out = append(out, Finding{r.Path, "nama berkas tidak mengikuti pola NNNN-judul-kebab.md"})
+			out = append(out, Finding{r.Path, "filename must follow NNNN-kebab-case-title.md pattern"})
 			continue
 		}
 		if prev, dup := seenID[r.ID]; dup {
-			out = append(out, Finding{r.Path, "ID ganda dengan " + prev})
+			out = append(out, Finding{r.Path, "duplicate ID with " + prev})
 		}
 		seenID[r.ID] = r.Path
 
 		if r.Status == "" {
-			out = append(out, Finding{r.Path, "status tidak ditemukan"})
+			out = append(out, Finding{r.Path, "status not found"})
 		}
 		for _, s := range wajibSection {
 			if !r.Sections[normalize(s)] {
-				out = append(out, Finding{r.Path, "bagian wajib hilang: " + s})
+				out = append(out, Finding{r.Path, "missing required section: " + s})
 			}
 		}
 		// Rantai supersede WAJIB dua arah dan menunjuk berkas yang ada.
@@ -253,16 +253,16 @@ func Lint(fsys fs.FS, dir string) ([]Record, []Finding, error) {
 			target, ok := byID[r.SupersededBy]
 			switch {
 			case !ok:
-				out = append(out, Finding{r.Path, fmt.Sprintf("superseded by ADR-%04d yang tidak ada", r.SupersededBy)})
+				out = append(out, Finding{r.Path, fmt.Sprintf("superseded by non-existent ADR-%04d", r.SupersededBy)})
 			case !contains(target.Supersedes, r.ID):
-				out = append(out, Finding{target.Path, fmt.Sprintf("harus menyatakan supersedes ADR-%04d", r.ID)})
+				out = append(out, Finding{target.Path, fmt.Sprintf("must state supersedes ADR-%04d", r.ID)})
 			}
 			if r.Status != StatusSuperseded {
-				out = append(out, Finding{r.Path, "punya superseded-by tapi status bukan superseded"})
+				out = append(out, Finding{r.Path, "has superseded-by but status is not superseded"})
 			}
 		}
 		if r.Status == StatusSuperseded && r.SupersededBy == 0 {
-			out = append(out, Finding{r.Path, "status superseded tapi tidak menyebut penggantinya"})
+			out = append(out, Finding{r.Path, "status is superseded but does not specify replacement"})
 		}
 	}
 	return recs, out, nil
@@ -323,14 +323,14 @@ Volume tulis melewati 50k/detik.
 `
 
 func TestLint(t *testing.T) {
-	t.Run("adr lengkap tidak menghasilkan temuan", func(t *testing.T) {
+	t.Run("complete adr yields no findings", func(t *testing.T) {
 		fsys := fstest.MapFS{"adr/0004-pakai-postgresql.md": {Data: []byte(adrLengkap)}}
 		_, f, err := Lint(fsys, "adr")
 		if err != nil {
-			t.Fatalf("tak terduga: %v", err)
+			t.Fatalf("unexpected error: %v", err)
 		}
 		if len(f) != 0 {
-			t.Fatalf("mau nol temuan, dapat %v", f)
+			t.Fatalf("want zero findings, got %v", f)
 		}
 	})
 
@@ -339,7 +339,7 @@ func TestLint(t *testing.T) {
 		fsys := fstest.MapFS{"adr/0001-x.md": {Data: []byte(tanpaAlternatif)}}
 		_, f, _ := Lint(fsys, "adr")
 		if len(f) != 1 {
-			t.Fatalf("mau 1 temuan, dapat %v", f)
+			t.Fatalf("want 1 finding, got %v", f)
 		}
 	})
 
@@ -352,24 +352,24 @@ func TestLint(t *testing.T) {
 		}
 		_, f, _ := Lint(fsys, "adr")
 		if len(f) == 0 {
-			t.Fatal("mau temuan karena ADR-0002 tidak menyatakan supersedes")
+			t.Fatal("want finding because ADR-0002 does not state supersedes")
 		}
 	})
 
-	t.Run("heading di dalam blok kode tidak dihitung section", func(t *testing.T) {
+	t.Run("heading inside code block not counted as section", func(t *testing.T) {
 		palsu := "# X\n\n- Status: accepted\n\n## Konteks\na\n\n" + "```" + "\n## Alternatif Ditolak\n" + "```" + "\n\n## Keputusan\nb\n\n## Konsekuensi\nc\n\n## Pemicu Tinjau Ulang\nd\n"
 		fsys := fstest.MapFS{"adr/0001-x.md": {Data: []byte(palsu)}}
 		_, f, _ := Lint(fsys, "adr")
 		if len(f) != 1 {
-			t.Fatalf("heading dalam fence seharusnya diabaikan, dapat %v", f)
+			t.Fatalf("headings inside fence should be ignored, got %v", f)
 		}
 	})
 
-	t.Run("nama berkas salah ditolak", func(t *testing.T) {
+	t.Run("invalid filename rejected", func(t *testing.T) {
 		fsys := fstest.MapFS{"adr/keputusan-db.md": {Data: []byte(adrLengkap)}}
 		_, f, _ := Lint(fsys, "adr")
 		if len(f) != 1 {
-			t.Fatalf("mau 1 temuan nama berkas, dapat %v", f)
+			t.Fatalf("want 1 filename finding, got %v", f)
 		}
 	})
 }

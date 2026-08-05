@@ -74,7 +74,7 @@ jobs:
         # Menjalankan govulncheck dalam mode test, mengekstrak output JSON
         # Jika ditemukan kerentanan, pipeline ini akan gagal dan mengeblok PR merge
         run: |
-          govulncheck ./... || (echo "🚨 Kerentanan ditemukan!" && exit 1)
+          govulncheck ./... || (echo "🚨 Vulnerabilities found!" && exit 1)
 ```
 
 ## 3. gosec (Golang Security Checker): SAST Scanning
@@ -271,12 +271,12 @@ security:
 	var cfg Config
 	err := yaml.Unmarshal(yamlContent, &cfg)
 	if err != nil {
-		t.Fatalf("Gagal unmarshal konfigurasi: %v", err)
+		t.Fatalf("failed to unmarshal configuration: %v", err)
 	}
 
 	// Memastikan koneksi database wajib TLS
 	if !cfg.Database.RequireTLS {
-		t.Errorf("Kritis: require_tls pada produksi harus true untuk mencegah MiTM. Nilai saat ini: %v", cfg.Database.RequireTLS)
+		t.Errorf("critical: require_tls in production must be true to prevent MiTM. Current value: %v", cfg.Database.RequireTLS)
 	}
 
 	// Memastikan fitur SAST tidak pernah dimatikan secara tidak sengaja di produksi

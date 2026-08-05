@@ -88,29 +88,34 @@ func ParseJSONRecord(data []byte) (*JSONRecord, error) {
 		return nil, fmt.Errorf("unmarshal: %w", err)
 	}
 	if rec.ID <= 0 {
-		return nil, errors.New("id harus positif")
+		return nil, errors.New("id must be positive")
 	}
 	// CATATAN: pemeriksaan `!utf8.ValidString(rec.Name)` yang ada di versi
 	// sebelumnya adalah CABANG MATI dan sengaja dihapus.
 	//
 	// `encoding/json` mengganti byte UTF-8 tidak valid dengan U+FFFD saat
 	// men-decode ke `string`, sehingga `rec.Name` SELALU UTF-8 valid dan
-	// cabang itu tidak pernah bisa menyala. Ironinya pas: fuzzing adalah
-	// alat yang paling mudah membuktikannya — laporan cakupan menunjukkan
-	// baris itu tidak pernah tersentuh berapa lama pun fuzzer berjalan.
+	// NOTE: the `!utf8.ValidString(rec.Name)` check from previous
+	// versions is DEAD CODE and has been intentionally removed.
 	//
-	// Bila yang ingin ditolak adalah masukan yang MEMUAT byte rusak,
-	// periksa `data`-nya, bukan hasil decode-nya:
-	if bytes.ContainsRune(data, utf8.RuneError) && !bytes.Contains(data, []byte("�")) {
-		return nil, errors.New("masukan memuat byte UTF-8 tidak valid")
+	// `encoding/json` replaces invalid UTF-8 bytes with U+FFFD when
+	// decoding into a `string`, so `rec.Name` is ALWAYS valid UTF-8
+	// and that branch can never be taken. Ironically: fuzzing is the
+	// easiest tool to prove this — coverage reports show that line
+	// is never touched no matter how long the fuzzer runs.
+	//
+	// If you want to reject inputs that contain broken bytes,
+	// check the `data` itself, not the decoded result:
+	if bytes.ContainsRune(data, utf8.RuneError) && !bytes.Contains(data, []byte("")) {
+		return nil, errors.New("input contains invalid UTF-8 bytes")
 	}
 	if rec.Score < 0 || rec.Score > 100 {
-		return nil, fmt.Errorf("score %v di luar rentang [0, 100]", rec.Score)
+		return nil, fmt.Errorf("score %v out of range [0, 100]", rec.Score)
 	}
 	return &rec, nil
 }
 
-// RoundTripJSON memeriksa properti NORMALISASI, bukan round-trip byte.
+// RoundTripJSON checks NORMALIZATION properties, not byte-for-byte round-trips.
 //
 // Nama dan komentar lama menyatakan "Marshal(Unmarshal(data)) == data" —
 // properti yang BUKAN yang diperiksa kode ini, dan yang memang TIDAK BENAR:
@@ -233,21 +238,21 @@ func FuzzParseJSONRecord(f *testing.F) {
 		// melanggar aturan yang fungsi itu klaim tegakkan.
 		if err != nil {
 			if rec != nil {
-				t.Fatalf("galat DAN record non-nil sekaligus: %+v", rec)
+				t.Fatalf("error AND non-nil record simultaneously: %+v", rec)
 			}
 			return
 		}
 		if rec == nil {
-			t.Fatal("galat nil tetapi record juga nil")
+			t.Fatal("nil error but record is also nil")
 		}
 		if rec.ID <= 0 {
-			t.Fatalf("record diterima dengan ID tidak valid: %d", rec.ID)
+			t.Fatalf("record received with invalid ID: %d", rec.ID)
 		}
 		if rec.Score < 0 || rec.Score > 100 {
-			t.Fatalf("record diterima dengan score di luar rentang: %v", rec.Score)
+			t.Fatalf("record received with score out of range: %v", rec.Score)
 		}
 		if !utf8.ValidString(rec.Name) {
-			t.Fatalf("record diterima dengan nama bukan UTF-8: %q", rec.Name)
+			t.Fatalf("record received with non-UTF-8 name: %q", rec.Name)
 		}
 	})
 }

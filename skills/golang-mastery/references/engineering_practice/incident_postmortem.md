@@ -144,7 +144,7 @@ type Timeline struct {
 }
 
 // ErrNoEvents dikembalikan bila linimasa kosong.
-var ErrNoEvents = errors.New("incident: linimasa tidak memuat event")
+var ErrNoEvents = errors.New("incident: timeline contains no events")
 
 // logLine adalah bentuk JSON keluaran log/slog yang kita pedulikan.
 type logLine struct {
@@ -210,7 +210,7 @@ func (t Timeline) Metrics() (Metrics, error) {
 		return Metrics{}, ErrNoEvents
 	}
 	if t.StartedAt.IsZero() {
-		return Metrics{}, errors.New("incident: StartedAt wajib diisi untuk menghitung MTTD")
+		return Metrics{}, errors.New("incident: StartedAt is required to compute MTTD")
 	}
 
 	var m Metrics
@@ -244,7 +244,7 @@ func (t Timeline) Metrics() (Metrics, error) {
 
 	// Urutan terbalik menandakan linimasa yang salah catat, bukan sistem cepat.
 	if m.MTTD < 0 || m.MTTA < 0 || m.MTTM < 0 || m.MTTR < 0 {
-		return m, fmt.Errorf("incident %s: urutan linimasa tidak masuk akal", t.IncidentID)
+		return m, fmt.Errorf("incident %s: timeline order is nonsensical", t.IncidentID)
 	}
 	return m, nil
 }
@@ -264,12 +264,12 @@ func ValidateActions(items []ActionItem) []string {
 	for i, it := range items {
 		switch {
 		case strings.TrimSpace(it.Owner) == "":
-			problems = append(problems, fmt.Sprintf("action[%d] %q: tanpa pemilik", i, it.Title))
+			problems = append(problems, fmt.Sprintf("action[%d] %q: without owner", i, it.Title))
 		case it.Due.IsZero():
-			problems = append(problems, fmt.Sprintf("action[%d] %q: tanpa tenggat", i, it.Title))
+			problems = append(problems, fmt.Sprintf("action[%d] %q: without due date", i, it.Title))
 		case strings.Contains(strings.ToLower(it.Owner), "tim "):
 			// "Tim Backend" bukan pemilik. Tugas milik semua orang tidak dikerjakan siapa pun.
-			problems = append(problems, fmt.Sprintf("action[%d] %q: pemilik harus perorangan, bukan tim", i, it.Title))
+			problems = append(problems, fmt.Sprintf("action[%d] %q: owner must be an individual, not a team", i, it.Title))
 		}
 	}
 	return problems
@@ -308,16 +308,16 @@ func TestMetrics(t *testing.T) {
 	}
 	m, err := tl.Metrics()
 	if err != nil {
-		t.Fatalf("tak terduga: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
 	if m.MTTD != 4*time.Minute {
-		t.Errorf("MTTD mau 4m, dapat %v", m.MTTD)
+		t.Errorf("MTTD want 4m, got %v", m.MTTD)
 	}
 	if m.MTTM != 14*time.Minute {
-		t.Errorf("MTTM mau 14m, dapat %v", m.MTTM)
+		t.Errorf("MTTM want 14m, got %v", m.MTTM)
 	}
 	if !m.Complete {
-		t.Error("mau Complete=true")
+		t.Error("want Complete=true")
 	}
 }
 
@@ -329,10 +329,10 @@ func TestMetrics_FaseBolongDitandai(t *testing.T) {
 	}
 	m, err := tl.Metrics()
 	if err != nil {
-		t.Fatalf("tak terduga: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
 	if m.Complete {
-		t.Fatal("linimasa bolong seharusnya Complete=false")
+		t.Fatal("incomplete timeline should have Complete=false")
 	}
 }
 
@@ -343,13 +343,13 @@ func TestParseSlogStream_BarisRusakDilewati(t *testing.T) {
 {"time":"2026-08-05T10:07:00Z","msg":"lain","incident_kind":"ack","incident_id":"INC-9"}`
 	tl, err := ParseSlogStream(strings.NewReader(in), "INC-1")
 	if err != nil {
-		t.Fatalf("tak terduga: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(tl.Events) != 2 {
-		t.Fatalf("mau 2 event untuk INC-1, dapat %d", len(tl.Events))
+		t.Fatalf("want 2 events for INC-1, got %d", len(tl.Events))
 	}
 	if tl.Events[1].Actor != "rina" {
-		t.Errorf("actor mau rina, dapat %q", tl.Events[1].Actor)
+		t.Errorf("actor want rina, got %q", tl.Events[1].Actor)
 	}
 }
 
@@ -362,7 +362,7 @@ func TestValidateActions(t *testing.T) {
 	}
 	p := ValidateActions(items)
 	if len(p) != 3 {
-		t.Fatalf("mau 3 masalah, dapat %d: %v", len(p), p)
+		t.Fatalf("want 3 problems, got %d: %v", len(p), p)
 	}
 }
 ```

@@ -87,7 +87,7 @@ func Get() (*Config, error) {
 ## Kode Go Production-Ready
 
 ```go
-package katalog
+package catalog
 
 import (
 	"cmp"
@@ -100,127 +100,127 @@ import (
 	"unique"
 )
 
-// Produk adalah entri katalog.
-type Produk struct {
+// Product adalah entri katalog.
+type Product struct {
 	SKU    string
-	Nama   string
-	Harga  int64 // dalam sen, DILARANG float untuk uang
+	Name   string
+	Price  int64 // dalam sen, DILARANG float untuk uang
 	Tenant unique.Handle[string]
 }
 
-// NewProduk membuat produk dengan tenant yang di-intern.
+// NewProduct membuat produk dengan tenant yang di-intern.
 // Pada 1 juta produk milik 50 tenant, ini menyimpan 50 string, bukan 1 juta.
-func NewProduk(sku, nama string, harga int64, tenant string) Produk {
-	return Produk{
+func NewProduct(sku, nama string, harga int64, tenant string) Product {
+	return Product{
 		SKU:    sku,
-		Nama:   nama,
-		Harga:  harga,
+		Name:   nama,
+		Price:  harga,
 		Tenant: unique.Make(tenant),
 	}
 }
 
-// Katalog menyimpan produk terindeks SKU.
-type Katalog struct {
+// Catalog menyimpan produk terindeks SKU.
+type Catalog struct {
 	mu    sync.RWMutex
-	items map[string]Produk
+	items map[string]Product
 }
 
-// NewKatalog membuat katalog kosong.
-func NewKatalog() *Katalog {
-	return &Katalog{items: make(map[string]Produk)}
+// NewCatalog membuat katalog kosong.
+func NewCatalog() *Catalog {
+	return &Catalog{items: make(map[string]Product)}
 }
 
-// ErrTidakAda dikembalikan bila SKU tidak ditemukan.
-var ErrTidakAda = errors.New("katalog: SKU tidak ada")
+// ErrNotFound dikembalikan bila SKU tidak ditemukan.
+var ErrNotFound = errors.New("catalog: invalid SKU")
 
 // Tambah menyisipkan atau menimpa produk.
-func (k *Katalog) Tambah(p Produk) {
+func (k *Catalog) Add(p Product) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	k.items[p.SKU] = p
 }
 
 // Ambil mengembalikan produk berdasarkan SKU.
-func (k *Katalog) Ambil(sku string) (Produk, error) {
+func (k *Catalog) Get(sku string) (Product, error) {
 	k.mu.RLock()
 	defer k.mu.RUnlock()
 	p, ok := k.items[sku]
 	if !ok {
-		return Produk{}, fmt.Errorf("%w: %s", ErrTidakAda, sku)
+		return Product{}, fmt.Errorf("%w: %s", ErrNotFound, sku)
 	}
 	return p, nil
 }
 
-// SKUTerurut mengembalikan seluruh SKU dalam urutan stabil.
+// SortedSKUs mengembalikan seluruh SKU dalam urutan stabil.
 //
 // maps.Keys sejak Go 1.23 mengembalikan iter.Seq[K], BUKAN slice.
 // slices.Sorted mengumpulkan sekaligus mengurutkannya dalam satu langkah.
-func (k *Katalog) SKUTerurut() []string {
+func (k *Catalog) SortedSKUs() []string {
 	k.mu.RLock()
 	defer k.mu.RUnlock()
 	return slices.Sorted(maps.Keys(k.items))
 }
 
-// TenantUnik mengembalikan daftar tenant tanpa duplikat, terurut.
+// UniqueTenants mengembalikan daftar tenant tanpa duplikat, terurut.
 // Perbandingan Handle adalah perbandingan pointer — jauh lebih murah
 // daripada membandingkan string byte demi byte.
-func (k *Katalog) TenantUnik() []string {
+func (k *Catalog) UniqueTenants() []string {
 	k.mu.RLock()
-	terlihat := make(map[unique.Handle[string]]struct{})
+	seen := make(map[unique.Handle[string]]struct{})
 	for _, p := range k.items {
-		terlihat[p.Tenant] = struct{}{}
+		seen[p.Tenant] = struct{}{}
 	}
 	k.mu.RUnlock()
 
-	out := make([]string, 0, len(terlihat))
-	for h := range terlihat {
+	out := make([]string, 0, len(seen))
+	for h := range seen {
 		out = append(out, h.Value())
 	}
 	slices.Sort(out)
 	return out
 }
 
-// TermurahPerTenant mengembalikan produk termurah tiap tenant.
-func (k *Katalog) TermurahPerTenant() map[string]Produk {
+// CheapestPerTenant mengembalikan produk termurah tiap tenant.
+func (k *Catalog) CheapestPerTenant() map[string]Product {
 	k.mu.RLock()
 	defer k.mu.RUnlock()
 
-	out := make(map[string]Produk)
+	out := make(map[string]Product)
 	for _, p := range k.items {
 		t := p.Tenant.Value()
-		cur, ada := out[t]
-		if !ada || p.Harga < cur.Harga {
+		cur, ok := out[t]
+		if !ok || p.Price < cur.Price {
 			out[t] = p
 		}
 	}
 	return out
 }
 
-// UrutkanUntukTampilan mengurutkan berdasarkan harga naik, lalu nama.
+// SortForDisplay mengurutkan berdasarkan harga naik, lalu nama.
 // slices.SortFunc + cmp.Or menggantikan sort.Slice berlapis if.
-func UrutkanUntukTampilan(ps []Produk) {
-	slices.SortFunc(ps, func(a, b Produk) int {
+func SortForDisplay(ps []Product) {
+	slices.SortFunc(ps, func(a, b Product) int {
 		return cmp.Or(
-			cmp.Compare(a.Harga, b.Harga),
-			strings.Compare(a.Nama, b.Nama),
+			cmp.Compare(a.Price, b.Price),
+			strings.Compare(a.Name, b.Name),
 		)
 	})
 }
 
-// CariHarga melakukan binary search pada slice yang SUDAH terurut harga.
+// FindPrice melakukan binary search pada slice yang SUDAH terurut harga.
 // Mengembalikan indeks dan apakah nilainya persis ditemukan.
-func CariHarga(ps []Produk, harga int64) (int, bool) {
-	return slices.BinarySearchFunc(ps, harga, func(p Produk, target int64) int {
-		return cmp.Compare(p.Harga, target)
+func FindPrice(ps []Product, harga int64) (int, bool) {
+	return slices.BinarySearchFunc(ps, harga, func(p Product, target int64) int {
+		return cmp.Compare(p.Price, target)
 	})
 }
 
-// MuatKonfigurasi diinisialisasi tepat sekali, aman dari race.
+// LoadConfig diinisialisasi tepat sekali, aman dari race.
 // sync.OnceValues menggantikan pola sync.Once + dua variabel global.
-var MuatKonfigurasi = sync.OnceValues(func() (map[string]string, error) {
-	cfg := map[string]string{"mata_uang": "IDR", "zona": "Asia/Jakarta"}
+var LoadConfig = sync.OnceValues(func() (map[string]string, error) {
+	cfg := map[string]string{"currency": "IDR", "zone": "Asia/Jakarta"}
 	if len(cfg) == 0 {
-		return nil, errors.New("katalog: konfigurasi kosong")
+		return nil, errors.New("catalog: empty configuration")
 	}
 	return cfg, nil
 })
@@ -229,7 +229,7 @@ var MuatKonfigurasi = sync.OnceValues(func() (map[string]string, error) {
 Cache lemah untuk objek besar:
 
 ```go
-package gambar
+package image
 
 import (
 	"sync"
@@ -240,25 +240,25 @@ import (
 // Cocok untuk objek besar yang mahal dibuat tapi bisa dibuat ulang.
 type Cache struct {
 	mu    sync.Mutex
-	items map[string]weak.Pointer[Gambar]
-	muat  func(string) (*Gambar, error)
+	items map[string]weak.Pointer[Image]
+	load  func(string) (*Image, error)
 }
 
-// Gambar adalah objek besar (mis. bitmap ter-dekode).
-type Gambar struct {
+// Image adalah objek besar (mis. bitmap ter-dekode).
+type Image struct {
 	ID   string
 	Data []byte
 }
 
 // NewCache membuat cache lemah dengan pemuat tertentu.
-func NewCache(muat func(string) (*Gambar, error)) *Cache {
-	return &Cache{items: make(map[string]weak.Pointer[Gambar]), muat: muat}
+func NewCache(load func(string) (*Image, error)) *Cache {
+	return &Cache{items: make(map[string]weak.Pointer[Image]), load: load}
 }
 
 // Ambil mengembalikan gambar dari cache bila masih hidup, atau memuat ulang.
-func (c *Cache) Ambil(id string) (*Gambar, error) {
+func (c *Cache) Get(id string) (*Image, error) {
 	c.mu.Lock()
-	if wp, ada := c.items[id]; ada {
+	if wp, ok := c.items[id]; ok {
 		if g := wp.Value(); g != nil {
 			c.mu.Unlock()
 			return g, nil // masih hidup
@@ -268,7 +268,7 @@ func (c *Cache) Ambil(id string) (*Gambar, error) {
 	}
 	c.mu.Unlock()
 
-	g, err := c.muat(id)
+	g, err := c.load(id)
 	if err != nil {
 		return nil, err
 	}
@@ -283,7 +283,7 @@ func (c *Cache) Ambil(id string) (*Gambar, error) {
 ## Uji
 
 ```go
-package katalog
+package catalog
 
 import (
 	"slices"
@@ -291,88 +291,88 @@ import (
 	"unique"
 )
 
-func katalogUji() *Katalog {
-	k := NewKatalog()
-	k.Tambah(NewProduk("B-2", "Buku", 45_000, "acme"))
-	k.Tambah(NewProduk("A-1", "Apel", 12_000, "acme"))
-	k.Tambah(NewProduk("C-3", "Cangkir", 30_000, "beta"))
+func testCatalog() *Catalog {
+	k := NewCatalog()
+	k.Add(NewProduct("B-2", "Book", 45_000, "acme"))
+	k.Add(NewProduct("A-1", "Apple", 12_000, "acme"))
+	k.Add(NewProduct("C-3", "Cup", 30_000, "beta"))
 	return k
 }
 
-func TestSKUTerurut(t *testing.T) {
-	got := katalogUji().SKUTerurut()
+func TestSortedSKUs(t *testing.T) {
+	got := testCatalog().SortedSKUs()
 	want := []string{"A-1", "B-2", "C-3"}
 	if !slices.Equal(got, want) {
-		t.Fatalf("mau %v, dapat %v", want, got)
+		t.Fatalf("want %v, got %v", want, got)
 	}
 }
 
-func TestTenantUnik(t *testing.T) {
-	got := katalogUji().TenantUnik()
+func TestUniqueTenants(t *testing.T) {
+	got := testCatalog().UniqueTenants()
 	want := []string{"acme", "beta"}
 	if !slices.Equal(got, want) {
-		t.Fatalf("mau %v, dapat %v", want, got)
+		t.Fatalf("want %v, got %v", want, got)
 	}
 }
 
-func TestInterning_HandleSamaUntukStringSama(t *testing.T) {
+func TestInterning_SameHandleForSameString(t *testing.T) {
 	a := unique.Make("acme-corp")
 	b := unique.Make("acme" + "-corp") // dibangun runtime, bukan konstanta
 	if a != b {
-		t.Fatal("handle untuk string identik WAJIB sama")
+		t.Fatal("handle for identical strings MUST be the same")
 	}
 	if a.Value() != "acme-corp" {
-		t.Fatalf("Value() rusak: %q", a.Value())
+		t.Fatalf("Value() is broken: %q", a.Value())
 	}
 }
 
-func TestTermurahPerTenant(t *testing.T) {
-	got := katalogUji().TermurahPerTenant()
+func TestCheapestPerTenant(t *testing.T) {
+	got := testCatalog().CheapestPerTenant()
 	if got["acme"].SKU != "A-1" {
-		t.Fatalf("termurah acme mau A-1, dapat %s", got["acme"].SKU)
+		t.Fatalf("cheapest acme want A-1, got %s", got["acme"].SKU)
 	}
 	if got["beta"].SKU != "C-3" {
-		t.Fatalf("termurah beta mau C-3, dapat %s", got["beta"].SKU)
+		t.Fatalf("cheapest beta want C-3, got %s", got["beta"].SKU)
 	}
 }
 
-func TestUrutkanDanCari(t *testing.T) {
-	ps := []Produk{
-		NewProduk("C", "Cangkir", 30_000, "t"),
-		NewProduk("A", "Apel", 12_000, "t"),
-		NewProduk("B", "Buku", 45_000, "t"),
+func TestSortAndSearch(t *testing.T) {
+	ps := []Product{
+		NewProduct("C", "Cup", 30_000, "t"),
+		NewProduct("A", "Apple", 12_000, "t"),
+		NewProduct("B", "Book", 45_000, "t"),
 	}
-	UrutkanUntukTampilan(ps)
+	SortForDisplay(ps)
 	if ps[0].SKU != "A" || ps[2].SKU != "B" {
-		t.Fatalf("urutan salah: %v %v %v", ps[0].SKU, ps[1].SKU, ps[2].SKU)
+		t.Fatalf("wrong order: %v %v %v", ps[0].SKU, ps[1].SKU, ps[2].SKU)
 	}
-	if i, ok := CariHarga(ps, 30_000); !ok || i != 1 {
-		t.Fatalf("cari 30000 mau (1,true), dapat (%d,%v)", i, ok)
+	if i, ok := FindPrice(ps, 30_000); !ok || i != 1 {
+		t.Fatalf("search 30000 want (1,true), got (%d,%v)", i, ok)
 	}
-	if _, ok := CariHarga(ps, 99_999); ok {
-		t.Fatal("harga yang tidak ada seharusnya ok=false")
-	}
-}
-
-func TestUrutkanUntukTampilan_PengurutStabilPadaHargaSama(t *testing.T) {
-	ps := []Produk{
-		NewProduk("Z", "Zebra", 10_000, "t"),
-		NewProduk("A", "Apel", 10_000, "t"),
-	}
-	UrutkanUntukTampilan(ps)
-	if ps[0].Nama != "Apel" {
-		t.Fatalf("harga sama harus diurut nama, dapat %s duluan", ps[0].Nama)
+	if _, ok := FindPrice(ps, 99_999); ok {
+		t.Fatal("invalid price should have ok=false")
 	}
 }
 
-func TestMuatKonfigurasi_HanyaSekali(t *testing.T) {
-	a, err := MuatKonfigurasi()
+func TestSortForDisplay_StableSortOnSamePrice(t *testing.T) {
+	ps := []Product{
+		NewProduct("Z", "Zebra", 10_000, "t"),
+		NewProduct("A", "Apple", 10_000, "t"),
+	}
+	SortForDisplay(ps)
+	if ps[0].Name != "Apple" {
+		t.Fatalf("same price must be ordered by name, got %s first", ps[0].Name)
+	}
+}
+
+func TestLoadConfig_OnlyOnce(t *testing.T) {
+	a, err := LoadConfig()
 	if err != nil {
-		t.Fatalf("tak terduga: %v", err)
+		t.Fatalf("unexpected: %v", err)
 	}
-	b, _ := MuatKonfigurasi()
+	b, _ := LoadConfig()
 	if &a == nil || len(a) != len(b) {
-		t.Fatal("hasil pemanggilan kedua berbeda")
+		t.Fatal("second call result differs")
 	}
 }
 ```
@@ -426,13 +426,13 @@ if len(xs) == 0 { return 0, ErrKosong }
 **❌ SALAH — cache referensi kuat untuk objek besar**
 
 ```go
-var cache = map[string]*Gambar{} // tumbuh selamanya
+var cache = map[string]*Image{} // tumbuh selamanya
 
-func Ambil(id string) *Gambar {
+func Get(id string) *Image {
 	if g, ok := cache[id]; ok {
 		return g
 	}
-	g := muatGambar(id)
+	g := loadImage(id)
 	cache[id] = g // GC TIDAK PERNAH bisa membebaskan
 	return g
 }

@@ -95,32 +95,32 @@ func (r *DatabaseReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		if apierrors.IsNotFound(err) {
 			// Object dihapus dari server sebelum kita memprosesnya di antrean.
 			// Reconcile selesai. Jangan return error, hindari infinite requeue.
-			logger.Info("Resource tidak ditemukan. Mengabaikan event.")
+			logger.Info("Resource not found. Ignoring event.")
 			return ctrl.Result{}, nil
 		}
 		// Error koneksi K8s, antre kembali via framework
-		return ctrl.Result{}, fmt.Errorf("gagal mengambil resource: %w", err)
+		return ctrl.Result{}, fmt.Errorf("failed to fetch resource: %w", err)
 	}
 
 	// 2. Lifecycle & Finalizers Management (Deletion Phase)
 	if !dbResource.ObjectMeta.DeletionTimestamp.IsZero() {
 		// Object ini SEDANG dalam antrean proses penghapusan (Terminating)
 		if controllerutil.ContainsFinalizer(&dbResource, databaseFinalizer) {
-			logger.Info("Melakukan de-provisioning pada database eksternal...")
+			logger.Info("De-provisioning external database...")
 			
 			// Memanggil cloud API external (SaaS / AWS)
 			if err := r.deleteExternalDatabase(ctx, dbResource.Name); err != nil {
 				// Bila error cloud API, kita requeue agar dicoba lagi (Backoff Retry)
-				logger.Error(err, "Gagal menghapus cloud resource, akan diulang.")
+				logger.Error(err, "Failed to delete cloud resource, will retry.")
 				return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 			}
 
 			// Berhasil dihapus dari cloud, hilangkan finalizer
 			controllerutil.RemoveFinalizer(&dbResource, databaseFinalizer)
 			if err := r.Update(ctx, &dbResource); err != nil {
-				return ctrl.Result{}, fmt.Errorf("gagal menghapus finalizer: %w", err)
+				return ctrl.Result{}, fmt.Errorf("failed to remove finalizer: %w", err)
 			}
-			logger.Info("Finalizer dihapus, kubernetes akan menghancurkan resource.")
+			logger.Info("Finalizer removed, kubernetes will destroy the resource.")
 		}
 		// Sudah tidak ada finalizer. Stop rekonsiliasi.
 		return ctrl.Result{}, nil
@@ -130,7 +130,7 @@ func (r *DatabaseReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	if !controllerutil.ContainsFinalizer(&dbResource, databaseFinalizer) {
 		controllerutil.AddFinalizer(&dbResource, databaseFinalizer)
 		if err := r.Update(ctx, &dbResource); err != nil {
-			return ctrl.Result{}, fmt.Errorf("gagal memasang finalizer: %w", err)
+			return ctrl.Result{}, fmt.Errorf("failed to add finalizer: %w", err)
 		}
 		// Hentikan eksekusi di sini. Karena r.Update memodifikasi objek, K8s akan menghasilkan
 		// event UPDATE baru yang secara otomatis akan men-trigger ulang fungsi Reconcile ini.
@@ -141,25 +141,25 @@ func (r *DatabaseReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	// Kita periksa status external resource
 	status, err := r.checkExternalDatabaseStatus(ctx, dbResource.Name)
 	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("gagal memeriksa status db cloud: %w", err)
+		return ctrl.Result{}, fmt.Errorf("failed to check cloud db status: %w", err)
 	}
 
 	if status == "NotExists" {
-		logger.Info("Membangun instance database baru...")
+		logger.Info("Provisioning new database instance...")
 		if err := r.createExternalDatabase(ctx, dbResource.Name); err != nil {
-			logger.Error(err, "Gagal provision. Retry dalam 15 detik.")
+			logger.Error(err, "Failed to provision. Retrying in 15 seconds.")
 			return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 		}
 		// Status masih "Creating", requeue untuk mengecek nanti
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	} else if status == "Creating" {
-		logger.Info("Masih provisioning, menunggu...")
+		logger.Info("Still provisioning, waiting...")
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	} else if status == "Ready" {
 		// 4. Update Status pada Custom Resource (Jika ada modifikasi status)
 		// r.Status().Patch(ctx, &dbResource, client.MergeFrom(oldDbResource))
 		
-		logger.Info("Reconciliation sukses. Desired State == Actual State.")
+		logger.Info("Reconciliation successful. Desired State == Actual State.")
 		return ctrl.Result{}, nil
 	}
 
@@ -205,7 +205,7 @@ func TestReconcile_FinalizerLifecycle(t *testing.T) {
 		t.Fatalf("Reconcile error: %v", err)
 	}
 	if res.Requeue || res.RequeueAfter != 0 {
-		t.Errorf("Diharapkan return empty result saat Update memicu watch event baru")
+		t.Errorf("Expected empty result when Update triggers new watch event")
 	}
 
 	// Verifikasi: ambil data terbaru dari cache K8s
@@ -215,7 +215,7 @@ func TestReconcile_FinalizerLifecycle(t *testing.T) {
 		t.Fatalf("Get error: %v", err)
 	}
 	if !controllerutil.ContainsFinalizer(updatedCM, databaseFinalizer) {
-		t.Errorf("Diharapkan K8s object memiliki finalizer setelah reconcile loop pertama")
+		t.Errorf("Expected K8s object to have finalizer after first reconcile loop")
 	}
 
 	// TAHAP 2: Simulasi pengguna menjalankan perintah `kubectl delete`
@@ -233,7 +233,7 @@ func TestReconcile_FinalizerLifecycle(t *testing.T) {
 	// Verifikasi Finalizer sudah dibersihkan, mengijinkan etcd K8s menghapus objek utuhnya
 	_ = fakeClient.Get(context.TODO(), req.NamespacedName, updatedCM)
 	if controllerutil.ContainsFinalizer(updatedCM, databaseFinalizer) {
-		t.Errorf("Diharapkan Finalizer lenyap setelah deletion logic tereksekusi!")
+		t.Errorf("Expected Finalizer to be gone after deletion logic executes!")
 	}
 }
 ```

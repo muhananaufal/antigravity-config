@@ -184,13 +184,13 @@ func (s *myStreamingServer) Chat(stream StreamingService_ChatServer) error {
 			// menutup tab. Kembalikan kode aslinya, dan catat sebagai info.
 			switch status.Code(err) {
 			case codes.Canceled, codes.Unavailable:
-				slog.InfoContext(ctx, "klien memutus stream", slog.String("sebab", err.Error()))
+				slog.InfoContext(ctx, "client disconnected stream", slog.String("reason", err.Error()))
 				return err
 			case codes.DeadlineExceeded:
 				return err
 			}
-			slog.ErrorContext(ctx, "gagal menerima dari stream", slog.String("error", err.Error()))
-			return status.Error(codes.Internal, "gagal membaca stream")
+			slog.ErrorContext(ctx, "failed to receive from stream", slog.String("error", err.Error()))
+			return status.Error(codes.Internal, "failed to read stream")
 		}
 
 		replyMsg := fmt.Sprintf("Echo: %s", req.Payload)
@@ -201,8 +201,8 @@ func (s *myStreamingServer) Chat(stream StreamingService_ChatServer) error {
 			if c := status.Code(err); c == codes.Canceled || c == codes.Unavailable {
 				return err
 			}
-			slog.ErrorContext(ctx, "gagal mengirim ke stream", slog.String("error", err.Error()))
-			return status.Error(codes.Internal, "gagal menulis stream")
+			slog.ErrorContext(ctx, "failed to send to stream", slog.String("error", err.Error()))
+			return status.Error(codes.Internal, "failed to write stream")
 		}
 	}
 }

@@ -109,7 +109,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-const panjangMaksRequestID = 64
+const maxRequestIDLength = 64
 
 // InitLogger menyiapkan global logger. Dipanggil sekali saat app boot.
 //
@@ -117,7 +117,7 @@ const panjangMaksRequestID = 64
 // benar-benar bisa diuji. Versi lama menulis langsung ke os.Stdout, dan
 // akibatnya uji yang bernama TestInitLogger_ProductionMode tidak pernah
 // memanggil InitLogger sama sekali — ia membangun logger-nya sendiri.
-func InitLogger(env string, keluaran io.Writer) zerolog.Logger {
+func InitLogger(env string, output io.Writer) zerolog.Logger {
 	zerolog.TimeFieldFormat = time.RFC3339Nano
 
 	// Disetel EKSPLISIT. Keduanya variabel global: bila ada pustaka lain yang
@@ -135,11 +135,11 @@ func InitLogger(env string, keluaran io.Writer) zerolog.Logger {
 	var logger zerolog.Logger
 	if env == "development" {
 		// ConsoleWriter HANYA di development — terlalu lambat untuk produksi.
-		logger = zerolog.New(zerolog.ConsoleWriter{Out: keluaran, TimeFormat: "15:04:05"}).
+		logger = zerolog.New(zerolog.ConsoleWriter{Out: output, TimeFormat: "15:04:05"}).
 			With().Timestamp().Caller().Logger()
 	} else {
 		// JSON ke stdout — standar 12-factor (K8s/Docker mengumpulkan stdout).
-		logger = zerolog.New(keluaran).With().
+		logger = zerolog.New(output).With().
 			Timestamp().
 			Str("service", "my-service").
 			Str("version", os.Getenv("APP_VERSION")).
@@ -168,13 +168,13 @@ func InitLogger(env string, keluaran io.Writer) zerolog.Logger {
 // global, yang lain diam-diam menonaktifkan diri. Dua mekanisme yang gagal
 // secara berbeda lebih buruk daripada satu, karena pemanggil tidak punya cara
 // mengetahui mana yang sedang ia pakai.
-func LoggerDari(ctx context.Context) *zerolog.Logger { return zerolog.Ctx(ctx) }
+func LoggerFrom(ctx context.Context) *zerolog.Logger { return zerolog.Ctx(ctx) }
 
 // RequestLoggerMiddleware menyisipkan request-scoped logger ke setiap request.
 func RequestLoggerMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		binding := log.With().
-			Str("request_id", requestIDBersih(r.Header.Get("X-Request-ID"))).
+			Str("request_id", cleanRequestID(r.Header.Get("X-Request-ID"))).
 			Str("method", r.Method).
 			Str("path", r.URL.Path).
 			Str("remote_addr", r.RemoteAddr)
@@ -219,18 +219,18 @@ func RequestLoggerMiddleware(next http.Handler) http.Handler {
 // bisa dirusak — tetapi nilai 1 MB akan disalin ke SETIAP baris log
 // permintaan itu, dan volume log adalah biaya observabilitas terbesar di
 // banyak tim. Nilai sembarang juga mencemari indeks agregator log.
-func requestIDBersih(dariKlien string) string {
-	if dariKlien == "" || len(dariKlien) > panjangMaksRequestID {
-		return requestIDBaru()
+func cleanRequestID(dariKlien string) string {
+	if dariKlien == "" || len(dariKlien) > maxRequestIDLength {
+		return newRequestID()
 	}
 	for i := 0; i < len(dariKlien); i++ {
 		c := dariKlien[i]
-		sah := c == '-' || c == '_' ||
+		valid := c == '-' || c == '_' ||
 			(c >= '0' && c <= '9') ||
 			(c >= 'a' && c <= 'z') ||
 			(c >= 'A' && c <= 'Z')
-		if !sah {
-			return requestIDBaru()
+		if !valid {
+			return newRequestID()
 		}
 	}
 	return dariKlien
@@ -244,12 +244,12 @@ func requestIDBersih(dariKlien string) string {
 // yang SAMA. Pada trafik nyata tabrakan terjadi terus-menerus, dan akibatnya
 // persis kebalikan dari tujuan request ID — Anda mencari satu id lalu
 // mendapat beberapa permintaan tak berkaitan yang saling berselang-seling.
-func requestIDBaru() string {
+func newRequestID() string {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {
 		// crypto/rand yang gagal menandakan sistem bermasalah serius. Jangan
 		// diam-diam turun ke sumber acak yang lebih lemah.
-		panic(fmt.Sprintf("crypto/rand gagal: %v", err))
+		panic(fmt.Sprintf("crypto/rand failed: %v", err))
 	}
 	return hex.EncodeToString(b[:])
 }
@@ -294,31 +294,31 @@ func (p *penulisStatus) Flush() {
 func (p *penulisStatus) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	h, ok := p.ResponseWriter.(http.Hijacker)
 	if !ok {
-		return nil, nil, fmt.Errorf("ResponseWriter di bawah tidak mendukung Hijack")
+		return nil, nil, fmt.Errorf("underlying ResponseWriter does not support Hijack")
 	}
 	return h.Hijack()
 }
 
 // ProsesPesanan contoh business logic yang memakai logger dari context.
-func ProsesPesanan(ctx context.Context, idPesanan string, jumlahSen int64) error {
-	logger := LoggerDari(ctx)
+func ProcessOrder(ctx context.Context, idPesanan string, jumlahSen int64) error {
+	logger := LoggerFrom(ctx)
 
 	logger.Info().
 		Str("order_id", idPesanan).
 		Int64("amount_minor", jumlahSen). // satuan sen bertipe int64, bukan float64
-		Msg("memproses pesanan")
+		Msg("processing order")
 
 	if jumlahSen <= 0 {
-		err := errors.New("jumlah tidak valid")
+		err := errors.New("invalid amount")
 		logger.Error().Err(err).
 			Str("order_id", idPesanan).
 			Int64("amount_minor", jumlahSen).
-			Msg("validasi pesanan gagal")
+			Msg("order validation failed")
 		return err
 	}
 
 	logger.Debug().Str("order_id", idPesanan).Msg("menyimpan ke basis data")
-	logger.Info().Str("order_id", idPesanan).Msg("pesanan berhasil diproses")
+	logger.Info().Str("order_id", idPesanan).Msg("order processed successfully")
 	return nil
 }
 ```
@@ -359,7 +359,7 @@ func TestInitLoggerMenghasilkanJSONValid(t *testing.T) {
 
 	var buf bytes.Buffer
 	logger := InitLogger("production", &buf)
-	logger.Info().Str("key", "value").Msg("pesan uji")
+	logger.Info().Str("key", "value").Msg("test message")
 
 	var terurai map[string]any
 	if err := json.Unmarshal(bytes.TrimSpace(buf.Bytes()), &terurai); err != nil {
@@ -379,7 +379,7 @@ func TestRequestIDTidakPernahTabrakan(t *testing.T) {
 	const n = 10_000
 	terlihat := make(map[string]struct{}, n)
 	for i := 0; i < n; i++ {
-		id := requestIDBaru()
+		id := newRequestID()
 		if _, ada := terlihat[id]; ada {
 			t.Fatalf("request ID bertabrakan setelah %d pembuatan: %q", i, id)
 		}
@@ -390,17 +390,17 @@ func TestRequestIDTidakPernahTabrakan(t *testing.T) {
 func TestRequestIDKlienDivalidasi(t *testing.T) {
 	kasus := []struct {
 		nama    string
-		masukan string
+		input string
 		dipakai bool
 	}{
 		{"wajar", "abc-123_XYZ", true},
-		{"kosong", "", false},
-		{"terlalu panjang", strings.Repeat("a", panjangMaksRequestID+1), false},
+		{"empty", "", false},
+		{"terlalu panjang", strings.Repeat("a", maxRequestIDLength+1), false},
 		{"karakter aneh", "abc\n{\"level\":\"error\"}", false},
 	}
 	for _, k := range kasus {
-		got := requestIDBersih(k.masukan)
-		if dipakai := got == k.masukan; dipakai != k.dipakai {
+		got := cleanRequestID(k.input)
+		if dipakai := got == k.input; dipakai != k.dipakai {
 			t.Errorf("%s: dipakai=%v, mau %v (hasil %q)", k.nama, dipakai, k.dipakai, got)
 		}
 	}
@@ -426,10 +426,10 @@ func TestLevelLogMengikutiStatus(t *testing.T) {
 
 		var terurai map[string]any
 		if err := json.Unmarshal(bytes.TrimSpace(buf.Bytes()), &terurai); err != nil {
-			t.Fatalf("status %d: keluaran bukan JSON: %v", k.kode, err)
+			t.Fatalf("status %d: output is not JSON: %v", k.kode, err)
 		}
 		if terurai["level"] != k.mau {
-			t.Errorf("status %d → level %v, mau %q", k.kode, terurai["level"], k.mau)
+			t.Errorf("status %d → level %v, want %q", k.kode, terurai["level"], k.mau)
 		}
 	}
 }
@@ -442,10 +442,10 @@ func TestLoggerDariContextKosongTetapMenulis(t *testing.T) {
 
 	// Context tanpa logger. Tanpa zerolog.DefaultContextLogger, baris berikut
 	// tidak menghasilkan APA PUN — logger nonaktif, tanpa galat, tanpa jejak.
-	LoggerDari(context.Background()).Info().Msg("terlihat")
+	LoggerFrom(context.Background()).Info().Msg("terlihat")
 
 	if !strings.Contains(buf.String(), "terlihat") {
-		t.Fatal("log dari context kosong lenyap — zerolog.Ctx mengembalikan logger nonaktif")
+		t.Fatal("log from empty context vanished — zerolog.Ctx returned disabled logger")
 	}
 }
 
@@ -468,11 +468,11 @@ func TestProsesPesananMencatatGalat(t *testing.T) {
 	var buf bytes.Buffer
 	ctx := zerolog.New(&buf).WithContext(context.Background())
 
-	if err := ProsesPesanan(ctx, "ORD-001", -1000); err == nil {
-		t.Fatal("mau galat untuk jumlah negatif")
+	if err := ProcessOrder(ctx, "ORD-001", -1000); err == nil {
+		t.Fatal("want error for negative amount")
 	}
 	if !strings.Contains(buf.String(), `"level":"error"`) || !strings.Contains(buf.String(), "ORD-001") {
-		t.Errorf("log galat tidak sesuai: %s", buf.String())
+		t.Errorf("error log mismatch: %s", buf.String())
 	}
 }
 ```

@@ -112,26 +112,26 @@ func RunMigrations(ctx context.Context, dsn string, logger *slog.Logger) error {
 
 	conn, err := db.Conn(ctx)
 	if err != nil {
-		return fmt.Errorf("ambil koneksi untuk lock migrasi: %w", err)
+		return fmt.Errorf("acquire connection for migration lock: %w", err)
 	}
 	defer conn.Close()
 
 	var dapat bool
 	if err := conn.QueryRowContext(ctx,
 		"SELECT pg_try_advisory_lock($1)", kunciMigrasi).Scan(&dapat); err != nil {
-		return fmt.Errorf("ambil advisory lock migrasi: %w", err)
+		return fmt.Errorf("acquire migration advisory lock: %w", err)
 	}
 	if !dapat {
 		// Instans lain sedang bermigrasi. Ini BUKAN galat: menunggu dan
 		// melanjutkan start adalah perilaku yang benar.
-		logger.InfoContext(ctx, "migrasi sedang dijalankan instans lain, dilewati")
+		logger.InfoContext(ctx, "migration is running on another instance, skipping")
 		return nil
 	}
 	defer func() {
 		// Lock sesi WAJIB dilepas eksplisit; ia tidak terikat transaksi.
 		if _, err := conn.ExecContext(context.WithoutCancel(ctx),
 			"SELECT pg_advisory_unlock($1)", kunciMigrasi); err != nil {
-			logger.ErrorContext(ctx, "gagal melepas advisory lock migrasi",
+			logger.ErrorContext(ctx, "failed to release migration advisory lock",
 				slog.String("error", err.Error()))
 		}
 	}()

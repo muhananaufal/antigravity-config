@@ -62,7 +62,7 @@ import (
 // ==========================================
 
 // ErrConfigNil dikembalikan bila pemanggil mencoba menyimpan konfigurasi nil.
-var ErrConfigNil = errors.New("config: konfigurasi baru tidak boleh nil")
+var ErrConfigNil = errors.New("config: new configuration cannot be nil")
 
 // Config merupakan struct konfigurasi kompleks yang akan di-reload secara hot.
 type Config struct {
@@ -155,11 +155,11 @@ func TestAtomicConfigHotReload(t *testing.T) {
 			defer wg.Done()
 			for j := 0; j < 1000; j++ {
 				cfg := holder.Get()
-				sesuaiLama := cfg.MaxWorkers == 10 && cfg.DSN == "postgres://db1"
-				sesuaiBaru := cfg.MaxWorkers == 50 && cfg.DSN == "postgres://db2"
-				if !sesuaiLama && !sesuaiBaru {
+				matchOld := cfg.MaxWorkers == 10 && cfg.DSN == "postgres://db1"
+				matchNew := cfg.MaxWorkers == 50 && cfg.DSN == "postgres://db2"
+				if !matchOld && !matchNew {
 					// t.Errorf aman dipanggil dari goroutine lain; t.Fatal TIDAK.
-					t.Errorf("konfigurasi campuran terbaca: MaxWorkers=%d DSN=%s",
+					t.Errorf("mixed configuration read: MaxWorkers=%d DSN=%s",
 						cfg.MaxWorkers, cfg.DSN)
 				}
 			}

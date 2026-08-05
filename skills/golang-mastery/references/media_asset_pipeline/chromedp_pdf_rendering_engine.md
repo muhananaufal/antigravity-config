@@ -110,7 +110,7 @@ func (e *PDFEngine) RenderHTMLToPDF(ctx context.Context, htmlContent string) ([]
 	}
 
 	if err := chromedp.Run(taskCtx, tasks); err != nil {
-		return nil, fmt.Errorf("kegagalan render chromedp PDF: %w", err)
+		return nil, fmt.Errorf("chromedp PDF render failed: %w", err)
 	}
 
 	return pdfBuffer, nil
@@ -130,11 +130,11 @@ func TestChromedpPDFGeneration(t *testing.T) {
 
 	pdfData, err := engine.RenderHTMLToPDF(ctx, html)
 	if err != nil {
-		t.Fatalf("Gagal merender PDF: %v", err)
+		t.Fatalf("failed to render PDF: %v", err)
 	}
 
 	if len(pdfData) < 100 { // Minimal signature PDF %PDF-
-		t.Errorf("Byte array PDF yang dihasilkan terlalu kecil: %d bytes", len(pdfData))
+		t.Errorf("generated PDF byte array is too small: %d bytes", len(pdfData))
 	}
 }
 

@@ -93,7 +93,7 @@ func (n *IoTNode) StartTelemetryService(ctx context.Context) {
 				
 				err := n.client.Connect()
 				if err != nil {
-					log.Printf("Koneksi gagal: %v. Retrying in 5s...", err)
+					log.Printf("Connection failed: %v. Retrying in 5s...", err)
 					// Gunakan sleep (Backoff) untuk yield dan jangan spam jaringan
 					time.Sleep(5 * time.Second) 
 					continue
@@ -113,7 +113,7 @@ func (n *IoTNode) StartTelemetryService(ctx context.Context) {
 				err := n.client.Publish("farm/sensor/soil", 1, false, payload)
 				
 				if err != nil {
-					log.Printf("Gagal Publish (%v), menaruh kembali ke buffer antrean", err)
+					log.Printf("Failed to Publish (%v), putting back to queue buffer", err)
 					// Logika Retry: Taruh kembali payload ke channel dengan priority
 					// (Untuk menjaga urutan, Anda butuh list, tapi ini simplifikasi re-enqueue)
 					go func(p string) {
@@ -139,7 +139,7 @@ func main() {
     
     // Looping di main thread sampai sukses (Sistem Freeze total)
     for !mqtt.Connect() {
-        println("Gagal connect, coba lagi...") 
+        println("Failed to connect, retrying...") 
     } 
     
     // Sistem Layar OLED dan pembaca Suhu baru jalan di bawah sini

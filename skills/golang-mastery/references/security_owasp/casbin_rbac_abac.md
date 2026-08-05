@@ -235,7 +235,7 @@ func NewAuthorizer(ctx context.Context) (*Authorizer, error) {
 // pengguna berlaku di seluruh tenant.
 func (auth *Authorizer) CheckPermission(ctx context.Context, userID, domain, resource, action string) (bool, error) {
 	if err := ctx.Err(); err != nil {
-		return false, fmt.Errorf("context batal: %w", err)
+		return false, fmt.Errorf("context canceled: %w", err)
 	}
 
 	// Objek DINORMALKAN sebelum dievaluasi.
@@ -247,34 +247,34 @@ func (auth *Authorizer) CheckPermission(ctx context.Context, userID, domain, res
 	// menormalkannya menjadi `/admin/settings` dan bertindak di situ.
 	// Memberi izin atas satu bentuk path lalu bertindak atas bentuk lain
 	// adalah pintu belakang yang tidak terlihat di kebijakan mana pun.
-	objek := path.Clean("/" + strings.TrimPrefix(resource, "/"))
+	obj := path.Clean("/" + strings.TrimPrefix(resource, "/"))
 
-	izin, err := auth.enforcer.Enforce(userID, domain, objek, action)
+	allowed, err := auth.enforcer.Enforce(userID, domain, obj, action)
 	if err != nil {
 		// Mesin otorisasi yang bermasalah harus TERLIHAT. Yang diam-diam
 		// menolak semua orang adalah pemadaman; yang diam-diam mengizinkan
 		// adalah pelanggaran. Keduanya tidak boleh sunyi.
-		slog.ErrorContext(ctx, "penegakan otorisasi gagal", "galat", err,
-			"subjek", userID, "domain", domain, "objek", objek, "aksi", action)
-		return false, fmt.Errorf("penegakan casbin: %w", err)
+		slog.ErrorContext(ctx, "authorization enforcement failed", "error", err,
+			"subject", userID, "domain", domain, "object", obj, "action", action)
+		return false, fmt.Errorf("casbin enforcement: %w", err)
 	}
 
 	// Setiap keputusan dicatat. Tabel deteksi di berkas ini menanyakan "siapa
-	// mengakses apa", dan perintah bash-nya menyaring event "otorisasi" —
-	// event yang sebelumnya tidak pernah dipancarkan kode mana pun.
+	// mengakses apa", dan perintah bash-nya menyaring event "authorization" —
+	// event yang dipancarkan untuk audit trail.
 	//
 	// Ya, ini menambah satu baris log per pemeriksaan. Untuk keputusan
 	// otorisasi, itu memang jejak auditnya: yang diizinkan sama pentingnya
 	// dengan yang ditolak. Kalau volumenya jadi masalah, kurangi jumlah
 	// PEMERIKSAAN yang berlebihan, jangan kurangi catatannya.
-	hasil := "tolak"
-	if izin {
-		hasil = "izinkan"
+	result := "deny"
+	if allowed {
+		result = "allow"
 	}
-	slog.InfoContext(ctx, "keputusan otorisasi", "event", "otorisasi",
-		"hasil", hasil, "subjek", userID, "domain", domain, "objek", objek, "aksi", action)
+	slog.InfoContext(ctx, "authorization decision", "event", "authorization",
+		"result", result, "subject", userID, "domain", domain, "object", obj, "action", action)
 
-	return izin, nil
+	return allowed, nil
 }
 ```
 
@@ -286,7 +286,7 @@ import (
 	"testing"
 )
 
-func authzUji(t *testing.T) *Authorizer {
+func testAuthorizer(t *testing.T) *Authorizer {
 	t.Helper()
 	// Galat konstruktor TIDAK dibuang. Versi sebelumnya menulis
 	// `authz, _ := NewAuthorizer(ctx)` di tiga uji: bila konstruksi gagal,
@@ -299,40 +299,40 @@ func authzUji(t *testing.T) *Authorizer {
 	return a
 }
 
-func TestKeputusanOtorisasi(t *testing.T) {
-	a, ctx := authzUji(t), context.Background()
+func TestAuthorizationDecisions(t *testing.T) {
+	a, ctx := testAuthorizer(t), context.Background()
 
-	kasus := []struct {
-		nama              string
+	cases := []struct {
+		name               string
 		sub, dom, obj, act string
-		mauIzin           bool
+		wantAllow          bool
 	}{
-		{"editor membaca artikel di tenant sendiri", "alice", "tenant-a", "/articles/10", "GET", true},
-		{"editor mengubah artikel di tenant sendiri", "alice", "tenant-a", "/articles/10", "PUT", true},
-		{"viewer membaca", "bob", "tenant-a", "/articles/10", "GET", true},
-		{"viewer mengubah", "bob", "tenant-a", "/articles/10", "PUT", false},
-		{"editor menyentuh area admin", "alice", "tenant-a", "/admin/settings", "POST", false},
-		{"admin di area admin", "dana", "tenant-a", "/admin/settings", "POST", true},
-		{"pengguna tak dikenal", "charlie", "tenant-a", "/articles/10", "GET", false},
+		{"editor reads article in own tenant", "alice", "tenant-a", "/articles/10", "GET", true},
+		{"editor updates article in own tenant", "alice", "tenant-a", "/articles/10", "PUT", true},
+		{"viewer reads", "bob", "tenant-a", "/articles/10", "GET", true},
+		{"viewer updates", "bob", "tenant-a", "/articles/10", "PUT", false},
+		{"editor touches admin area", "alice", "tenant-a", "/admin/settings", "POST", false},
+		{"admin in admin area", "dana", "tenant-a", "/admin/settings", "POST", true},
+		{"unknown user", "charlie", "tenant-a", "/articles/10", "GET", false},
 
 		// Baris ini yang membuktikan dimensi domain benar-benar bekerja.
 		// Dengan model lama (r = sub, obj, act) carol DIIZINKAN — perannya
 		// berlaku di seluruh tenant, dan itulah Broken Access Control.
-		{"editor tenant lain menyeberang", "carol", "tenant-a", "/articles/10", "PUT", false},
-		{"editor tenant lain di tenant sendiri", "carol", "tenant-b", "/articles/10", "PUT", true},
+		{"editor other tenant crossing boundary", "carol", "tenant-a", "/articles/10", "PUT", false},
+		{"editor other tenant in own tenant", "carol", "tenant-b", "/articles/10", "PUT", true},
 
 		// Tidak ada lagi jalan pintas "root" yang ditanam di matcher.
-		{"root bukan lagi kata sakti", "root", "tenant-a", "/admin/settings", "POST", false},
+		{"root is not magic word", "root", "tenant-a", "/admin/settings", "POST", false},
 	}
 
-	for _, k := range kasus {
-		t.Run(k.nama, func(t *testing.T) {
-			izin, err := a.CheckPermission(ctx, k.sub, k.dom, k.obj, k.act)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			allowed, err := a.CheckPermission(ctx, tc.sub, tc.dom, tc.obj, tc.act)
 			if err != nil {
 				t.Fatalf("CheckPermission: %v", err)
 			}
-			if izin != k.mauIzin {
-				t.Fatalf("izin = %v, mau %v", izin, k.mauIzin)
+			if allowed != tc.wantAllow {
+				t.Fatalf("allowed = %v, want %v", allowed, tc.wantAllow)
 			}
 		})
 	}
@@ -341,30 +341,30 @@ func TestKeputusanOtorisasi(t *testing.T) {
 // Path ter-encode yang menormalkan menjadi area terlarang WAJIB ditolak.
 // Tanpa normalisasi sebelum evaluasi, pola /articles/* mencocokkannya dan
 // otorisasi mengizinkan sesuatu yang kemudian dieksekusi sebagai /admin/*.
-func TestPathTernormalkanSebelumDievaluasi(t *testing.T) {
-	a, ctx := authzUji(t), context.Background()
+func TestPathNormalizedBeforeEvaluation(t *testing.T) {
+	a, ctx := testAuthorizer(t), context.Background()
 
-	izin, err := a.CheckPermission(ctx, "alice", "tenant-a", "/articles/../admin/settings", "POST")
+	allowed, err := a.CheckPermission(ctx, "alice", "tenant-a", "/articles/../admin/settings", "POST")
 	if err != nil {
 		t.Fatalf("CheckPermission: %v", err)
 	}
-	if izin {
-		t.Fatal("path traversal lolos otorisasi — dievaluasi sebelum dinormalkan")
+	if allowed {
+		t.Fatal("path traversal bypassed authorization - evaluated before normalization")
 	}
 }
 
 // Pola aksi WAJIB berjangkar. regexMatch casbin mencocokkan substring, jadi
 // pola tak berjangkar diam-diam melebarkan izin.
-func TestPolaAksiBerjangkar(t *testing.T) {
-	a, ctx := authzUji(t), context.Background()
+func TestActionPatternsAnchored(t *testing.T) {
+	a, ctx := testAuthorizer(t), context.Background()
 
-	for _, aksi := range []string{"XGET", "GETX", "XGETX"} {
-		izin, err := a.CheckPermission(ctx, "bob", "tenant-a", "/articles/10", aksi)
+	for _, act := range []string{"XGET", "GETX", "XGETX"} {
+		allowed, err := a.CheckPermission(ctx, "bob", "tenant-a", "/articles/10", act)
 		if err != nil {
 			t.Fatalf("CheckPermission: %v", err)
 		}
-		if izin {
-			t.Fatalf("aksi %q diterima — pola aksi tidak berjangkar", aksi)
+		if allowed {
+			t.Fatalf("action %q accepted - action pattern is not anchored", act)
 		}
 	}
 }
@@ -399,6 +399,6 @@ grep -rnc 'Enforce(' --include='*.go' internal/ | awk -F: '{s+=$2} END{print "en
 
 # Keputusan otorisasi -- tanpa log ini tidak ada audit trail sama sekali
 kubectl logs -l app=api --since=24h \
-  | jq -r 'select(.event=="otorisasi") | "\(.hasil) \(.subjek) \(.aksi) \(.objek)"' \
+  | jq -r 'select(.event=="authorization") | "\(.result) \(.subject) \(.action) \(.object)"' \
   | sort | uniq -c | sort -rn | head -20
 ```

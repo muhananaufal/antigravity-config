@@ -109,10 +109,10 @@ import (
 )
 
 var (
-	ErrPasswordTerlaluPanjang  = errors.New("panjang kata sandi melebihi batas")
-	ErrPasswordKosong          = errors.New("kata sandi tidak boleh kosong")
-	ErrFormatHash              = errors.New("format hash tersimpan tidak valid")
-	ErrParameterTidakMasukAkal = errors.New("parameter argon2 di luar batas wajar")
+	ErrPasswordTooLong   = errors.New("password length exceeds limit")
+	ErrPasswordEmpty     = errors.New("password cannot be empty")
+	ErrHashFormat        = errors.New("stored hash format is invalid")
+	ErrInvalidParameters = errors.New("argon2 parameters out of acceptable bounds")
 )
 
 // Profil parameter AKTIF (dipakai saat membuat hash baru).
@@ -158,17 +158,17 @@ const (
 // HashPassword membuat hash baru dalam format PHC.
 func HashPassword(ctx context.Context, password string) (string, error) {
 	if err := ctx.Err(); err != nil {
-		return "", fmt.Errorf("context batal: %w", err)
+		return "", fmt.Errorf("context canceled: %w", err)
 	}
 	if strings.TrimSpace(password) == "" {
-		return "", ErrPasswordKosong
+		return "", ErrPasswordEmpty
 	}
 	// Diukur dalam BYTE, dan itu memang unit yang benar: yang dibatasi adalah
 	// jumlah data yang masuk ke fungsi hash. Konsekuensinya harus disadari —
 	// kata sandi 128 karakter beraksara Jepang berukuran ~384 byte dan akan
 	// ditolak. Sebutkan batas ini dalam byte di antarmuka, bukan dalam karakter.
 	if len(password) > maxPassBytes {
-		return "", ErrPasswordTerlaluPanjang
+		return "", ErrPasswordTooLong
 	}
 	// Kata sandi TIDAK di-trim sebelum di-hash. Memangkas spasi berarti
 	// diam-diam mengubah kredensial pengguna; TrimSpace di atas hanya dipakai
@@ -176,7 +176,7 @@ func HashPassword(ctx context.Context, password string) (string, error) {
 
 	salt := make([]byte, saltLength)
 	if _, err := io.ReadFull(rand.Reader, salt); err != nil {
-		return "", fmt.Errorf("gagal mengambil entropi salt: %w", err)
+		return "", fmt.Errorf("failed to read salt entropy: %w", err)
 	}
 
 	rawHash := argon2.IDKey([]byte(password), salt, timeCost, memoryCost, threads, hashLength)
@@ -188,16 +188,16 @@ func HashPassword(ctx context.Context, password string) (string, error) {
 	), nil
 }
 
-// HasilVerifikasi memisahkan "cocok" dari "perlu di-hash ulang".
+// VerificationResult memisahkan "match" dari "needs rehash".
 //
 // Inilah alasan format PHC dipakai (§1 butir 5) — dan justru bagian yang
 // hilang dari versi sebelumnya, yang hanya mengembalikan (bool, error).
 // Tanpa sinyal ini, "memperbarui parameter tanpa mereset kata sandi pengguna"
 // tetap mustahil meskipun formatnya sudah benar: tidak ada yang memberi tahu
 // pemanggil bahwa hash ini dibuat dengan parameter lama.
-type HasilVerifikasi struct {
-	Cocok       bool
-	PerluRehash bool
+type VerificationResult struct {
+	Match       bool
+	NeedsRehash bool
 }
 
 type paramArgon2 struct {
@@ -205,123 +205,123 @@ type paramArgon2 struct {
 	p    uint8
 }
 
-func uraikanPHC(encoded string) (paramArgon2, []byte, []byte, error) {
-	gagal := func(format string, a ...any) (paramArgon2, []byte, []byte, error) {
+func parsePHC(encoded string) (paramArgon2, []byte, []byte, error) {
+	fail := func(format string, a ...any) (paramArgon2, []byte, []byte, error) {
 		return paramArgon2{}, nil, nil, fmt.Errorf(format, a...)
 	}
 
-	bagian := strings.Split(encoded, "$")
-	if len(bagian) != 6 || bagian[0] != "" {
-		return gagal("%w: jumlah ruas", ErrFormatHash)
+	parts := strings.Split(encoded, "$")
+	if len(parts) != 6 || parts[0] != "" {
+		return fail("%w: invalid section count", ErrHashFormat)
 	}
-	if bagian[1] != "argon2id" {
-		return gagal("%w: algoritma %q", ErrFormatHash, bagian[1])
+	if parts[1] != "argon2id" {
+		return fail("%w: unsupported algorithm %q", ErrHashFormat, parts[1])
 	}
 
-	var versi, m, t, p uint32
-	if _, err := fmt.Sscanf(bagian[2], "v=%d", &versi); err != nil {
-		return gagal("%w: ruas versi", ErrFormatHash)
+	var version, m, t, p uint32
+	if _, err := fmt.Sscanf(parts[2], "v=%d", &version); err != nil {
+		return fail("%w: invalid version section", ErrHashFormat)
 	}
 	// Versi WAJIB diperiksa. Argon2 versi 0x10 memakai skema berbeda; kode
 	// lama membaca angka ini lalu tidak pernah memakainya, sehingga hash versi
 	// lama gagal verifikasi tanpa satu pun penjelasan — pengguna terkunci dan
 	// tidak ada yang tahu sebabnya.
-	if versi != argon2.Version {
-		return gagal("%w: versi argon2 %d tidak didukung", ErrFormatHash, versi)
+	if version != argon2.Version {
+		return fail("%w: argon2 version %d not supported", ErrHashFormat, version)
 	}
-	if _, err := fmt.Sscanf(bagian[3], "m=%d,t=%d,p=%d", &m, &t, &p); err != nil {
-		return gagal("%w: ruas parameter", ErrFormatHash)
+	if _, err := fmt.Sscanf(parts[3], "m=%d,t=%d,p=%d", &m, &t, &p); err != nil {
+		return fail("%w: invalid parameter section", ErrHashFormat)
 	}
 	if m < minMemoryCost || m > maxMemoryCost ||
 		t < minTimeCost || t > maxTimeCost ||
 		p < minThreads || p > maxThreads {
-		return gagal("%w: m=%d t=%d p=%d", ErrParameterTidakMasukAkal, m, t, p)
+		return fail("%w: m=%d t=%d p=%d", ErrInvalidParameters, m, t, p)
 	}
 
-	salt, err := base64.RawStdEncoding.DecodeString(bagian[4])
+	salt, err := base64.RawStdEncoding.DecodeString(parts[4])
 	if err != nil {
-		return gagal("%w: salt bukan base64", ErrFormatHash)
+		return fail("%w: salt is not valid base64", ErrHashFormat)
 	}
-	hashDB, err := base64.RawStdEncoding.DecodeString(bagian[5])
+	hashDB, err := base64.RawStdEncoding.DecodeString(parts[5])
 	if err != nil {
-		return gagal("%w: hash bukan base64", ErrFormatHash)
+		return fail("%w: hash is not valid base64", ErrHashFormat)
 	}
 	if len(hashDB) == 0 || len(hashDB) > maxHashLength {
-		return gagal("%w: panjang hash %d", ErrFormatHash, len(hashDB))
+		return fail("%w: invalid hash length %d", ErrHashFormat, len(hashDB))
 	}
 
 	return paramArgon2{t: t, m: m, p: uint8(p)}, salt, hashDB, nil
 }
 
 // VerifyPassword membandingkan kata sandi terhadap hash PHC tersimpan.
-func VerifyPassword(ctx context.Context, password, encodedHash string) (HasilVerifikasi, error) {
+func VerifyPassword(ctx context.Context, password, encodedHash string) (VerificationResult, error) {
 	if err := ctx.Err(); err != nil {
-		return HasilVerifikasi{}, fmt.Errorf("context batal: %w", err)
+		return VerificationResult{}, fmt.Errorf("context canceled: %w", err)
 	}
 	// Kembali lebih awal di sini AMAN meski waktunya berbeda: yang terungkap
 	// hanyalah panjang masukan yang dikirim penyerang SENDIRI, bukan sesuatu
 	// tentang akun korban. Yang tidak boleh berbeda waktunya adalah jalur
-	// "pengguna ada" versus "pengguna tidak ada" — lihat VerifikasiLogin.
+	// "pengguna ada" versus "pengguna tidak ada" — lihat VerifyLogin.
 	if len(password) > maxPassBytes {
-		return HasilVerifikasi{}, nil
+		return VerificationResult{}, nil
 	}
 
-	par, salt, hashDB, err := uraikanPHC(encodedHash)
+	par, salt, hashDB, err := parsePHC(encodedHash)
 	if err != nil {
-		return HasilVerifikasi{}, err
+		return VerificationResult{}, err
 	}
 
 	inputHash := argon2.IDKey([]byte(password), salt, par.t, par.m, par.p, uint32(len(hashDB)))
 
-	return HasilVerifikasi{
-		Cocok: subtle.ConstantTimeCompare(hashDB, inputHash) == 1,
-		PerluRehash: par.t != timeCost || par.m != memoryCost ||
+	return VerificationResult{
+		Match: subtle.ConstantTimeCompare(hashDB, inputHash) == 1,
+		NeedsRehash: par.t != timeCost || par.m != memoryCost ||
 			par.p != threads || uint32(len(hashDB)) != hashLength,
 	}, nil
 }
 
-// hashUmpan dipakai ketika pengguna TIDAK ditemukan.
+// dummyHash dipakai ketika pengguna TIDAK ditemukan.
 //
 // Tanpa ini, jalur "pengguna tidak ada" kembali dalam mikrodetik sementara
 // jalur "pengguna ada" memakan 100–500 ms. Selisih itu terukur dari luar
 // dengan mudah dan menjadi alat enumerasi akun yang nyaris sempurna — dan
 // tabel deteksi di berkas ini mendaftarkan gejalanya sambil SALAH menunjuk
 // penyebabnya ke perbandingan konstan-waktu, yang sejak awal sudah benar.
-var hashUmpan = sync.OnceValue(func() string {
-	h, err := HashPassword(context.Background(), "umpan-penyeimbang-waktu")
+var dummyHash = sync.OnceValue(func() string {
+	h, err := HashPassword(context.Background(), "timing-balancing-dummy-payload")
 	if err != nil {
-		panic("gagal menyiapkan hash umpan: " + err.Error())
+		panic("failed to initialize dummy hash: " + err.Error())
 	}
 	return h
 })
 
-// VerifikasiLogin adalah pintu yang benar untuk handler login.
-func VerifikasiLogin(ctx context.Context, password, hashTersimpan string, penggunaAda bool) (HasilVerifikasi, error) {
-	if !penggunaAda {
+// VerifyLogin adalah pintu yang benar untuk handler login.
+func VerifyLogin(ctx context.Context, password, savedHash string, userExists bool) (VerificationResult, error) {
+	if !userExists {
 		// Tetap bayar ongkos hashing penuh, lalu tolak.
-		_, _ = VerifyPassword(ctx, password, hashUmpan())
-		return HasilVerifikasi{}, nil
+		_, _ = VerifyPassword(ctx, password, dummyHash())
+		return VerificationResult{}, nil
 	}
-	return VerifyPassword(ctx, password, hashTersimpan)
+	return VerifyPassword(ctx, password, savedHash)
 }
 
-// Pembatas menjawab Kasus Tepi 2, yang di versi sebelumnya hanya disebut
+// Limiter menjawab Kasus Tepi 2, yang di versi sebelumnya hanya disebut
 // masalahnya tanpa implementasi.
 //
 // Dengan m=64 MiB, seratus login serentak menuntut 6,4 GiB. Pod 512 MiB
 // di-OOMKill sebelum permintaan kesepuluh selesai. Yang dibatasi BUKAN memori
 // per panggilan — menurunkannya melemahkan hash — melainkan JUMLAH panggilan
 // yang boleh berjalan bersamaan.
-type Pembatas struct{ slot chan struct{} }
+type Limiter struct{ slot chan struct{} }
 
-func NewPembatas(maksSerentak int) *Pembatas {
-	return &Pembatas{slot: make(chan struct{}, maksSerentak)}
+func NewLimiter(maxConcurrent int) *Limiter {
+	return &Limiter{slot: make(chan struct{}, maxConcurrent)}
 }
 
-func (pb *Pembatas) Jalankan(ctx context.Context, fn func() error) error {
+func (l *Limiter) Execute(ctx context.Context, fn func() error) error {
 	select {
-	case pb.slot <- struct{}{}:
-		defer func() { <-pb.slot }()
+	case l.slot <- struct{}{}:
+		defer func() { <-l.slot }()
 		return fn()
 	case <-ctx.Done():
 		// Antre terlalu lama = tolak, jangan menumpuk. Menumpuk goroutine yang
@@ -343,121 +343,121 @@ import (
 	"time"
 )
 
-func TestHashDanVerifikasi(t *testing.T) {
+func TestHashAndVerify(t *testing.T) {
 	ctx := context.Background()
-	sandi := "Secure$Passw0rd_32!"
+	password := "Secure$Passw0rd_32!"
 
-	hash, err := HashPassword(ctx, sandi)
+	hash, err := HashPassword(ctx, password)
 	if err != nil {
 		t.Fatalf("HashPassword: %v", err)
 	}
 	if !strings.HasPrefix(hash, "$argon2id$v=") {
-		t.Fatalf("awalan PHC tidak wajar: %s", hash)
+		t.Fatalf("unexpected PHC prefix: %s", hash)
 	}
 
-	hasil, err := VerifyPassword(ctx, sandi, hash)
-	if err != nil || !hasil.Cocok {
-		t.Fatalf("kata sandi benar ditolak: cocok=%v galat=%v", hasil.Cocok, err)
+	result, err := VerifyPassword(ctx, password, hash)
+	if err != nil || !result.Match {
+		t.Fatalf("valid password rejected: match=%v err=%v", result.Match, err)
 	}
-	if hasil.PerluRehash {
-		t.Error("hash baru dibuat tetapi ditandai perlu rehash")
+	if result.NeedsRehash {
+		t.Error("newly created hash incorrectly marked as needs rehash")
 	}
 
-	hasil, err = VerifyPassword(ctx, "Secure$Passw0rd_32?", hash)
-	if err != nil || hasil.Cocok {
-		t.Errorf("kata sandi salah diterima: cocok=%v galat=%v", hasil.Cocok, err)
+	result, err = VerifyPassword(ctx, "Secure$Passw0rd_32?", hash)
+	if err != nil || result.Match {
+		t.Errorf("wrong password accepted: match=%v err=%v", result.Match, err)
 	}
 }
 
 // Parameter dari hash tersimpan ikut DIEKSEKUSI. Ketiga kasus di bawah
 // membuat versi sebelumnya panic atau mengalokasikan memori tanpa batas.
-func TestParameterTersimpanDivalidasi(t *testing.T) {
+func TestStoredParametersValidated(t *testing.T) {
 	ctx := context.Background()
-	sah, err := HashPassword(ctx, "apa-saja")
+	valid, err := HashPassword(ctx, "sample-password")
 	if err != nil {
 		t.Fatalf("HashPassword: %v", err)
 	}
-	bagian := strings.Split(sah, "$")
+	parts := strings.Split(valid, "$")
 
-	rakit := func(param string) string {
-		return strings.Join([]string{"", bagian[1], bagian[2], param, bagian[4], bagian[5]}, "$")
+	construct := func(param string) string {
+		return strings.Join([]string{"", parts[1], parts[2], param, parts[4], parts[5]}, "$")
 	}
 
-	kasus := map[string]string{
-		"t=0 membuat argon2.IDKey panic":   "m=65536,t=0,p=1",
-		"p=0 membuat argon2.IDKey panic":   "m=65536,t=3,p=0",
-		"m raksasa menghabiskan memori":    "m=4194304,t=3,p=1",
-		"t raksasa menghabiskan CPU":       "m=65536,t=1000000,p=1",
+	cases := map[string]string{
+		"t=0 makes argon2.IDKey panic": "m=65536,t=0,p=1",
+		"p=0 makes argon2.IDKey panic": "m=65536,t=3,p=0",
+		"giant m exhausts memory":      "m=4194304,t=3,p=1",
+		"giant t exhausts CPU":         "m=65536,t=1000000,p=1",
 	}
-	for nama, param := range kasus {
-		t.Run(nama, func(t *testing.T) {
-			_, err := VerifyPassword(ctx, "apa-saja", rakit(param))
-			if !errors.Is(err, ErrParameterTidakMasukAkal) {
-				t.Fatalf("galat = %v, mau ErrParameterTidakMasukAkal", err)
+	for name, param := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := VerifyPassword(ctx, "sample-password", construct(param))
+			if !errors.Is(err, ErrInvalidParameters) {
+				t.Fatalf("error = %v, want ErrInvalidParameters", err)
 			}
 		})
 	}
 }
 
-func TestVersiTidakDidukungDitolak(t *testing.T) {
+func TestUnsupportedVersionRejected(t *testing.T) {
 	ctx := context.Background()
-	sah, _ := HashPassword(ctx, "apa-saja")
-	bagian := strings.Split(sah, "$")
-	lama := strings.Join([]string{"", bagian[1], "v=16", bagian[3], bagian[4], bagian[5]}, "$")
+	valid, _ := HashPassword(ctx, "sample-password")
+	parts := strings.Split(valid, "$")
+	legacy := strings.Join([]string{"", parts[1], "v=16", parts[3], parts[4], parts[5]}, "$")
 
-	if _, err := VerifyPassword(ctx, "apa-saja", lama); !errors.Is(err, ErrFormatHash) {
-		t.Fatalf("galat = %v, mau ErrFormatHash", err)
+	if _, err := VerifyPassword(ctx, "sample-password", legacy); !errors.Is(err, ErrHashFormat) {
+		t.Fatalf("error = %v, want ErrHashFormat", err)
 	}
 }
 
 // Membuktikan jalur upgrade parameter yang menjadi alasan format PHC ada.
-func TestPerluRehashSaatParameterLama(t *testing.T) {
+func TestNeedsRehashOnLegacyParameters(t *testing.T) {
 	ctx := context.Background()
-	sah, _ := HashPassword(ctx, "apa-saja")
-	bagian := strings.Split(sah, "$")
+	valid, _ := HashPassword(ctx, "sample-password")
+	parts := strings.Split(valid, "$")
 	// Hash "lama" dengan memori lebih kecil — masih di dalam batas wajar.
-	lama := strings.Join([]string{"", bagian[1], bagian[2], "m=16384,t=2,p=1", bagian[4], bagian[5]}, "$")
+	legacy := strings.Join([]string{"", parts[1], parts[2], "m=16384,t=2,p=1", parts[4], parts[5]}, "$")
 
-	hasil, err := VerifyPassword(ctx, "apa-saja", lama)
+	result, err := VerifyPassword(ctx, "sample-password", legacy)
 	if err != nil {
 		t.Fatalf("VerifyPassword: %v", err)
 	}
-	if !hasil.PerluRehash {
-		t.Fatal("hash dengan parameter lama tidak ditandai perlu rehash")
+	if !result.NeedsRehash {
+		t.Fatal("hash with legacy parameters not marked as needs rehash")
 	}
 }
 
 // Jalur "pengguna tidak ada" WAJIB memakan waktu yang sebanding dengan jalur
 // "pengguna ada". Tanpa hash umpan, selisihnya adalah enumerasi akun.
-func TestPenggunaTidakAdaTetapMembayarOngkosHash(t *testing.T) {
+func TestNonExistentUserPaysFullHashCost(t *testing.T) {
 	ctx := context.Background()
-	hashUmpan() // panaskan agar biaya pembuatan pertama tidak ikut terukur
+	dummyHash() // panaskan agar biaya pembuatan pertama tidak ikut terukur
 
-	mulai := time.Now()
-	hasil, err := VerifikasiLogin(ctx, "tebakan", "", false)
-	lama := time.Since(mulai)
+	start := time.Now()
+	result, err := VerifyLogin(ctx, "guess-password", "", false)
+	duration := time.Since(start)
 
-	if err != nil || hasil.Cocok {
-		t.Fatalf("pengguna tak ada: cocok=%v galat=%v", hasil.Cocok, err)
+	if err != nil || result.Match {
+		t.Fatalf("non-existent user: match=%v err=%v", result.Match, err)
 	}
 	// Argon2id 64 MiB/t=3 jauh melampaui ini; ambang sengaja longgar agar uji
 	// tidak rapuh di mesin lambat maupun cepat.
-	if lama < 5*time.Millisecond {
-		t.Fatalf("jalur pengguna-tidak-ada selesai dalam %s — tidak ada hash umpan, enumerasi akun terbuka", lama)
+	if duration < 5*time.Millisecond {
+		t.Fatalf("non-existent user path finished in %s - missing dummy hash, user enumeration risk", duration)
 	}
 }
 
-func TestBatasMasukan(t *testing.T) {
+func TestInputBounds(t *testing.T) {
 	ctx := context.Background()
 
-	if _, err := HashPassword(ctx, strings.Repeat("a", maxPassBytes+1)); !errors.Is(err, ErrPasswordTerlaluPanjang) {
-		t.Errorf("galat = %v, mau ErrPasswordTerlaluPanjang", err)
+	if _, err := HashPassword(ctx, strings.Repeat("a", maxPassBytes+1)); !errors.Is(err, ErrPasswordTooLong) {
+		t.Errorf("error = %v, want ErrPasswordTooLong", err)
 	}
-	if _, err := HashPassword(ctx, "   "); !errors.Is(err, ErrPasswordKosong) {
-		t.Errorf("galat = %v, mau ErrPasswordKosong", err)
+	if _, err := HashPassword(ctx, "   "); !errors.Is(err, ErrPasswordEmpty) {
+		t.Errorf("error = %v, want ErrPasswordEmpty", err)
 	}
-	if _, err := VerifyPassword(ctx, "x", "$argon2id$v=19$m=65536,t=3,p=1$salt-tidak-valid$hash"); !errors.Is(err, ErrFormatHash) {
-		t.Errorf("galat = %v, mau ErrFormatHash", err)
+	if _, err := VerifyPassword(ctx, "x", "$argon2id$v=19$m=65536,t=3,p=1$invalid-salt$hash"); !errors.Is(err, ErrHashFormat) {
+		t.Errorf("error = %v, want ErrHashFormat", err)
 	}
 }
 ```
@@ -491,10 +491,10 @@ gosec -include=G401,G505 ./...
 # Waktu verifikasi: konsisten dan berada di rentang 50-500 ms
 for i in 1 2 3; do
   curl -sw '%{time_total}\n' -o /dev/null -X POST localhost:8080/login \
-    -d '{"email":"ada@contoh.id","sandi":"salah"}'
+    -d '{"email":"user@example.com","password":"wrongpassword"}'
 done
 
 # Credential stuffing terlihat sebagai banyak akun dari sedikit sumber
 kubectl logs -l app=api --since=1h \
-  | jq -r 'select(.event=="login_gagal") | .ip' | sort | uniq -c | sort -rn | head
+  | jq -r 'select(.event=="login_failed") | .ip' | sort | uniq -c | sort -rn | head
 ```

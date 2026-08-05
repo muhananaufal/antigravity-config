@@ -270,16 +270,16 @@ func TestGet_RetrySampaiBerhasil(t *testing.T) {
 		}
 		defer resp.Body.Close() // body respons SUKSES juga wajib ditutup
 		if resp.StatusCode != 200 {
-			t.Fatalf("mau 200, dapat %d", resp.StatusCode)
+			t.Fatalf("want 200, got %d", resp.StatusCode)
 		}
 		if got := f.calls.Load(); got != 3 {
-			t.Fatalf("mau 3 percobaan, dapat %d", got)
+			t.Fatalf("want 3 attempts, got %d", got)
 		}
 
 		// Backoff 100ms + 200ms = 300ms waktu GELEMBUNG.
 		// Test ini selesai dalam mikrodetik waktu nyata.
 		if elapsed := time.Since(mulai); elapsed != 300*time.Millisecond {
-			t.Fatalf("mau 300ms waktu gelembung, dapat %v", elapsed)
+			t.Fatalf("want 300ms bubble time, got %v", elapsed)
 		}
 	})
 }
@@ -291,25 +291,28 @@ func TestGet_ContextDibatalkanSaatMenungguBackoff(t *testing.T) {
 		f := &fakeDoer{status: []int{503}}
 		c := Client{HTTP: f, Cfg: DefaultConfig()}
 
+		// Kita perlu channel dengan kapasitas 1 agar worker yang selesai lebih
+		// dulu setelah t.FailNow tidak memblokir dan bocor.
+		errCh := make(chan error, 1)
 		ctx, cancel := context.WithCancel(context.Background())
-		hasil := make(chan error, 1)
 
 		go func() {
 			_, err := c.Get(ctx, "http://contoh.test")
-			hasil <- err
+			errCh <- err
 		}()
 
-		// Tunggu sampai goroutine di atas benar-benar terhenti di dalam backoff.
+		// Menjamin goroutine worker mendapat giliran berjalan dan
+		// mencapai `c.Get` yang kita tahu akan memblokir tanpa batas.
 		synctest.Wait()
 		cancel()
 
-		err := <-hasil
+		err := <-errCh
 		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("mau context.Canceled, dapat %v", err)
+			t.Fatalf("want context.Canceled, got %v", err)
 		}
 		// Hanya satu percobaan yang sempat jalan sebelum dibatalkan.
 		if got := f.calls.Load(); got != 1 {
-			t.Fatalf("mau 1 percobaan, dapat %d", got)
+			t.Fatalf("want 1 attempt, got %d", got)
 		}
 	})
 }
@@ -321,10 +324,10 @@ func TestGet_HabisPercobaan(t *testing.T) {
 
 		_, err := c.Get(context.Background(), "http://contoh.test")
 		if !errors.Is(err, ErrHabisPercobaan) {
-			t.Fatalf("mau ErrHabisPercobaan, dapat %v", err)
+			t.Fatalf("want ErrHabisPercobaan, got %v", err)
 		}
 		if got := f.calls.Load(); got != 4 {
-			t.Fatalf("mau 4 percobaan, dapat %d", got)
+			t.Fatalf("want 4 attempts, got %d", got)
 		}
 	})
 }
@@ -332,7 +335,7 @@ func TestGet_HabisPercobaan(t *testing.T) {
 func TestBackoff_DibatasiMaxDelay(t *testing.T) {
 	c := Client{Cfg: Config{BaseDelay: time.Second, MaxDelay: 5 * time.Second}}
 	if got := c.backoff(10); got != 5*time.Second {
-		t.Fatalf("mau dibatasi 5s, dapat %v", got)
+		t.Fatalf("want bounded 5s, got %v", got)
 	}
 }
 ```

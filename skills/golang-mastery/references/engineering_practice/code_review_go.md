@@ -110,7 +110,7 @@ import (
 // kompilator — dan pelanggarannya membuat context sering lupa diteruskan.
 var AnalyzerCtxFirst = &analysis.Analyzer{
 	Name:     "ctxfirst",
-	Doc:      "context.Context WAJIB menjadi parameter pertama",
+	Doc:      "context.Context MUST be the first parameter",
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      runCtxFirst,
 }
@@ -140,7 +140,7 @@ func runCtxFirst(pass *analysis.Pass) (any, error) {
 		}
 		if found && idx != 0 {
 			pass.Reportf(fn.Pos(),
-				"blocking: context.Context ada di posisi %d pada %s, WAJIB posisi 0", idx, fn.Name.Name)
+				"blocking: context.Context is at position %d in %s, MUST be at position 0", idx, fn.Name.Name)
 		}
 	})
 	return nil, nil
@@ -161,7 +161,7 @@ func isContextType(t types.Type) bool {
 // dan penanganan error berbasis tipe diam-diam rusak.
 var AnalyzerErrWrap = &analysis.Analyzer{
 	Name:     "errwrap",
-	Doc:      "fmt.Errorf yang membungkus error WAJIB memakai %w",
+	Doc:      "fmt.Errorf wrapping an error MUST use %w",
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      runErrWrap,
 }
@@ -192,7 +192,7 @@ func runErrWrap(pass *analysis.Pass) (any, error) {
 		for _, arg := range call.Args[1:] {
 			if isErrorType(pass.TypesInfo.TypeOf(arg)) {
 				pass.Reportf(call.Pos(),
-					"blocking: fmt.Errorf membungkus error tanpa %%w — errors.Is/As akan gagal")
+					"blocking: fmt.Errorf wraps error without %%w — errors.Is/As will fail")
 				return
 			}
 		}
@@ -262,7 +262,7 @@ package ctxfirst
 import "context"
 
 // Benar: context di posisi pertama.
-func Ambil(ctx context.Context, id string) error { return nil }
+func Fetch(ctx context.Context, id string) error { return nil }
 
 // Salah: context di posisi kedua.
 func Simpan(id string, ctx context.Context) error { return nil } // want `context.Context ada di posisi 1`
@@ -281,14 +281,14 @@ import (
 	"fmt"
 )
 
-var ErrTidakAda = errors.New("tidak ada")
+var ErrNotFound = errors.New("not found")
 
-func Benar() error { return fmt.Errorf("ambil user: %w", ErrTidakAda) }
+func Correct() error { return fmt.Errorf("fetch user: %w", ErrNotFound) }
 
-func Salah() error { return fmt.Errorf("ambil user: %v", ErrTidakAda) } // want `tanpa %w`
+func Incorrect() error { return fmt.Errorf("fetch user: %v", ErrNotFound) } // want `without %w`
 
 // Tanpa error di argumen: bukan pembungkusan, tidak dilaporkan.
-func BukanBungkus(n int) error { return fmt.Errorf("nilai %d di luar batas", n) }
+func BukanBungkus(n int) error { return fmt.Errorf("value %d out of bounds", n) }
 ```
 
 ## Anti-Pattern

@@ -126,8 +126,7 @@ type RatioQuerier interface {
 	FailureRatio(ctx context.Context, sloName string, window time.Duration) (float64, error)
 }
 
-// ErrInsufficientTraffic dikembalikan bila sampel terlalu sedikit untuk dipercaya.
-var ErrInsufficientTraffic = errors.New("slo: trafik tidak cukup untuk menghitung rasio")
+var ErrInsufficientTraffic = errors.New("slo: insufficient traffic to compute ratio")
 
 // Evaluator memutuskan severity berdasarkan burn rate dua jendela.
 type Evaluator struct {
@@ -152,7 +151,7 @@ type Decision struct {
 func (e *Evaluator) Evaluate(ctx context.Context) (Decision, error) {
 	budget := e.Obj.ErrorBudget()
 	if budget == 0 {
-		return Decision{}, fmt.Errorf("slo %q: target %.4f tidak valid", e.Obj.Name, e.Obj.Target)
+		return Decision{}, fmt.Errorf("slo %q: invalid target %.4f", e.Obj.Name, e.Obj.Target)
 	}
 	allowedRatio := 1 - e.Obj.Target
 
@@ -163,11 +162,11 @@ func (e *Evaluator) Evaluate(ctx context.Context) (Decision, error) {
 		if err != nil {
 			if errors.Is(err, ErrInsufficientTraffic) {
 				// Trafik rendah: JANGAN menyalakan alert dari rasio yang bising.
-				e.Logger.Debug("lewati aturan, trafik tidak cukup",
+				e.Logger.Debug("skip rule, insufficient traffic",
 					"slo", e.Obj.Name, "window", r.LongWindow)
 				continue
 			}
-			return Decision{}, fmt.Errorf("query jendela panjang %v: %w", r.LongWindow, err)
+			return Decision{}, fmt.Errorf("long window query %v: %w", r.LongWindow, err)
 		}
 
 		longBurn := longRatio / allowedRatio
@@ -180,7 +179,7 @@ func (e *Evaluator) Evaluate(ctx context.Context) (Decision, error) {
 			if errors.Is(err, ErrInsufficientTraffic) {
 				continue
 			}
-			return Decision{}, fmt.Errorf("query jendela pendek %v: %w", r.ShortWindow, err)
+			return Decision{}, fmt.Errorf("short window query %v: %w", r.ShortWindow, err)
 		}
 		shortBurn := shortRatio / allowedRatio
 
@@ -258,14 +257,14 @@ func TestEvaluate(t *testing.T) {
 		})
 		d, err := e.Evaluate(context.Background())
 		if err != nil {
-			t.Fatalf("tak terduga: %v", err)
+			t.Fatalf("unexpected error: %v", err)
 		}
 		if d.Severity != SeveritySeverityPage {
-			t.Fatalf("mau PAGE, dapat %v", d.Severity)
+			t.Fatalf("want PAGE, got %v", d.Severity)
 		}
 	})
 
-	t.Run("jendela pendek sudah pulih TIDAK memicu", func(t *testing.T) {
+	t.Run("recovered short window DOES NOT trigger", func(t *testing.T) {
 		// Inilah nilai multi-window: insiden sudah selesai, alert diam.
 		e := newEvaluator(map[time.Duration]float64{
 			time.Hour: 0.02, 5 * time.Minute: 0.0,
@@ -275,29 +274,29 @@ func TestEvaluate(t *testing.T) {
 		})
 		d, err := e.Evaluate(context.Background())
 		if err != nil {
-			t.Fatalf("tak terduga: %v", err)
+			t.Fatalf("unexpected error: %v", err)
 		}
 		if d.Severity != SeverityNone {
-			t.Fatalf("mau NONE, dapat %v", d.Severity)
+			t.Fatalf("want NONE, got %v", d.Severity)
 		}
 	})
 
-	t.Run("trafik tidak cukup tidak menyalakan alarm palsu", func(t *testing.T) {
+	t.Run("insufficient traffic does not trigger false alarm", func(t *testing.T) {
 		e := newEvaluator(map[time.Duration]float64{}) // semua window -> ErrInsufficientTraffic
 		d, err := e.Evaluate(context.Background())
 		if err != nil {
-			t.Fatalf("tak terduga: %v", err)
+			t.Fatalf("unexpected error: %v", err)
 		}
 		if d.Severity != SeverityNone {
-			t.Fatalf("mau NONE saat trafik sepi, dapat %v", d.Severity)
+			t.Fatalf("want NONE on low traffic, got %v", d.Severity)
 		}
 	})
 
-	t.Run("target tidak valid ditolak", func(t *testing.T) {
+	t.Run("invalid target rejected", func(t *testing.T) {
 		e := newEvaluator(map[time.Duration]float64{})
 		e.Obj.Target = 1.0
 		if _, err := e.Evaluate(context.Background()); err == nil {
-			t.Fatal("mau error untuk target 1.0")
+			t.Fatal("want error for target 1.0")
 		}
 	})
 }

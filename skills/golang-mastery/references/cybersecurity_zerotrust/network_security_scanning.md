@@ -360,5 +360,5 @@ kubectl get pods -A -o jsonpath='{range .items[*].spec.containers[*]}{.image}{"\
 kube-bench run --targets master,node | grep -E '^\[FAIL\]' | head -20
 
 # Port yang benar-benar terbuka dari dalam cluster
-kubectl run pemindai --rm -it --image=nicolaka/netshoot -- nmap -sT -Pn layanan.namespace.svc.cluster.local
+kubectl run scanner --rm -it --image=nicolaka/netshoot -- nmap -sT -Pn service.namespace.svc.cluster.local
 ```

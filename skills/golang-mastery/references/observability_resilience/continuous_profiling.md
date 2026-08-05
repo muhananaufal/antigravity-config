@@ -134,16 +134,16 @@ type Konfig struct {
 	BlockRate int
 
 	// LabelTetap menempel di seluruh sampel proses ini.
-	LabelTetap map[string]string
+	FixedLabels map[string]string
 }
 
 // KonfigDefault memberi setelan yang aman menyala terus di produksi.
-func KonfigDefault(versi, wilayah string) Konfig {
+func KonfigDefault(version, region string) Konfig {
 	return Konfig{
 		AlamatDebug:   "127.0.0.1:6060", // hanya localhost; agen mengambil dari sini
 		MutexFraction: 100,
 		BlockRate:     10_000_000,
-		LabelTetap:    map[string]string{"versi": versi, "wilayah": wilayah},
+		FixedLabels:    map[string]string{"versi": version, "wilayah": region},
 	}
 }
 
@@ -157,7 +157,7 @@ func KonfigDefault(versi, wilayah string) Konfig {
 // tampak "berhasil" dan endpoint profil yang TIDAK ADA. Anda baru
 // mengetahuinya saat insiden — tepat ketika endpoint itu satu-satunya hal
 // yang Anda butuhkan.
-func Mulai(k Konfig) (alamat string, berhenti func(context.Context) error, err error) {
+func Start(k Konfig) (alamat string, stop func(context.Context) error, err error) {
 	ln, err := net.Listen("tcp", k.AlamatDebug)
 	if err != nil {
 		return "", nil, fmt.Errorf("ikat alamat debug %q: %w", k.AlamatDebug, err)
@@ -233,17 +233,17 @@ import (
 // dipicu dari luar, tanpa perlu satu pun bug di sisi Anda.
 func MiddlewareLabel(
 	polaRute func(*http.Request) string,
-	tenantDari func(context.Context) string,
+	tenantFrom func(context.Context) string,
 ) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			pasangan := []string{"rute", polaRute(r), "metode", r.Method}
+			pair := []string{"rute", polaRute(r), "metode", r.Method}
 			// Label kosong hanya menambah derau; lewati bila tenant tak dikenal.
-			if t := tenantDari(r.Context()); t != "" {
-				pasangan = append(pasangan, "tenant", t)
+			if t := tenantFrom(r.Context()); t != "" {
+				pair = append(pair, "tenant", t)
 			}
 			// Do() memasang label pada goroutine ini SELAMA fn berjalan.
-			pprof.Do(r.Context(), pprof.Labels(pasangan...), func(ctx context.Context) {
+			pprof.Do(r.Context(), pprof.Labels(pair...), func(ctx context.Context) {
 				next.ServeHTTP(w, r.WithContext(ctx))
 			})
 		})
@@ -255,8 +255,8 @@ func MiddlewareLabel(
 //
 // Tanpa ini, seluruh pekerjaan latar tampak sebagai satu gumpalan tanpa
 // nama di profil, dan justru di situlah beban tak terduga sering berada.
-func TandaiTugasLatar(ctx context.Context, jenis string, fn func(context.Context)) {
-	pprof.Do(ctx, pprof.Labels("jenis_tugas", jenis), fn)
+func MarkBackgroundTask(ctx context.Context, kind string, fn func(context.Context)) {
+	pprof.Do(ctx, pprof.Labels("jenis_tugas", kind), fn)
 }
 ```
 
@@ -301,7 +301,7 @@ func TestKonfigDefault_TidakTerekspos(t *testing.T) {
 	if ip == nil || !ip.IsLoopback() {
 		// Menangkap ":6060", "0.0.0.0:6060", dan "[::]:6060" sekaligus —
 		// pemeriksaan lama hanya menangkap yang pertama.
-		t.Fatalf("alamat debug %q tidak terbatas pada loopback", k.AlamatDebug)
+		t.Fatalf("debug address %q is not limited to loopback", k.AlamatDebug)
 	}
 }
 
@@ -317,8 +317,8 @@ func TestMulai_MelaporkanGagalIkat(t *testing.T) {
 
 	k := KonfigDefault("uji", "lokal")
 	k.AlamatDebug = ln.Addr().String() // sudah terpakai
-	if _, _, err := Mulai(k); err == nil {
-		t.Fatal("Mulai harus melaporkan galat saat alamat sudah terpakai")
+	if _, _, err := Start(k); err == nil {
+		t.Fatal("Start must report error when address is already in use")
 	}
 }
 
@@ -326,7 +326,7 @@ func TestMulai_MemasangRateDanMelayaniProfil(t *testing.T) {
 	k := KonfigDefault("uji", "lokal")
 	k.AlamatDebug = "127.0.0.1:0" // port acak agar uji tidak bentrok
 
-	alamat, berhenti, err := Mulai(k)
+	alamat, stop, err := Start(k)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -341,7 +341,7 @@ func TestMulai_MemasangRateDanMelayaniProfil(t *testing.T) {
 	// membuktikan konstruktor tidak melempar galat.
 	resp, err := http.Get("http://" + alamat + "/debug/pprof/")
 	if err != nil {
-		t.Fatalf("endpoint debug tidak dapat dihubungi: %v", err)
+		t.Fatalf("debug endpoint unreachable: %v", err)
 	}
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -350,7 +350,7 @@ func TestMulai_MemasangRateDanMelayaniProfil(t *testing.T) {
 
 	ctx, batal := context.WithTimeout(context.Background(), 2*time.Second)
 	defer batal()
-	if err := berhenti(ctx); err != nil {
+	if err := stop(ctx); err != nil {
 		t.Fatalf("shutdown: %v", err)
 	}
 	if got := runtime.SetMutexProfileFraction(-1); got != 0 {
@@ -359,11 +359,11 @@ func TestMulai_MemasangRateDanMelayaniProfil(t *testing.T) {
 }
 
 // tanpaTenant dipakai uji yang tidak menguji dimensi tenant.
-func tanpaTenant(context.Context) string { return "" }
+func withoutTenant(context.Context) string { return "" }
 
 func TestMiddlewareLabel_LabelTerpasangSelamaPermintaan(t *testing.T) {
 	var terlihat bool
-	h := MiddlewareLabel(func(*http.Request) string { return "/pesanan/{id}" }, tanpaTenant)(
+	h := MiddlewareLabel(func(*http.Request) string { return "/pesanan/{id}" }, withoutTenant)(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			pprof.ForLabels(r.Context(), func(k, v string) bool {
 				if k == "rute" && v == "/pesanan/{id}" {
@@ -382,19 +382,19 @@ func TestMiddlewareLabel_LabelTerpasangSelamaPermintaan(t *testing.T) {
 func TestMiddlewareLabel_MemakaiPolaBukanPathMentah(t *testing.T) {
 	// Path mentah sebagai label = kardinalitas tak terbatas, persis
 	// masalah yang sama seperti pada metrik Prometheus.
-	var nilai string
-	h := MiddlewareLabel(func(*http.Request) string { return "/pesanan/{id}" }, tanpaTenant)(
+	var val string
+	h := MiddlewareLabel(func(*http.Request) string { return "/pesanan/{id}" }, withoutTenant)(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			pprof.ForLabels(r.Context(), func(k, v string) bool {
 				if k == "rute" {
-					nilai = v
+					val = v
 				}
 				return true
 			})
 		}))
 	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/pesanan/99999", nil))
 
-	if nilai == "/pesanan/99999" {
+	if val == "/pesanan/99999" {
 		t.Fatal("label memakai path mentah; kardinalitas akan meledak")
 	}
 }
@@ -402,12 +402,12 @@ func TestMiddlewareLabel_MemakaiPolaBukanPathMentah(t *testing.T) {
 // Header kiriman klien TIDAK boleh menjadi label. Uji ini membuktikan
 // tenant hanya bisa masuk lewat context yang sudah terautentikasi.
 func TestMiddlewareLabel_TenantTidakDariHeader(t *testing.T) {
-	var nilaiTenant string
-	h := MiddlewareLabel(func(*http.Request) string { return "/pesanan/{id}" }, tanpaTenant)(
+	var tenantValue string
+	h := MiddlewareLabel(func(*http.Request) string { return "/pesanan/{id}" }, withoutTenant)(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			pprof.ForLabels(r.Context(), func(k, v string) bool {
 				if k == "tenant" {
-					nilaiTenant = v
+					tenantValue = v
 				}
 				return true
 			})
@@ -417,15 +417,15 @@ func TestMiddlewareLabel_TenantTidakDariHeader(t *testing.T) {
 	req.Header.Set("X-Tenant-ID", "sembarang-nilai-unik-tiap-permintaan")
 	h.ServeHTTP(httptest.NewRecorder(), req)
 
-	if nilaiTenant != "" {
-		t.Fatalf("label tenant = %q, mau kosong — nilai kiriman klien menjadi label", nilaiTenant)
+	if tenantValue != "" {
+		t.Fatalf("tenant label = %q, want empty — client sent value becomes label", tenantValue)
 	}
 }
 
 
 func TestTandaiTugasLatar(t *testing.T) {
 	var ok bool
-	TandaiTugasLatar(context.Background(), "kirim_email", func(ctx context.Context) {
+	MarkBackgroundTask(context.Background(), "kirim_email", func(ctx context.Context) {
 		pprof.ForLabels(ctx, func(k, v string) bool {
 			if k == "jenis_tugas" && v == "kirim_email" {
 				ok = true
@@ -434,7 +434,7 @@ func TestTandaiTugasLatar(t *testing.T) {
 		})
 	})
 	if !ok {
-		t.Fatal("pekerjaan latar wajib berlabel, kalau tidak ia tak bernama di profil")
+		t.Fatal("background job must be labeled, otherwise it is unnamed in profile")
 	}
 }
 ```

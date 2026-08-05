@@ -62,14 +62,14 @@ import (
 )
 
 var (
-	ErrServiceUnavailable = errors.New("layanan tidak tersedia: circuit breaker terbuka")
+	ErrServiceUnavailable = errors.New("service unavailable: circuit breaker open")
 	// ErrPermintaanKlien menandai galat 4xx dan galat konstruksi request.
 	// Keduanya BUKAN bukti hilir bermasalah, jadi tidak boleh menghitung
 	// sebagai kegagalan — lihat IsSuccessful di bawah.
-	ErrPermintaanKlien = errors.New("permintaan klien ditolak hilir")
+	ErrClientRequest = errors.New("permintaan klien ditolak hilir")
 )
 
-const batasBodyRespons = 4 << 20 // 4 MiB — hilir bermasalah bisa mengirim tanpa batas
+const responseBodyLimit = 4 << 20 // 4 MiB — hilir bermasalah bisa mengirim tanpa batas
 
 // PaymentClient membungkus HTTP client dengan Circuit Breaker.
 type PaymentClient struct {
@@ -114,7 +114,7 @@ func NewPaymentClient(name string) *PaymentClient {
 			switch {
 			case err == nil:
 				return true
-			case errors.Is(err, ErrPermintaanKlien):
+			case errors.Is(err, ErrClientRequest):
 				// 4xx = salah pemanggil. Hilir sehat: ia menjawab dengan benar.
 				return true
 			case errors.Is(err, context.Canceled):
@@ -148,30 +148,30 @@ func (p *PaymentClient) ProcessPayment(ctx context.Context, url string) (string,
 		if err != nil {
 			// URL cacat = salah kita, bukan salah hilir. Dibungkus supaya
 			// IsSuccessful tidak menghitungnya sebagai kegagalan hilir.
-			return nil, fmt.Errorf("%w: bangun request: %w", ErrPermintaanKlien, err)
+			return nil, fmt.Errorf("%w: bangun request: %w", ErrClientRequest, err)
 		}
 
 		resp, err := p.client.Do(req)
 		if err != nil {
-			return nil, fmt.Errorf("galat jaringan: %w", err)
+			return nil, fmt.Errorf("network error: %w", err)
 		}
 		defer resp.Body.Close()
 
 		switch {
 		case resp.StatusCode >= 500:
 			// Body 5xx tetap dikuras (berbatas) agar koneksi bisa dipakai ulang.
-			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, batasBodyRespons))
-			return nil, fmt.Errorf("galat server: %d", resp.StatusCode)
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, responseBodyLimit))
+			return nil, fmt.Errorf("server error: %d", resp.StatusCode)
 		case resp.StatusCode >= 400:
-			pesan, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
-			return nil, fmt.Errorf("%w: %d: %s", ErrPermintaanKlien, resp.StatusCode, pesan)
+			msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+			return nil, fmt.Errorf("%w: %d: %s", ErrClientRequest, resp.StatusCode, msg)
 		}
 
-		body, err := io.ReadAll(io.LimitReader(resp.Body, batasBodyRespons))
+		body, err := io.ReadAll(io.LimitReader(resp.Body, responseBodyLimit))
 		if err != nil {
 			// Body putus di tengah adalah kegagalan hilir yang sah. JANGAN
 			// kembalikan potongan parsial sebagai sukses.
-			return nil, fmt.Errorf("baca body: %w", err)
+			return nil, fmt.Errorf("read body: %w", err)
 		}
 		return string(body), nil
 	})
@@ -225,7 +225,7 @@ func TestBreakerTerbukaSetelahAmbang(t *testing.T) {
 
 	for i := 0; i < 10; i++ {
 		if _, err := c.ProcessPayment(ctx, srv.URL); err == nil {
-			t.Fatalf("iterasi %d: mengharapkan galat 5xx", i)
+			t.Fatalf("iteration %d: expected 5xx error", i)
 		}
 	}
 
@@ -252,7 +252,7 @@ func TestBreakerTidakTerbukaKarena4xx(t *testing.T) {
 
 	for i := 0; i < 50; i++ {
 		_, err := c.ProcessPayment(ctx, srv.URL)
-		if !errors.Is(err, ErrPermintaanKlien) {
+		if !errors.Is(err, ErrClientRequest) {
 			t.Fatalf("iterasi %d: mau ErrPermintaanKlien, dapat %v", i, err)
 		}
 	}
@@ -313,12 +313,12 @@ if resp.StatusCode == http.StatusBadRequest {
 // GOOD: kembalikan galat SUNGGUHAN, lalu beri tahu breaker jangan menghitungnya.
 // Klasifikasi terjadi di satu tempat; pemanggil tetap punya errors.Is.
 if resp.StatusCode >= 400 && resp.StatusCode < 500 {
-    return nil, fmt.Errorf("%w: %d", ErrPermintaanKlien, resp.StatusCode)
+    return nil, fmt.Errorf("%w: %d", ErrClientRequest, resp.StatusCode)
 }
 
 st := gobreaker.Settings{
     IsSuccessful: func(err error) bool {
-        return err == nil || errors.Is(err, ErrPermintaanKlien)
+        return err == nil || errors.Is(err, ErrClientRequest)
     },
 }
 ```

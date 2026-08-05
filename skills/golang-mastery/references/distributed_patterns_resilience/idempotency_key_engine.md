@@ -70,12 +70,12 @@ const (
 )
 
 var (
-	ErrConflict    = errors.New("permintaan serentak sedang memproses idempotency key ini")
+	ErrConflict    = errors.New("concurrent request is processing this idempotency key")
 	ErrKeyMismatch = errors.New("idempotency key dipakai untuk payload berbeda")
 	// ErrLockHilang berarti lease kita kedaluwarsa dan pihak lain mengambil
 	// alih kunci ini SEMENTARA kita sudah menjalankan efek sampingnya.
 	// Ini kondisi yang wajib memicu alert -- lihat catatan fencing di bawah.
-	ErrLockHilang = errors.New("lock idempotensi hilang sebelum hasil tersimpan")
+	ErrLockLost = errors.New("lock idempotensi hilang sebelum hasil tersimpan")
 )
 
 type IdempotencyEngine struct {
@@ -103,7 +103,7 @@ type IdempotencyRecord struct {
 	// -- jauh di atas batas itu, sehingga nilainya akan DIBULATKAN diam-diam
 	// dan perbandingan lease menjadi tidak bisa dipercaya. Unix milidetik
 	// (~1,7e12) aman sampai tahun 287396.
-	DikunciPadaMs int64 `json:"dikunci_pada_ms"`
+	LockedAtMs int64 `json:"dikunci_pada_ms"`
 }
 
 func NewIdempotencyEngine(rdb *redis.Client) *IdempotencyEngine {
@@ -129,14 +129,14 @@ func NewIdempotencyEngine(rdb *redis.Client) *IdempotencyEngine {
 //
 // Redis menjalankan skrip Lua secara single-threaded sampai selesai, sehingga
 // keseluruhan blok ini atomik terhadap klien lain.
-var skripAmbilAtauBaca = redis.NewScript(`
+var scriptGetOrRead = redis.NewScript(`
 local ada = redis.call('GET', KEYS[1])
 if not ada then
   redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2])
   return 'DIPEROLEH'
 end
 local rec = cjson.decode(ada)
-if rec.state == 'IN_PROGRESS' and tonumber(rec.dikunci_pada_ms) < tonumber(ARGV[3]) then
+if rec.state == 'IN_PROGRESS' and tonumber(rec.locked_at_ms) < tonumber(ARGV[3]) then
   redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2])
   return 'DIAMBIL_ALIH'
 end
@@ -151,11 +151,11 @@ return ada
 // ADA -- sehingga SetXX berhasil dan kita MENIMPA hasil milik pekerja lain
 // dengan hasil kita. Dua-duanya sudah menagih kartu, dan yang tersimpan hanya
 // satu. Perbandingan stempel di bawah adalah versi minimal dari fencing token.
-var skripSimpanBilaMasihMilikKita = redis.NewScript(`
+var scriptSaveIfStillOurs = redis.NewScript(`
 local ada = redis.call('GET', KEYS[1])
 if not ada then return 'HILANG' end
 local rec = cjson.decode(ada)
-if tonumber(rec.dikunci_pada_ms) ~= tonumber(ARGV[2]) then return 'HILANG' end
+if tonumber(rec.locked_at_ms) ~= tonumber(ARGV[2]) then return 'HILANG' end
 redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[3])
 return 'OK'
 `)
@@ -197,7 +197,7 @@ func (e *IdempotencyEngine) CheckOrLock(ctx context.Context, key, requestHash st
 	record := IdempotencyRecord{
 		State:         StateInProgress,
 		RequestHash:   requestHash,
-		DikunciPadaMs: sekarangMs,
+		LockedAtMs: sekarangMs,
 	}
 	// Galat json.Marshal TIDAK dibuang dengan `_`. Bila ia gagal, recordBytes
 	// bernilai nil dan yang tersimpan di Redis adalah nilai kosong -- yang
@@ -211,15 +211,15 @@ func (e *IdempotencyEngine) CheckOrLock(ctx context.Context, key, requestHash st
 	// Batas lease: IN_PROGRESS yang dikunci lebih awal dari ini sudah basi.
 	batasLeaseMs := sekarangMs - e.Lease.Milliseconds()
 
-	hasil, err := skripAmbilAtauBaca.Run(ctx, e.rdb,
+	result, err := scriptGetOrRead.Run(ctx, e.rdb,
 		[]string{redisKey},
 		recordBytes, e.TTL.Milliseconds(), batasLeaseMs,
 	).Text()
 	if err != nil {
-		return false, 0, nil, fmt.Errorf("galat redis saat mengunci: %w", err)
+		return false, 0, nil, fmt.Errorf("redis error when locking: %w", err)
 	}
 
-	switch hasil {
+	switch result {
 	case "DIPEROLEH":
 		return true, sekarangMs, nil, nil
 	case "DIAMBIL_ALIH":
@@ -237,7 +237,7 @@ func (e *IdempotencyEngine) CheckOrLock(ctx context.Context, key, requestHash st
 
 	// Selain dua sentinel di atas, `hasil` adalah record JSON yang sudah ada.
 	var existing IdempotencyRecord
-	if err := json.Unmarshal([]byte(hasil), &existing); err != nil {
+	if err := json.Unmarshal([]byte(result), &existing); err != nil {
 		return false, 0, nil, fmt.Errorf("mendekode record yang ada: %w", err)
 	}
 
@@ -264,24 +264,24 @@ func (e *IdempotencyEngine) StoreResult(ctx context.Context, key string, dikunci
 	redisKey := "idempotency:" + key
 
 	record.State = StateCompleted
-	record.DikunciPadaMs = dikunciPadaMs
+	record.LockedAtMs = dikunciPadaMs
 	recordBytes, err := json.Marshal(record)
 	if err != nil {
 		return fmt.Errorf("mengkodekan hasil: %w", err)
 	}
 
-	hasil, err := skripSimpanBilaMasihMilikKita.Run(ctx, e.rdb,
+	result, err := scriptSaveIfStillOurs.Run(ctx, e.rdb,
 		[]string{redisKey},
 		recordBytes, dikunciPadaMs, e.TTL.Milliseconds(),
 	).Text()
 	if err != nil {
 		return fmt.Errorf("menyimpan hasil: %w", err)
 	}
-	if hasil == "HILANG" {
+	if result == "HILANG" {
 		// Efek samping SUDAH terjadi (kartu sudah ditagih) tetapi lock sudah
 		// bukan milik kita. Kemungkinan besar pihak lain juga sudah
 		// memprosesnya. Ini kondisi yang butuh manusia, bukan retry.
-		return fmt.Errorf("%w: key %s", ErrLockHilang, key)
+		return fmt.Errorf("%w: key %s", ErrLockLost, key)
 	}
 	return nil
 }
@@ -302,8 +302,8 @@ func (e *IdempotencyEngine) CleanupOnFailure(ctx context.Context, key string) {
 	// dikembalikan ke pemanggil (fungsi ini dipanggil dari jalur cleanup),
 	// sehingga mencatatnya adalah SATU-SATUNYA jalan keluar informasinya.
 	if err := e.rdb.Del(ctx, "idempotency:"+key).Err(); err != nil {
-		slog.ErrorContext(ctx, "gagal melepas lock idempotensi; klien akan tertahan sampai lease habis",
-			"key", key, "lease", e.Lease, "galat", err)
+		slog.ErrorContext(ctx, "failed to release idempotency lock; client will be blocked until lease expires",
+			"key", key, "lease", e.Lease, "error", err)
 	}
 }
 ```
@@ -404,13 +404,13 @@ if exists := checkLock(req.Header("Idempotency-Key")); exists { ... }
    switch {
    case errors.Is(err, ErrConflict):
        w.Header().Set("Retry-After", "2")   // WAJIB, bukan 409 telanjang
-       http.Error(w, "sedang diproses", http.StatusConflict)
+       http.Error(w, "processing", http.StatusConflict)
        return
    case errors.Is(err, ErrKeyMismatch):
        http.Error(w, "key dipakai untuk payload berbeda", http.StatusUnprocessableEntity)
        return
    case err != nil:
-       http.Error(w, "galat internal", http.StatusInternalServerError)
+       http.Error(w, "internal error", http.StatusInternalServerError)
        return
    case lama != nil:
        balasTersimpan(w, lama)              // replay, tanpa efek samping
@@ -419,17 +419,17 @@ if exists := checkLock(req.Header("Idempotency-Key")); exists { ... }
        return
    }
 
-   hasil, errProses := prosesPembayaran(ctx)
-   if errProses != nil && IsTransientError(errProses) {
+   result, errProcess := processPayment(ctx)
+   if errProcess != nil && IsTransientError(errProcess) {
        engine.CleanupOnFailure(ctx, key)    // biarkan klien mencoba lagi
        http.Error(w, "coba lagi", http.StatusServiceUnavailable)
        return
    }
    // Galat BISNIS ikut disimpan sebagai hasil final.
-   if err := engine.StoreResult(ctx, key, stempel, rekamDari(hasil, errProses)); err != nil {
+   if err := engine.StoreResult(ctx, key, stempel, recordFrom(result, errProcess)); err != nil {
        // ErrLockHilang di sini berarti efek samping sudah terjadi tetapi
        // pihak lain memegang kuncinya -- alert, jangan retry.
-       slog.ErrorContext(ctx, "menyimpan hasil idempotensi", "key", key, "galat", err)
+       slog.ErrorContext(ctx, "menyimpan hasil idempotensi", "key", key, "error", err)
    }
    ```
 
@@ -492,7 +492,7 @@ func TestCheckOrLock_HanyaSatuPemenangDariBanyakGoroutine(t *testing.T) {
 
 	var wg sync.WaitGroup
 	var mu sync.Mutex
-	var menang, konflik int
+	var won, conflict int
 
 	for i := 0; i < pesaing; i++ {
 		wg.Add(1)
@@ -503,21 +503,21 @@ func TestCheckOrLock_HanyaSatuPemenangDariBanyakGoroutine(t *testing.T) {
 			defer mu.Unlock()
 			switch {
 			case err == nil && boleh:
-				menang++
+				won++
 			case errors.Is(err, ErrConflict):
-				konflik++
+				conflict++
 			case err != nil:
-				t.Errorf("galat tak terduga: %v", err)
+				t.Errorf("unexpected error: %v", err)
 			}
 		}()
 	}
 	wg.Wait()
 
-	if menang != 1 {
-		t.Fatalf("tepat satu goroutine boleh melanjutkan, dapat %d", menang)
+	if won != 1 {
+		t.Fatalf("tepat satu goroutine boleh melanjutkan, dapat %d", won)
 	}
-	if konflik != pesaing-1 {
-		t.Errorf("sisanya harus ErrConflict: %d dari %d", konflik, pesaing-1)
+	if conflict != pesaing-1 {
+		t.Errorf("sisanya harus ErrConflict: %d dari %d", conflict, pesaing-1)
 	}
 }
 
@@ -525,12 +525,12 @@ func TestCheckOrLock_MemutarUlangHasilTersimpan(t *testing.T) {
 	e, _ := mesinUji(t)
 	ctx := context.Background()
 
-	boleh, stempel, lama, err := e.CheckOrLock(ctx, "key-selesai", "hash-a")
+	boleh, stempel, lama, err := e.CheckOrLock(ctx, "key-completed", "hash-a")
 	if err != nil || !boleh || lama != nil {
 		t.Fatalf("permintaan pertama harus memperoleh lock: boleh=%v lama=%v err=%v", boleh, lama, err)
 	}
 
-	if err := e.StoreResult(ctx, "key-selesai", stempel, IdempotencyRecord{
+	if err := e.StoreResult(ctx, "key-completed", stempel, IdempotencyRecord{
 		ResponseCode: 201,
 		ResponseBody: []byte(`{"id":1}`),
 		RequestHash:  "hash-a",
@@ -538,12 +538,12 @@ func TestCheckOrLock_MemutarUlangHasilTersimpan(t *testing.T) {
 		t.Fatalf("StoreResult: %v", err)
 	}
 
-	boleh, _, lama, err = e.CheckOrLock(ctx, "key-selesai", "hash-a")
+	boleh, _, lama, err = e.CheckOrLock(ctx, "key-completed", "hash-a")
 	if err != nil {
-		t.Fatalf("galat tak terduga: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
 	if boleh {
-		t.Error("permintaan yang sudah selesai tidak boleh diproses ulang")
+		t.Error("completed request must not be reprocessed")
 	}
 	if lama == nil || lama.State != StateCompleted || lama.ResponseCode != 201 {
 		t.Fatalf("mengharapkan record COMPLETED, dapat %+v", lama)
@@ -606,27 +606,27 @@ func TestStoreResult_PemegangBasiTidakBisaMenimpa(t *testing.T) {
 	sekarang := time.Date(2024, 6, 1, 12, 0, 0, 0, time.UTC)
 	e.Jam = func() time.Time { return sekarang }
 
-	_, stempelA, _, err := e.CheckOrLock(ctx, "key-fencing", "hash-a")
+	_, stampA, _, err := e.CheckOrLock(ctx, "key-fencing", "hash-a")
 	if err != nil {
 		t.Fatalf("A mengambil lock: %v", err)
 	}
 
 	sekarang = sekarang.Add(6 * time.Minute) // lease A habis
-	_, stempelB, _, err := e.CheckOrLock(ctx, "key-fencing", "hash-a")
+	_, stampB, _, err := e.CheckOrLock(ctx, "key-fencing", "hash-a")
 	if err != nil {
 		t.Fatalf("B mengambil alih: %v", err)
 	}
-	if err := e.StoreResult(ctx, "key-fencing", stempelB, IdempotencyRecord{
+	if err := e.StoreResult(ctx, "key-fencing", stampB, IdempotencyRecord{
 		ResponseCode: 201, RequestHash: "hash-a",
 	}); err != nil {
 		t.Fatalf("B menyimpan hasil: %v", err)
 	}
 
 	// A bangun terlambat dan mencoba menulis hasilnya sendiri.
-	err = e.StoreResult(ctx, "key-fencing", stempelA, IdempotencyRecord{
+	err = e.StoreResult(ctx, "key-fencing", stampA, IdempotencyRecord{
 		ResponseCode: 500, RequestHash: "hash-a",
 	})
-	if !errors.Is(err, ErrLockHilang) {
+	if !errors.Is(err, ErrLockLost) {
 		t.Fatalf("penulisan pemegang basi harus ErrLockHilang, dapat %v", err)
 	}
 
@@ -651,22 +651,22 @@ func TestCleanupOnFailure_MembebaskanKlien(t *testing.T) {
 
 	boleh, _, _, err := e.CheckOrLock(ctx, "key-transient", "hash-a")
 	if err != nil || !boleh {
-		t.Fatalf("setelah cleanup, retry harus bisa memproses ulang: boleh=%v err=%v", boleh, err)
+		t.Fatalf("after cleanup, retry should be able to reprocess: allowed=%v err=%v", boleh, err)
 	}
 }
 
 // Hash kanonik: urutan field yang berbeda pada JSON mentah TIDAK boleh
 // menghasilkan hash berbeda, atau retry yang sah akan ditolak 422.
 func TestHashPermintaan_Kanonik(t *testing.T) {
-	type bayar struct {
+	type pay struct {
 		AkunID      string `json:"akun_id"`
 		JumlahMinor int64  `json:"jumlah_minor"`
 	}
-	a, err := HashPermintaan(bayar{AkunID: "acc-1", JumlahMinor: 50000})
+	a, err := HashPermintaan(pay{AkunID: "acc-1", JumlahMinor: 50000})
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := HashPermintaan(bayar{JumlahMinor: 50000, AkunID: "acc-1"})
+	b, err := HashPermintaan(pay{JumlahMinor: 50000, AkunID: "acc-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -674,7 +674,7 @@ func TestHashPermintaan_Kanonik(t *testing.T) {
 		t.Error("payload identik menghasilkan hash berbeda; retry sah akan ditolak")
 	}
 
-	c, err := HashPermintaan(bayar{AkunID: "acc-1", JumlahMinor: 50001})
+	c, err := HashPermintaan(pay{AkunID: "acc-1", JumlahMinor: 50001})
 	if err != nil {
 		t.Fatal(err)
 	}

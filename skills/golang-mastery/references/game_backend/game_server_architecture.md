@@ -178,9 +178,9 @@ Menggunakan Mutex di setiap struct Entity agar aman dibaca-tulis dari berbagai G
 ```go
 // BAD: Semua Goroutine Klien bebas saling mengunci Entitas
 func (c *ClientSession) onMessage(msg []byte) {
-    GlobalWorld.Players["musuh_1"].mu.Lock()
-    GlobalWorld.Players["musuh_1"].HP -= 10 // Race Lock Contention
-    GlobalWorld.Players["musuh_1"].mu.Unlock()
+    GlobalWorld.Players["enemy_1"].mu.Lock()
+    GlobalWorld.Players["enemy_1"].HP -= 10 // Race Lock Contention
+    GlobalWorld.Players["enemy_1"].mu.Unlock()
 }
 ```
 **Why dangerous:** Jika Goroutine Klien A mengunci musuh_1, Goroutine Klien B (yang juga nyerang musuh_1) akan *nge-hang* menunggu. Lebih parah, *Game Loop Utama* yang mau mensimulasikan lari musuh_1 juga ikut mati terblokir! CPU usage drop ke 10% tapi server super ngelag. Pola arsitektur server yang benar (seperti di atas) menggunakan **Actor Model (Single-Threaded Room/World)** atau *Lock-Free queue* untuk menghindari perebutan *Mutex*. Goroutine klien hanya mengirim *Command* lewat Channel.

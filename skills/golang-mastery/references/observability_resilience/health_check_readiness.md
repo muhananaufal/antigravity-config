@@ -78,32 +78,32 @@ type Pemeriksaan struct {
 	Periksa func(context.Context) error
 }
 
-type HasilPeriksa struct {
+type CheckResult struct {
 	Status Status `json:"status"`
 	// Pesan memuat galat mentah. Aman HANYA karena port probe tidak pernah
 	// diekspos ke internet (Anti-Pattern 2) — galat koneksi DB kerap memuat
 	// host dan nama pengguna.
-	Pesan string `json:"pesan,omitempty"`
+	Message string `json:"message,omitempty"`
 }
 
-type ResponsKesehatan struct {
+type HealthResponse struct {
 	Status Status                  `json:"status"`
-	Waktu  time.Time               `json:"waktu"`
-	Cek    map[string]HasilPeriksa `json:"cek"`
+	Time  time.Time               `json:"time"`
+	Checks    map[string]CheckResult `json:"cek"`
 }
 
 type HealthChecker struct {
 	sedangMati atomic.Bool
 
 	pemeriksaan  []Pemeriksaan
-	batasPeriksa time.Duration
+	checkLimit time.Duration
 
 	mu        sync.RWMutex
-	terakhir  ResponsKesehatan
-	kodeAkhir int
+	terakhir  HealthResponse
+	finalCode int
 
-	denyut      sync.Map // nama komponen → *atomic.Int64 (UnixNano)
-	batasDenyut time.Duration
+	heartbeat      sync.Map // nama komponen → *atomic.Int64 (UnixNano)
+	heartbeatLimit time.Duration
 }
 
 func NewHealthChecker(pemeriksaan ...Pemeriksaan) *HealthChecker {
@@ -111,13 +111,13 @@ func NewHealthChecker(pemeriksaan ...Pemeriksaan) *HealthChecker {
 		pemeriksaan: pemeriksaan,
 		// Lebih kecil dari probe.timeoutSeconds — yang default-nya di
 		// Kubernetes adalah 1 DETIK. Lihat Anti-Pattern 3.
-		batasPeriksa: 800 * time.Millisecond,
-		batasDenyut:  60 * time.Second,
+		checkLimit: 800 * time.Millisecond,
+		heartbeatLimit:  60 * time.Second,
 		// FAIL-CLOSED: sebelum pemeriksaan pertama selesai, pod BELUM siap.
 		// Bawaan yang sebaliknya membuat pod yang dependensinya belum terpasang
 		// sama sekali melapor SIAP dan langsung menerima trafik.
-		kodeAkhir: http.StatusServiceUnavailable,
-		terakhir:  ResponsKesehatan{Status: StatusDOWN, Cek: map[string]HasilPeriksa{}},
+		finalCode: http.StatusServiceUnavailable,
+		terakhir:  HealthResponse{Status: StatusDOWN, Checks: map[string]CheckResult{}},
 	}
 }
 
@@ -147,24 +147,24 @@ func (h *HealthChecker) MulaiPenyegar(ctx context.Context, tiap time.Duration) {
 	}()
 }
 
-func (h *HealthChecker) segarkan(induk context.Context) {
-	cek := make(map[string]HasilPeriksa, len(h.pemeriksaan))
+func (h *HealthChecker) segarkan(parent context.Context) {
+	checks := make(map[string]CheckResult, len(h.pemeriksaan))
 	status := StatusUP
 	kode := http.StatusOK
 
 	for _, p := range h.pemeriksaan {
-		ctx, batal := context.WithTimeout(induk, h.batasPeriksa)
+		ctx, batal := context.WithTimeout(parent, h.checkLimit)
 		err := p.Periksa(ctx)
 		batal()
 
 		switch {
 		case err == nil:
-			cek[p.Nama] = HasilPeriksa{Status: StatusUP}
+			checks[p.Nama] = CheckResult{Status: StatusUP}
 		case p.Kritis:
-			cek[p.Nama] = HasilPeriksa{Status: StatusDOWN, Pesan: err.Error()}
+			checks[p.Nama] = CheckResult{Status: StatusDOWN, Message: err.Error()}
 			status, kode = StatusDOWN, http.StatusServiceUnavailable
 		default:
-			cek[p.Nama] = HasilPeriksa{Status: StatusDOWN, Pesan: err.Error()}
+			checks[p.Nama] = CheckResult{Status: StatusDOWN, Message: err.Error()}
 			if status == StatusUP {
 				status = StatusDEGRADED // tetap 200
 			}
@@ -172,14 +172,14 @@ func (h *HealthChecker) segarkan(induk context.Context) {
 	}
 
 	h.mu.Lock()
-	h.terakhir = ResponsKesehatan{Status: status, Waktu: time.Now(), Cek: cek}
-	h.kodeAkhir = kode
+	h.terakhir = HealthResponse{Status: status, Time: time.Now(), Checks: checks}
+	h.finalCode = kode
 	h.mu.Unlock()
 }
 
 // DaftarkanDenyut dipanggil SEBELUM komponen berjalan, supaya komponen yang
 // tidak pernah berdenyut sekali pun tetap terdeteksi.
-func (h *HealthChecker) DaftarkanDenyut(komponen string) { h.KetukDenyut(komponen) }
+func (h *HealthChecker) DaftarkanDenyut(komponen string) { h.TapHeartbeat(komponen) }
 
 // KetukDenyut dipanggil setiap iterasi oleh goroutine latar (konsumer antrean,
 // scheduler).
@@ -188,22 +188,22 @@ func (h *HealthChecker) DaftarkanDenyut(komponen string) { h.KetukDenyut(kompone
 // mengembalikan 200 hanya membuktikan goroutine HTTP hidup — ia tidak
 // membuktikan apa pun tentang worker yang macet, padahal worker macet adalah
 // satu-satunya keadaan yang memang pantas disembuhkan dengan restart.
-func (h *HealthChecker) KetukDenyut(komponen string) {
-	v, _ := h.denyut.LoadOrStore(komponen, new(atomic.Int64))
+func (h *HealthChecker) TapHeartbeat(komponen string) {
+	v, _ := h.heartbeat.LoadOrStore(komponen, new(atomic.Int64))
 	v.(*atomic.Int64).Store(time.Now().UnixNano())
 }
 
-func (h *HealthChecker) denyutBasi() (string, bool) {
-	var basi string
-	h.denyut.Range(func(k, v any) bool {
-		umur := time.Since(time.Unix(0, v.(*atomic.Int64).Load()))
-		if umur > h.batasDenyut {
-			basi = fmt.Sprintf("%v basi %s", k, umur.Round(time.Second))
+func (h *HealthChecker) staleHeartbeat() (string, bool) {
+	var stale string
+	h.heartbeat.Range(func(k, v any) bool {
+		age := time.Since(time.Unix(0, v.(*atomic.Int64).Load()))
+		if age > h.heartbeatLimit {
+			stale = fmt.Sprintf("%v basi %s", k, age.Round(time.Second))
 			return false
 		}
 		return true
 	})
-	return basi, basi != ""
+	return stale, stale != ""
 }
 
 // LivenessHandler menjawab satu pertanyaan: apakah proses ini masih waras?
@@ -213,9 +213,9 @@ func (h *HealthChecker) denyutBasi() (string, bool) {
 // shutdown, itu memotong drain di tengah — persis kebalikan dari yang
 // diinginkan. Saat shutdown, hanya READINESS yang boleh berubah jadi 503.
 func (h *HealthChecker) LivenessHandler(w http.ResponseWriter, r *http.Request) {
-	if pesan, basi := h.denyutBasi(); basi {
-		slog.Error("liveness gagal: denyut komponen basi", "detail", pesan)
-		http.Error(w, "denyut basi: "+pesan, http.StatusServiceUnavailable)
+	if msg, stale := h.staleHeartbeat(); stale {
+		slog.Error("liveness failed: component heartbeat stale", "detail", msg)
+		http.Error(w, "denyut basi: "+msg, http.StatusServiceUnavailable)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
@@ -229,16 +229,16 @@ func (h *HealthChecker) ReadinessHandler(w http.ResponseWriter, r *http.Request)
 
 	if h.sedangMati.Load() {
 		w.WriteHeader(http.StatusServiceUnavailable)
-		_ = json.NewEncoder(w).Encode(ResponsKesehatan{
+		_ = json.NewEncoder(w).Encode(HealthResponse{
 			Status: StatusDOWN,
-			Waktu:  time.Now(),
-			Cek:    map[string]HasilPeriksa{"shutdown": {Status: StatusDOWN, Pesan: "graceful shutdown berjalan"}},
+			Time:  time.Now(),
+			Checks:    map[string]CheckResult{"shutdown": {Status: StatusDOWN, Message: "graceful shutdown berjalan"}},
 		})
 		return
 	}
 
 	h.mu.RLock()
-	resp, kode := h.terakhir, h.kodeAkhir
+	resp, kode := h.terakhir, h.finalCode
 	h.mu.RUnlock()
 
 	w.WriteHeader(kode)
@@ -292,8 +292,8 @@ func TestLivenessTetap200SaatShutdown(t *testing.T) {
 
 func TestLivenessGagalSaatDenyutBasi(t *testing.T) {
 	hc := NewHealthChecker()
-	hc.batasDenyut = 10 * time.Millisecond
-	hc.DaftarkanDenyut("konsumer-antrean")
+	hc.heartbeatLimit = 10 * time.Millisecond
+	hc.DaftarkanDenyut("queue-consumer")
 	time.Sleep(20 * time.Millisecond)
 
 	rec := httptest.NewRecorder()
@@ -323,7 +323,7 @@ func TestReadinessBelumDiperiksaBerartiTidakSiap(t *testing.T) {
 func TestReadinessDependensiKritisJatuh(t *testing.T) {
 	hc := NewHealthChecker(Pemeriksaan{
 		Nama: "db", Kritis: true,
-		Periksa: func(context.Context) error { return errors.New("koneksi ditolak") },
+		Periksa: func(context.Context) error { return errors.New("connection refused") },
 	})
 	hc.segarkan(context.Background())
 
@@ -333,12 +333,12 @@ func TestReadinessDependensiKritisJatuh(t *testing.T) {
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("kode = %d, mau 503", rec.Code)
 	}
-	var resp ResponsKesehatan
+	var resp HealthResponse
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("dekode: %v", err)
 	}
 	if resp.Status != StatusDOWN {
-		t.Fatalf("status = %q, mau DOWN", resp.Status)
+		t.Fatalf("status = %q, want DOWN", resp.Status)
 	}
 }
 
@@ -358,12 +358,12 @@ func TestReadinessDependensiOpsionalJatuhTetapSiap(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("kode = %d, mau 200 — cache mati bukan alasan menarik pod dari LB", rec.Code)
 	}
-	var resp ResponsKesehatan
+	var resp HealthResponse
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("dekode: %v", err)
 	}
 	if resp.Status != StatusDEGRADED {
-		t.Fatalf("status = %q, mau DEGRADED", resp.Status)
+		t.Fatalf("status = %q, want DEGRADED", resp.Status)
 	}
 }
 
@@ -445,8 +445,8 @@ func ReadinessHandler(w http.ResponseWriter, r *http.Request) {
 
 // GOOD: timeout internal LEBIH KECIL dari probe.timeoutSeconds,
 // dan pemeriksaannya dijalankan di latar belakang (lihat §2).
-func (h *HealthChecker) segarkan(induk context.Context) {
-    ctx, batal := context.WithTimeout(induk, 800*time.Millisecond)
+func (h *HealthChecker) segarkan(parent context.Context) {
+    ctx, batal := context.WithTimeout(parent, 800*time.Millisecond)
     defer batal()
     // ...
 }

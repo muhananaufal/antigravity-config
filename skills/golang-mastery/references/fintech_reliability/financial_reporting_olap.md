@@ -267,12 +267,12 @@ for _, tx := range txs {
 
 ```sql
 -- Verifikasi silang: total OLAP WAJIB sama dengan sumber transaksional
-SELECT 'sumber' AS asal, sum(jumlah) FROM jurnal WHERE tanggal = '2026-08-04'
+SELECT 'source' AS origin, sum(amount) FROM ledger WHERE date = '2026-08-04'
 UNION ALL
-SELECT 'olap',  sum(jumlah) FROM laporan_harian WHERE tanggal = '2026-08-04';
+SELECT 'olap',  sum(amount) FROM daily_report WHERE date = '2026-08-04';
 
 -- Periode tertutup yang angkanya berubah: ini insiden, bukan perbedaan
-SELECT periode, nilai_tersimpan, nilai_hitung_ulang,
-       nilai_tersimpan - nilai_hitung_ulang AS selisih
-FROM audit_laporan WHERE nilai_tersimpan <> nilai_hitung_ulang;
+SELECT period, stored_value, recalculated_value,
+       stored_value - recalculated_value AS diff
+FROM report_audit WHERE stored_value <> recalculated_value;
 ```

@@ -238,10 +238,10 @@ func TestGraphQL_BFF_Dataloader_Batching(t *testing.T) {
 	// PANIC nil pointer, bukan sebagai kegagalan uji yang bisa dibaca --
 	// dan panic di dalam uji menyembunyikan penyebab aslinya.
 	if errA != nil || errB != nil {
-		t.Fatalf("Load gagal: A=%v B=%v", errA, errB)
+		t.Fatalf("load failed: A=%v B=%v", errA, errB)
 	}
 	if userA == nil || userB == nil {
-		t.Fatalf("Load mengembalikan nil tanpa galat: A=%v B=%v", userA, userB)
+		t.Fatalf("load returned nil without error: A=%v B=%v", userA, userB)
 	}
 	if userA.Name != "Alice" || userB.Name != "Bob" {
 		t.Fatalf("Data mismatch: A=%v, B=%v", userA, userB)

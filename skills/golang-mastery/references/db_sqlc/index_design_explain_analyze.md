@@ -321,7 +321,7 @@ func urai(t *testing.T, s string) Node {
 	t.Helper()
 	var h []hasilExplain
 	if err := json.Unmarshal([]byte(s), &h); err != nil {
-		t.Fatalf("urai: %v", err)
+		t.Fatalf("parse: %v", err)
 	}
 	return h[0].Plan
 }
@@ -343,7 +343,7 @@ func TestPeriksa_EstimasiMeleset(t *testing.T) {
 		}
 	}
 	if !kena {
-		t.Fatalf("estimasi meleset 980x harus KRITIS, dapat %v", out)
+		t.Fatalf("estimation missed 980x should be KRITIS, got %v", out)
 	}
 }
 
@@ -361,12 +361,12 @@ func TestPeriksa_NestedLoopBerulang(t *testing.T) {
 		if strings.Contains(f.Pesan, "diulang") {
 			kena = true
 			if !strings.Contains(f.Saran, "JOIN") {
-				t.Errorf("saran harus menyebut JOIN, dapat %q", f.Saran)
+				t.Errorf("suggestion must mention JOIN, got %q", f.Saran)
 			}
 		}
 	}
 	if !kena {
-		t.Fatalf("980rb loop harus terdeteksi, dapat %v", out)
+		t.Fatalf("980k loop should be detected, got %v", out)
 	}
 }
 
@@ -377,7 +377,7 @@ func TestPeriksa_SeqScanKecilTidakDitandai(t *testing.T) {
 	var out []Temuan
 	periksa(urai(t, r), AmbangDefault(), &out)
 	if len(out) != 0 {
-		t.Fatalf("Seq Scan 50 baris tidak boleh ditandai, dapat %v", out)
+		t.Fatalf("Seq Scan 50 rows must not be flagged, got %v", out)
 	}
 }
 
@@ -395,7 +395,7 @@ func TestPeriksa_IndexOnlyScanHeapFetch(t *testing.T) {
 		}
 	}
 	if !kena {
-		t.Fatalf("heap fetch tinggi harus menyarankan VACUUM, dapat %v", out)
+		t.Fatalf("high heap fetch must suggest VACUUM, got %v", out)
 	}
 }
 
@@ -461,7 +461,7 @@ Index menyimpan nilai asli, bukan hasil fungsi. Planner tidak bisa memakainya.
 WHERE dibuat_pada >= '2026-08-05' AND dibuat_pada < '2026-08-06'
 
 -- Atau index ekspresi bila fungsinya memang wajib:
-CREATE INDEX ON pengguna (LOWER(email));
+CREATE INDEX ON users (LOWER(email));
 ```
 
 **❌ SALAH — menambah index tanpa membaca rencana**
@@ -476,9 +476,9 @@ Sering index baru sama sekali tidak dipakai, tapi ongkos tulisnya tetap dibayar 
 **✅ BENAR — ukur dulu, buktikan sesudah**
 
 ```go
-temuan, ms, err := explain.Jalankan(ctx, db, query, args...)
-for _, t := range temuan {
-	log.Println(t)
+results, ms, err := explain.Run(ctx, db, query, args...)
+for _, res := range results {
+	log.Println(res)
 }
 // Tambah index, jalankan ulang, bandingkan ms DAN pastikan
 // nama index muncul di rencana.

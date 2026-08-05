@@ -356,12 +356,12 @@ import (
 // jedaPropagasi memberi kube-proxy / ingress controller waktu untuk mencabut
 // Pod ini dari daftar endpoint SEBELUM server berhenti menerima koneksi.
 // Lihat komentar panjang di main().
-const jedaPropagasi = 5 * time.Second
+const propagationDelay = 5 * time.Second
 
 // App menyatukan state kesiapan agar bisa dibaca handler DAN diubah oleh
 // penangan sinyal.
 type App struct {
-	siap atomic.Bool
+	ready atomic.Bool
 }
 
 // Router membangun SATU mux yang benar-benar dilayani server.
@@ -382,31 +382,31 @@ func (a *App) Router() http.Handler {
 	// membuat K8s me-restart SELURUH pod aplikasi Anda -- menambah beban ke
 	// database yang sudah kesulitan. Itu cara memperpanjang insiden.
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
-		tulisJSON(w, http.StatusOK, `{"status":"ok"}`)
+		writeJSON(w, http.StatusOK, `{"status":"ok"}`)
 	})
 
 	// READINESS: "apakah saya siap MENERIMA trafik?" Di sinilah dependensi
 	// diperiksa, dan di sinilah shutdown mulai bekerja.
 	mux.HandleFunc("GET /ready", func(w http.ResponseWriter, r *http.Request) {
-		if !a.siap.Load() {
-			tulisJSON(w, http.StatusServiceUnavailable, `{"status":"shutting_down"}`)
+		if !a.ready.Load() {
+			writeJSON(w, http.StatusServiceUnavailable, `{"status":"shutting_down"}`)
 			return
 		}
 		if err := checkDependencies(r.Context()); err != nil {
-			slog.WarnContext(r.Context(), "readiness gagal", "galat", err)
-			tulisJSON(w, http.StatusServiceUnavailable, `{"status":"not_ready"}`)
+			slog.WarnContext(r.Context(), "readiness check failed", "error", err)
+			writeJSON(w, http.StatusServiceUnavailable, `{"status":"not_ready"}`)
 			return
 		}
-		tulisJSON(w, http.StatusOK, `{"status":"ready"}`)
+		writeJSON(w, http.StatusOK, `{"status":"ready"}`)
 	})
 
-	mux.Handle("/", rutBisnis())
+	mux.Handle("/", businessRoute())
 	return mux
 }
 
-func tulisJSON(w http.ResponseWriter, kode int, body string) {
+func writeJSON(w http.ResponseWriter, code int, body string) {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(kode)
+	w.WriteHeader(code)
 	// Galat Write di sini berarti klien sudah memutus koneksi -- tidak ada
 	// yang bisa dilakukan, dan tidak layak jadi log. Dibuang SECARA SADAR.
 	_, _ = w.Write([]byte(body))
@@ -414,7 +414,7 @@ func tulisJSON(w http.ResponseWriter, kode int, body string) {
 
 func main() {
 	app := &App{}
-	app.siap.Store(true)
+	app.ready.Store(true)
 
 	srv := &http.Server{
 		Addr:              ":8080",
@@ -426,23 +426,23 @@ func main() {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGTERM, syscall.SIGINT)
 
-	galatServer := make(chan error, 1)
+	serverError := make(chan error, 1)
 	go func() {
-		slog.Info("server dimulai", "addr", srv.Addr)
+		slog.Info("server started", "addr", srv.Addr)
 		if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 			// Dikirim ke channel, BUKAN os.Exit(1) dari dalam goroutine.
 			// os.Exit melewati SELURUH defer dan mematikan proses di tengah --
 			// termasuk melewatkan penutupan pool DB dan flush log.
-			galatServer <- err
+			serverError <- err
 		}
 	}()
 
 	select {
-	case err := <-galatServer:
-		slog.Error("server gagal dijalankan", "galat", err)
+	case err := <-serverError:
+		slog.Error("server failed to start", "error", err)
 		os.Exit(1)
 	case sig := <-quit:
-		slog.Info("sinyal shutdown diterima", "signal", sig)
+		slog.Info("shutdown signal received", "signal", sig)
 	}
 
 	// ─────────────────────────────────────────────────────────────
@@ -465,9 +465,9 @@ func main() {
 	//
 	// Urutan yang benar: not-ready dulu, beri jeda propagasi, BARU Shutdown.
 	// ─────────────────────────────────────────────────────────────
-	app.siap.Store(false)
-	slog.Info("readiness dimatikan, menunggu propagasi endpoint", "jeda", jedaPropagasi)
-	time.Sleep(jedaPropagasi)
+	app.ready.Store(false)
+	slog.Info("readiness disabled, waiting for endpoint propagation", "delay", propagationDelay)
+	time.Sleep(propagationDelay)
 
 	// LANGKAH 2: berhenti menerima koneksi baru, tunggu yang aktif selesai.
 	//
@@ -479,7 +479,7 @@ func main() {
 
 	errShutdown := srv.Shutdown(ctx)
 	if errShutdown != nil {
-		slog.Error("shutdown melewati batas waktu, koneksi tersisa diputus", "galat", errShutdown)
+		slog.Error("shutdown timed out, remaining connections dropped", "error", errShutdown)
 	}
 
 	// LANGKAH 3: tutup dependensi -- SELALU, termasuk saat Shutdown gagal.
@@ -496,7 +496,7 @@ func main() {
 	slog.Info("server berhenti dengan rapi")
 }
 
-func rutBisnis() http.Handler { return http.NewServeMux() }
+func businessRoute() http.Handler { return http.NewServeMux() }
 
 func drainDependencies() {
 	// db.Close(), redisClient.Close(), natsConn.Drain(), dst.
@@ -537,24 +537,24 @@ import (
 // Uji memanggil app.Router() -- ROUTER YANG SAMA yang dipakai server.
 // Ini satu-satunya bentuk yang bisa menangkap handler yang terdaftar di mux
 // yang salah.
-func TestRouter_HealthDanReady(t *testing.T) {
+func TestRouter_HealthAndReady(t *testing.T) {
 	app := &App{}
-	app.siap.Store(true)
+	app.ready.Store(true)
 	router := app.Router()
 
-	kasus := []struct {
-		nama, jalur string
-		mauKode     int
+	cases := []struct {
+		name, path string
+		wantCode   int
 	}{
 		{"liveness selalu ok", "/health", http.StatusOK},
 		{"readiness saat siap", "/ready", http.StatusOK},
 	}
-	for _, k := range kasus {
-		t.Run(k.nama, func(t *testing.T) {
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
 			w := httptest.NewRecorder()
-			router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, k.jalur, nil))
-			if w.Code != k.mauKode {
-				t.Errorf("%s = %d, mau %d (body: %s)", k.jalur, w.Code, k.mauKode, w.Body)
+			router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, c.path, nil))
+			if w.Code != c.wantCode {
+				t.Errorf("%s = %d, mau %d (body: %s)", c.path, w.Code, c.wantCode, w.Body)
 			}
 		})
 	}
@@ -564,12 +564,12 @@ func TestRouter_HealthDanReady(t *testing.T) {
 // membuat kube-proxy mencabut Pod ini dari daftar endpoint. Liveness TIDAK
 // boleh ikut berubah: liveness 503 justru membuat K8s me-restart pod yang
 // sedang berusaha berhenti dengan rapi.
-func TestRouter_ReadinessMatiSaatShutdown_LivenessTetapHidup(t *testing.T) {
+func TestRouter_ReadinessDeadOnShutdown_LivenessStaysAlive(t *testing.T) {
 	app := &App{}
-	app.siap.Store(true)
+	app.ready.Store(true)
 	router := app.Router()
 
-	app.siap.Store(false) // SIGTERM diterima
+	app.ready.Store(false) // SIGTERM diterima
 
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/ready", nil))
@@ -589,14 +589,14 @@ func TestRouter_ReadinessMatiSaatShutdown_LivenessTetapHidup(t *testing.T) {
 // termasuk bila port sudah terpakai. Di sini listener dibuat lebih dulu dan
 // galatnya diperiksa secara sinkron, lalu koneksi in-flight sungguhan
 // dibuktikan tetap selesai.
-func TestGracefulShutdown_RequestAktifTetapSelesai(t *testing.T) {
-	mulaiHandler := make(chan struct{})
-	lanjutHandler := make(chan struct{})
+func TestGracefulShutdown_ActiveRequestCompletes(t *testing.T) {
+	startHandler := make(chan struct{})
+	continueHandler := make(chan struct{})
 
 	srv := &http.Server{
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			close(mulaiHandler)
-			<-lanjutHandler
+			close(startHandler)
+			<-continueHandler
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte("selesai"))
 		}),
@@ -609,39 +609,39 @@ func TestGracefulShutdown_RequestAktifTetapSelesai(t *testing.T) {
 	}
 	go func() { _ = srv.Serve(ln) }()
 
-	hasil := make(chan int, 1)
+	result := make(chan int, 1)
 	go func() {
 		resp, err := http.Get("http://" + ln.Addr().String() + "/lambat")
 		if err != nil {
-			hasil <- 0
+			result <- 0
 			return
 		}
 		defer resp.Body.Close()
-		hasil <- resp.StatusCode
+		result <- resp.StatusCode
 	}()
 
-	<-mulaiHandler // permintaan sudah masuk handler
+	<-startHandler // permintaan sudah masuk handler
 
-	selesaiShutdown := make(chan error, 1)
+	shutdownDone := make(chan error, 1)
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		selesaiShutdown <- srv.Shutdown(ctx)
+		shutdownDone <- srv.Shutdown(ctx)
 	}()
 
 	// Shutdown TIDAK boleh selesai selama masih ada request aktif.
 	select {
-	case <-selesaiShutdown:
+	case <-shutdownDone:
 		t.Fatal("Shutdown kembali sebelum request aktif selesai")
 	case <-time.After(100 * time.Millisecond):
 	}
 
-	close(lanjutHandler)
+	close(continueHandler)
 
-	if kode := <-hasil; kode != http.StatusOK {
-		t.Errorf("request in-flight berakhir dengan %d, mau 200", kode)
+	if code := <-result; code != http.StatusOK {
+		t.Errorf("request in-flight berakhir dengan %d, mau 200", code)
 	}
-	if err := <-selesaiShutdown; err != nil {
+	if err := <-shutdownDone; err != nil {
 		t.Errorf("Shutdown: %v", err)
 	}
 }

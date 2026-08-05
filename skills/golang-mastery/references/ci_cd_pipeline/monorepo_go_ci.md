@@ -358,7 +358,7 @@ import (
 func TestGoWorkPathsExist(t *testing.T) {
 	content, err := os.ReadFile("../../go.work")
 	if err != nil {
-		t.Fatalf("Gagal membaca go.work: %v", err)
+		t.Fatalf("failed to read go.work: %v", err)
 	}
 
 	lines := strings.Split(string(content), "\n")
@@ -376,7 +376,7 @@ func TestGoWorkPathsExist(t *testing.T) {
 		if inUseBlock && line != "" {
 			path := strings.Trim(line, "\t ")
 			if _, err := os.Stat(filepath.Join("../..", path)); os.IsNotExist(err) {
-				t.Errorf("Path modul terdeklarasi di go.work namun tidak ada: %s", path)
+				t.Errorf("module path declared in go.work but does not exist: %s", path)
 			}
 		}
 	}
@@ -398,7 +398,7 @@ func TestNoCrossServiceImport(t *testing.T) {
 	cfg := &packages.Config{Mode: packages.NeedImports | packages.NeedName | packages.NeedFiles}
 	pkgs, err := packages.Load(cfg, "../../services/...")
 	if err != nil {
-		t.Fatalf("Gagal load packages: %v", err)
+		t.Fatalf("failed to load packages: %v", err)
 	}
 
 	for _, pkg := range pkgs {

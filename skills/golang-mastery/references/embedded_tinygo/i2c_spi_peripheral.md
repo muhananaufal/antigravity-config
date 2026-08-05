@@ -129,7 +129,7 @@ Menulis kode baca sensor terus menerus di loop tanpa mengecek `err`.
 // BAD: Blind reading tanpa peduli koneksi putus
 for {
     machine.I2C0.Tx(0x3C, []byte{0x00}, buf)
-    suhu := buf[0] // Jika kabel lepas, buf berisi sampah atau 0!
+    temp := buf[0] // Jika kabel lepas, buf berisi sampah atau 0!
     time.Sleep(time.Second)
 }
 ```

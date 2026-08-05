@@ -73,7 +73,7 @@ func parseJWTSafe(tokenStr string) error {
 	token, err := jwt.ParseWithClaims(tokenStr, &klaim, func(t *jwt.Token) (any, error) {
 		// Lapis kedua. Lihat catatan di bawah soal mana yang menyala lebih dulu.
 		if _, ok := t.Method.(*jwt.SigningMethodRSA); !ok {
-			return nil, fmt.Errorf("algoritma tak terduga: %v", t.Header["alg"])
+			return nil, fmt.Errorf("unexpected signing algorithm: %v", t.Header["alg"])
 		}
 		return publicKey, nil
 	}, jwt.WithValidMethods([]string{"RS256"})) // <- lapis pertama, dan yang menentukan
@@ -147,8 +147,8 @@ import (
 // sebelumnya hanya ditulis sebagai komentar sementara kodenya tetap
 // mengembalikan galat pustaka apa adanya.
 var (
-	ErrTokenTidakValid   = errors.New("token tidak valid")
-	ErrTokenDipakaiUlang = errors.New("refresh token dipakai ulang")
+	ErrInvalidToken = errors.New("invalid token")
+	ErrTokenReused  = errors.New("refresh token reused")
 )
 
 const (
@@ -220,7 +220,7 @@ func (p *PenyediaKunci) Verifikator(kid string) (*rsa.PublicKey, error) {
 	defer p.mu.RUnlock()
 	k, ada := p.publik[kid]
 	if !ada {
-		return nil, fmt.Errorf("kid tidak dikenal: %q", kid)
+		return nil, fmt.Errorf("unknown kid: %q", kid)
 	}
 	return k, nil
 }
@@ -261,7 +261,7 @@ type TokenPair struct {
 func acakID() (string, error) {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {
-		return "", fmt.Errorf("sumber acak gagal: %w", err)
+		return "", fmt.Errorf("entropy source failed: %w", err)
 	}
 	return hex.EncodeToString(b[:]), nil
 }
@@ -340,7 +340,7 @@ func (a *Auth) Login(ctx context.Context, userID string, roles []string) (*Token
 		return nil, err
 	}
 	if err := a.penyimpan.Simpan(ctx, keluarga, jti, umurRefreshToken); err != nil {
-		return nil, fmt.Errorf("simpan sesi: %w", err)
+		return nil, fmt.Errorf("save session: %w", err)
 	}
 	return a.terbitkanPasangan(userID, roles, keluarga, jti)
 }
@@ -364,7 +364,7 @@ func (a *Auth) terbitkanPasangan(userID string, roles []string, keluarga, jti st
 		},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("tanda tangani access token: %w", err)
+		return nil, fmt.Errorf("sign access token: %w", err)
 	}
 
 	refStr, err := a.tandatangani(RefreshClaims{
@@ -380,7 +380,7 @@ func (a *Auth) terbitkanPasangan(userID string, roles []string, keluarga, jti st
 		},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("tanda tangani refresh token: %w", err)
+		return nil, fmt.Errorf("sign refresh token: %w", err)
 	}
 	return &TokenPair{AccessToken: accStr, RefreshToken: refStr}, nil
 }
@@ -390,8 +390,8 @@ func (a *Auth) terbitkanPasangan(userID string, roles []string, keluarga, jti st
 func (a *Auth) Refresh(ctx context.Context, refreshStr string, roles []string) (*TokenPair, error) {
 	var klaim RefreshClaims
 	if err := a.uraikan(refreshStr, &klaim, audRefresh); err != nil {
-		slog.WarnContext(ctx, "refresh token ditolak", "galat", err)
-		return nil, ErrTokenTidakValid
+		slog.WarnContext(ctx, "refresh token rejected", "error", err)
+		return nil, ErrInvalidToken
 	}
 
 	calonJTI, err := acakID()
@@ -402,7 +402,7 @@ func (a *Auth) Refresh(ctx context.Context, refreshStr string, roles []string) (
 	status, jtiTerbit, err := a.penyimpan.Tukar(
 		ctx, klaim.Keluarga, klaim.ID, calonJTI, umurRefreshToken, tenggangRotasi)
 	if err != nil {
-		return nil, fmt.Errorf("tukar refresh token: %w", err)
+		return nil, fmt.Errorf("exchange refresh token: %w", err)
 	}
 
 	if status == TukarDipakaiUlang {
@@ -411,11 +411,11 @@ func (a *Auth) Refresh(ctx context.Context, refreshStr string, roles []string) (
 		// sama, dan tidak ada cara mengetahui mana yang mana. Seluruh keluarga
 		// dicabut dan pengguna login ulang.
 		if err := a.penyimpan.CabutKeluarga(ctx, klaim.Keluarga); err != nil {
-			return nil, fmt.Errorf("cabut keluarga sesi: %w", err)
+			return nil, fmt.Errorf("revoke session family: %w", err)
 		}
-		slog.ErrorContext(ctx, "refresh token dipakai ulang, keluarga sesi dicabut",
-			"keluarga", klaim.Keluarga, "subjek", klaim.Subject)
-		return nil, ErrTokenDipakaiUlang
+		slog.ErrorContext(ctx, "refresh token reused, session family revoked",
+			"family", klaim.Keluarga, "subject", klaim.Subject)
+		return nil, ErrTokenReused
 	}
 
 	return a.terbitkanPasangan(klaim.Subject, roles, klaim.Keluarga, jtiTerbit)
@@ -450,7 +450,7 @@ func (a *Auth) uraikan(tokenStr string, klaim jwt.Claims, audience string) error
 		// sebagai lapis kedua: kalau suatu saat WithValidMethods terhapus saat
 		// refactor, kelas serangan yang sama masih tertutup.
 		if _, ok := t.Method.(*jwt.SigningMethodRSA); !ok {
-			return nil, fmt.Errorf("algoritma tak terduga: %v", t.Header["alg"])
+			return nil, fmt.Errorf("unexpected signing algorithm: %v", t.Header["alg"])
 		}
 		kid, _ := t.Header["kid"].(string)
 		return a.kunci.Verifikator(kid)
@@ -468,7 +468,7 @@ func (a *Auth) uraikan(tokenStr string, klaim jwt.Claims, audience string) error
 		return err
 	}
 	if !token.Valid {
-		return errors.New("token terurai tetapi ditandai tidak valid")
+		return errors.New("token parsed but marked invalid")
 	}
 	return nil
 }
@@ -478,12 +478,12 @@ func (a *Auth) uraikan(tokenStr string, klaim jwt.Claims, audience string) error
 func (a *Auth) VerifyAccessToken(ctx context.Context, header string) (*AccessClaims, error) {
 	tokenStr, ok := potongBearer(header)
 	if !ok {
-		return nil, ErrTokenTidakValid
+		return nil, ErrInvalidToken
 	}
 	var klaim AccessClaims
 	if err := a.uraikan(tokenStr, &klaim, audAccess); err != nil {
-		slog.WarnContext(ctx, "access token ditolak", "galat", err)
-		return nil, ErrTokenTidakValid
+		slog.WarnContext(ctx, "access token rejected", "error", err)
+		return nil, ErrInvalidToken
 	}
 	return &klaim, nil
 }
@@ -586,10 +586,10 @@ func authUji(t *testing.T) (*Auth, *penyimpanMemori) {
 	t.Helper()
 	pk, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
-		t.Fatalf("bangkitkan kunci: %v", err)
+		t.Fatalf("generate key: %v", err)
 	}
 	simpan := newPenyimpanMemori()
-	return NewAuth(NewPenyediaKunci(Kunci{ID: "kunci-1", Privat: pk}), simpan), simpan
+	return NewAuth(NewPenyediaKunci(Kunci{ID: "key-1", Privat: pk}), simpan), simpan
 }
 
 func TestAlurNormalDanKlaim(t *testing.T) {
@@ -602,10 +602,10 @@ func TestAlurNormalDanKlaim(t *testing.T) {
 	}
 	klaim, err := a.VerifyAccessToken(ctx, "Bearer "+pasangan.AccessToken)
 	if err != nil {
-		t.Fatalf("token sah ditolak: %v", err)
+		t.Fatalf("valid token rejected: %v", err)
 	}
 	if klaim.Subject != "usr_998877" {
-		t.Errorf("Subject = %q, mau usr_998877", klaim.Subject)
+		t.Errorf("Subject = %q, want usr_998877", klaim.Subject)
 	}
 }
 
@@ -623,19 +623,19 @@ func TestPemakaianUlangRefreshMencabutSeluruhKeluarga(t *testing.T) {
 
 	baru, err := a.Refresh(ctx, awal.RefreshToken, nil)
 	if err != nil {
-		t.Fatalf("Refresh pertama: %v", err)
+		t.Fatalf("First refresh: %v", err)
 	}
 
 	// Pencuri memakai token LAMA setelah jendela tenggang berlalu.
 	simpan.lewatiTenggang()
 
-	if _, err := a.Refresh(ctx, awal.RefreshToken, nil); !errors.Is(err, ErrTokenDipakaiUlang) {
-		t.Fatalf("pemakaian ulang = %v, mau ErrTokenDipakaiUlang", err)
+	if _, err := a.Refresh(ctx, awal.RefreshToken, nil); !errors.Is(err, ErrTokenReused) {
+		t.Fatalf("reuse err = %v, want ErrTokenReused", err)
 	}
 
 	// Dan token SAH milik pengguna pun ikut mati — itu memang yang diinginkan.
-	if _, err := a.Refresh(ctx, baru.RefreshToken, nil); !errors.Is(err, ErrTokenDipakaiUlang) {
-		t.Fatalf("token sah setelah pencabutan = %v, mau ditolak juga", err)
+	if _, err := a.Refresh(ctx, baru.RefreshToken, nil); !errors.Is(err, ErrTokenReused) {
+		t.Fatalf("valid token after revocation err = %v, want rejected", err)
 	}
 }
 
@@ -651,11 +651,11 @@ func TestRefreshBersamaanDalamTenggangTidakDianggapPencurian(t *testing.T) {
 	}
 	pertama, err := a.Refresh(ctx, awal.RefreshToken, nil)
 	if err != nil {
-		t.Fatalf("Refresh pertama: %v", err)
+		t.Fatalf("First refresh: %v", err)
 	}
 	kedua, err := a.Refresh(ctx, awal.RefreshToken, nil)
 	if err != nil {
-		t.Fatalf("refresh kedua di dalam tenggang ditolak: %v", err)
+		t.Fatalf("second refresh in grace period rejected: %v", err)
 	}
 
 	// Keduanya WAJIB menerima refresh token dengan JTI yang sama. Bila jalur
@@ -664,19 +664,19 @@ func TestRefreshBersamaanDalamTenggangTidakDianggapPencurian(t *testing.T) {
 	// tepat kesalahan yang ingin dicegah tenggang ini.
 	var jtiPertama, jtiKedua RefreshClaims
 	if err := a.uraikan(pertama.RefreshToken, &jtiPertama, audRefresh); err != nil {
-		t.Fatalf("uraikan token pertama: %v", err)
+		t.Fatalf("parse first token: %v", err)
 	}
 	if err := a.uraikan(kedua.RefreshToken, &jtiKedua, audRefresh); err != nil {
-		t.Fatalf("uraikan token kedua: %v", err)
+		t.Fatalf("parse second token: %v", err)
 	}
 	if jtiPertama.ID != jtiKedua.ID {
-		t.Fatalf("JTI berbeda di dalam tenggang: %q vs %q", jtiPertama.ID, jtiKedua.ID)
+		t.Fatalf("different JTI in grace window: %q vs %q", jtiPertama.ID, jtiKedua.ID)
 	}
 
 	// Dan token itu memang yang aktif — refresh berikutnya harus lolos.
 	simpan.lewatiTenggang()
 	if _, err := a.Refresh(ctx, kedua.RefreshToken, nil); err != nil {
-		t.Fatalf("token hasil tenggang ditolak pada refresh berikutnya: %v", err)
+		t.Fatalf("grace period token rejected on subsequent refresh: %v", err)
 	}
 }
 
@@ -690,7 +690,7 @@ func TestBatasKeamananUraikan(t *testing.T) {
 	}
 	bagian := strings.Split(pasangan.AccessToken, ".")
 	if len(bagian) != 3 {
-		t.Fatalf("struktur JWT tidak wajar")
+		t.Fatalf("abnormal JWT structure")
 	}
 
 	// Asersi memakai galat SENTINEL jwt/v5, bukan pencocokan substring pesan.
@@ -704,7 +704,7 @@ func TestBatasKeamananUraikan(t *testing.T) {
 		mau   error
 	}{
 		{
-			nama:  "payload dirusak",
+			nama:  "tampered payload",
 			token: fmt.Sprintf("%s.%s.%s", bagian[0], "eyJ1aWQiOiJ1c3JfYWRtaW4ifQ", bagian[2]),
 			mau:   jwt.ErrTokenSignatureInvalid,
 		},
@@ -714,7 +714,7 @@ func TestBatasKeamananUraikan(t *testing.T) {
 			mau:   jwt.ErrTokenSignatureInvalid, // dilaporkan WithValidMethods
 		},
 		{
-			nama:  "refresh token dipakai sebagai access token",
+			nama:  "refresh token used as access token",
 			token: pasangan.RefreshToken,
 			mau:   jwt.ErrTokenInvalidAudience,
 		},
@@ -723,11 +723,11 @@ func TestBatasKeamananUraikan(t *testing.T) {
 		var klaim AccessClaims
 		err := a.uraikan(k.token, &klaim, audAccess)
 		if !errors.Is(err, k.mau) {
-			t.Errorf("%s: galat = %v, mau %v", k.nama, err, k.mau)
+			t.Errorf("%s: err = %v, want %v", k.nama, err, k.mau)
 		}
 		// Pintu publiknya WAJIB menyeragamkan semuanya menjadi satu galat.
-		if _, err := a.VerifyAccessToken(ctx, "Bearer "+k.token); !errors.Is(err, ErrTokenTidakValid) {
-			t.Errorf("%s: galat publik = %v, mau ErrTokenTidakValid", k.nama, err)
+		if _, err := a.VerifyAccessToken(ctx, "Bearer "+k.token); !errors.Is(err, ErrInvalidToken) {
+			t.Errorf("%s: public err = %v, want ErrInvalidToken", k.nama, err)
 		}
 	}
 }
@@ -743,20 +743,20 @@ func TestRotasiKunciTidakMembatalkanTokenLama(t *testing.T) {
 
 	pk2, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
-		t.Fatalf("bangkitkan kunci: %v", err)
+		t.Fatalf("generate key: %v", err)
 	}
-	a.kunci.Rotasi(Kunci{ID: "kunci-2", Privat: pk2})
+	a.kunci.Rotasi(Kunci{ID: "key-2", Privat: pk2})
 
 	// Token yang ditandatangani kunci lama HARUS tetap sah selama kunci lama
 	// belum dibuang. Tanpa `kid`, ini mustahil — dan rotasi kunci akan
 	// mem-401-kan seluruh pengguna sekaligus.
 	if _, err := a.VerifyAccessToken(ctx, "Bearer "+lama.AccessToken); err != nil {
-		t.Fatalf("token dari kunci lama ditolak setelah rotasi: %v", err)
+		t.Fatalf("token from old key rejected after rotation: %v", err)
 	}
 
-	a.kunci.Buang("kunci-1")
-	if _, err := a.VerifyAccessToken(ctx, "Bearer "+lama.AccessToken); !errors.Is(err, ErrTokenTidakValid) {
-		t.Fatalf("token dari kunci yang sudah dibuang = %v, mau ditolak", err)
+	a.kunci.Buang("key-1")
+	if _, err := a.VerifyAccessToken(ctx, "Bearer "+lama.AccessToken); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("token from discarded key = %v, want rejected", err)
 	}
 }
 
@@ -800,14 +800,14 @@ grep -rn -A5 'jwt.Parse\|ParseWithClaims' --include='*.go' . | grep -i 'SigningM
 
 # Umur token yang benar-benar diterbitkan
 kubectl logs -l app=api --since=1h \
-  | jq -r 'select(.event=="token_terbit") | .ttl_detik' | sort -n | uniq -c
+  | jq -r 'select(.event=="token_issued") | .ttl_seconds' | sort -n | uniq -c
 
 # Alasan token ditolak -- pola tak terduga di sini layak diselidiki
 kubectl logs -l app=api --since=1h \
-  | jq -r 'select(.event=="token_ditolak") | .alasan' | sort | uniq -c | sort -rn
+  | jq -r 'select(.event=="token_rejected") | .reason' | sort | uniq -c | sort -rn
 
 # Refresh token yang dipakai ulang = indikasi pencurian
-kubectl logs -l app=api --since=24h | grep -c 'refresh_dipakai_ulang'
+kubectl logs -l app=api --since=24h | grep -c 'refresh_reused'
 
 # Kunci dibangkitkan per proses? Ini membuat sistem gagal begitu replika > 1.
 grep -rn 'rsa.GenerateKey' --include='*.go' . | grep -v '_test.go'

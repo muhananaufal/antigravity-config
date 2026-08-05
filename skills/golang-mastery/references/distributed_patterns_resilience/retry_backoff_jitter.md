@@ -50,12 +50,12 @@ import (
 	"time"
 )
 
-var ErrKebijakanTidakValid = errors.New("kebijakan retry tidak valid")
+var ErrKebijakanTidakValid = errors.New("invalid retry policy")
 
 // ErrTransient adalah opt-in eksplisit. Bungkus galat domain Anda dengan ini
 // bila Anda TAHU ia layak diulang tetapi klasifikasi di bawah tidak mengenalinya
 // (misalnya galat dari driver pihak ketiga).
-var ErrTransient = errors.New("galat sementara")
+var ErrTransient = errors.New("transient error")
 
 // Policy mendefinisikan konfigurasi Retry.
 type Policy struct {
@@ -83,7 +83,7 @@ type Policy struct {
 // BaseDelay=0 sama berbahayanya: setiap jeda menjadi nol dan retry berubah
 // menjadi loop panas -- yaitu persis thundering herd yang berkas ini ada untuk
 // mencegahnya.
-func (p Policy) Validasi() error {
+func (p Policy) Validation() error {
 	if p.MaxAttempts < 1 {
 		return fmt.Errorf("%w: MaxAttempts=%d, minimal 1", ErrKebijakanTidakValid, p.MaxAttempts)
 	}
@@ -198,7 +198,7 @@ func IsTransientError(err error) bool {
 // sementara, dan mengulang input yang memicu panic hanya memicu panic lagi.
 // Bila hilir Anda memang memakai 500 untuk gangguan sementara, itu keputusan
 // sadar yang layak ditulis di sini -- bukan default.
-func StatusLayakDiulang(kode int) bool {
+func StatusRetryable(kode int) bool {
 	switch kode {
 	case http.StatusRequestTimeout, // 408
 		http.StatusTooManyRequests,    // 429
@@ -236,8 +236,8 @@ func JedaDariRetryAfter(h http.Header) (time.Duration, bool) {
 
 // DoWithRetry mengeksekusi operasi menggunakan Exponential Backoff + Jitter.
 func DoWithRetry(ctx context.Context, p Policy, operation func(ctx context.Context) error) error {
-	if errKebijakan := p.Validasi(); errKebijakan != nil {
-		return errKebijakan
+	if errPolicy := p.Validation(); errPolicy != nil {
+		return errPolicy
 	}
 
 	var err error
@@ -251,7 +251,7 @@ func DoWithRetry(ctx context.Context, p Policy, operation func(ctx context.Conte
 
 		// 2. Evaluasi Error (Jangan retry error fatal/client error)
 		if !IsTransientError(err) {
-			return fmt.Errorf("galat non-transient pada percobaan %d: %w", attempt+1, err)
+			return fmt.Errorf("non-transient error on attempt %d: %w", attempt+1, err)
 		}
 
 		// Jika ini adalah percobaan terakhir, tidak perlu menunggu
@@ -276,7 +276,7 @@ func DoWithRetry(ctx context.Context, p Policy, operation func(ctx context.Conte
 		// percobaan berikutnya pasti selesai.
 		if tenggat, ada := ctx.Deadline(); ada {
 			if sisa := time.Until(tenggat); tunggu >= sisa {
-				return fmt.Errorf("anggaran retry tidak muat di sisa tenggat (%v tunggu, %v sisa): %w (galat terakhir: %w)",
+				return fmt.Errorf("retry budget does not fit in remaining deadline (%v wait, %v remaining): %w (last error: %w)",
 					tunggu, sisa, context.DeadlineExceeded, err)
 			}
 		}
@@ -292,13 +292,13 @@ func DoWithRetry(ctx context.Context, p Policy, operation func(ctx context.Conte
 			// BISA lagi memeriksanya dengan errors.Is, sehingga alasan
 			// sebenarnya operasi ini gagal hilang tepat di lapisan yang
 			// tugasnya melaporkan kegagalan.
-			return fmt.Errorf("context dibatalkan saat menunggu retry: %w (galat terakhir: %w)", ctx.Err(), err)
+			return fmt.Errorf("context canceled while waiting for retry: %w (last error: %w)", ctx.Err(), err)
 		case <-timer.C:
 			// Lanjut ke percobaan berikutnya
 		}
 	}
 
-	return fmt.Errorf("habis setelah %d percobaan, galat terakhir: %w", p.MaxAttempts, err)
+	return fmt.Errorf("exhausted after %d attempts, last error: %w", p.MaxAttempts, err)
 }
 ```
 
@@ -375,10 +375,10 @@ err := DoWithRetry(ctx, policy, func(ctx context.Context) error {
         // ketimbang dibuang dan didial ulang di percobaan berikutnya.
         _, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
 
-        if StatusLayakDiulang(resp.StatusCode) {
+        if StatusRetryable(resp.StatusCode) {
             return fmt.Errorf("%w: status %d", ErrTransient, resp.StatusCode)
         }
-        return fmt.Errorf("status permanen %d", resp.StatusCode) // 400/401/404 -> berhenti
+        return fmt.Errorf("permanent status %d", resp.StatusCode) // 400/401/404 -> berhenti
     }
     return nil
 })
@@ -409,7 +409,7 @@ err := DoWithRetry(ctx, policy, func(ctx context.Context) error {
    type AnggaranRetry struct {
        mu     sync.Mutex
        token  float64
-       maks   float64
+       max   float64
        rasio  float64 // token yang dipulihkan per permintaan sukses
    }
 
@@ -426,8 +426,8 @@ err := DoWithRetry(ctx, policy, func(ctx context.Context) error {
    func (a *AnggaranRetry) CatatSukses() {
        a.mu.Lock()
        defer a.mu.Unlock()
-       if a.token += a.rasio; a.token > a.maks {
-           a.token = a.maks
+       if a.token += a.rasio; a.token > a.max {
+           a.token = a.max
        }
    }
    ```
@@ -491,7 +491,7 @@ func TestDoWithRetry_SuccessOnThirdAttempt(t *testing.T) {
 	err := DoWithRetry(ctx, policy, api.Call)
 
 	if err != nil {
-		t.Fatalf("mengharapkan sukses, dapat galat: %v", err)
+		t.Fatalf("expected success, got error: %v", err)
 	}
 	if api.attempts != 3 {
 		t.Fatalf("mengharapkan 3 percobaan, dapat %d", api.attempts)
@@ -525,9 +525,9 @@ func TestPolicy_Jeda(t *testing.T) {
 	}
 
 	// Full Jitter WAJIB bisa menghasilkan nyaris nol -- itu definisinya.
-	pNol := p
-	pNol.Acak = func() float64 { return 0 }
-	if got := pNol.Jeda(3); got != 0 {
+	pZero := p
+	pZero.Acak = func() float64 { return 0 }
+	if got := pZero.Jeda(3); got != 0 {
 		t.Errorf("Full Jitter dengan acak=0 harus 0, dapat %v", got)
 	}
 
@@ -561,22 +561,22 @@ func TestPolicy_Jeda_EksponenBesarTidakMeluap(t *testing.T) {
 // pernah dilakukan.
 func TestDoWithRetry_KebijakanTidakValidDitolak(t *testing.T) {
 	for nama, p := range map[string]Policy{
-		"kosong":            {},
+		"empty":            {},
 		"tanpa percobaan":   {MaxAttempts: 0, BaseDelay: time.Millisecond},
 		"base delay nol":    {MaxAttempts: 3},
 		"maks < base":       {MaxAttempts: 3, BaseDelay: time.Second, MaxDelay: time.Millisecond},
 	} {
 		t.Run(nama, func(t *testing.T) {
-			dipanggil := 0
+			called := 0
 			err := DoWithRetry(context.Background(), p, func(context.Context) error {
-				dipanggil++
+				called++
 				return nil
 			})
 			if !errors.Is(err, ErrKebijakanTidakValid) {
 				t.Errorf("mengharapkan ErrKebijakanTidakValid, dapat %v", err)
 			}
-			if dipanggil != 0 {
-				t.Errorf("operasi tidak boleh dijalankan dengan kebijakan tidak valid")
+			if called != 0 {
+				t.Errorf("operation must not be executed with invalid policy")
 			}
 		})
 	}
@@ -593,15 +593,15 @@ func TestDoWithRetry_ContextCancellation(t *testing.T) {
 		MaxDelay:    1 * time.Second,
 	}
 
-	galatHilir := galatSementara{}
+	errDownstream := galatSementara{}
 	start := time.Now()
 	err := DoWithRetry(ctx, policy, func(ctx context.Context) error {
-		return galatHilir
+		return errDownstream
 	})
 	duration := time.Since(start)
 
 	if err == nil {
-		t.Fatal("mengharapkan galat karena pembatalan context")
+		t.Fatal("expected error due to context cancellation")
 	}
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("mengharapkan deadline exceeded, dapat: %v", err)
@@ -610,13 +610,13 @@ func TestDoWithRetry_ContextCancellation(t *testing.T) {
 	// Galat TERAKHIR dari hilir wajib tetap bisa diperiksa. Dengan `%v` --
 	// bentuk yang lebih sering ditulis -- assersi ini gagal, dan pemanggil
 	// kehilangan satu-satunya petunjuk mengapa operasinya sebenarnya gagal.
-	if !errors.Is(err, galatHilir) {
-		t.Errorf("galat terakhir dari hilir hilang dari rantai: %v", err)
+	if !errors.Is(err, errDownstream) {
+		t.Errorf("last error from downstream lost from chain: %v", err)
 	}
 
 	// Memastikan tidak ter-block melebihi context timeout
 	if duration > 100*time.Millisecond {
-		t.Fatalf("retry terlalu lama (%v), select ctx.Done gagal", duration)
+		t.Fatalf("retry too long (%v), select ctx.Done failed", duration)
 	}
 }
 
@@ -628,7 +628,7 @@ func TestDoWithRetry_NoRetryOnNonTransient(t *testing.T) {
 	// context.Canceled, satu-satunya galat yang dulu ditolak IsTransientError,
 	// sehingga ia lolos justru karena cacatnya: 400 Bad Request, kegagalan
 	// validasi, dan galat unmarshal semuanya tetap diulang tanpa ketahuan.
-	galatValidasi := errors.New("400 bad request: field email tidak valid")
+	galatValidasi := errors.New("400 bad request: invalid email field")
 
 	attempts := 0
 	err := DoWithRetry(ctx, policy, func(ctx context.Context) error {
@@ -637,10 +637,10 @@ func TestDoWithRetry_NoRetryOnNonTransient(t *testing.T) {
 	})
 
 	if !errors.Is(err, galatValidasi) {
-		t.Fatalf("mengharapkan galat membungkus galatValidasi, dapat %v", err)
+		t.Fatalf("expected error wrapping validationError, got %v", err)
 	}
 	if attempts != 1 {
-		t.Fatalf("galat non-transient harus fail-fast di percobaan pertama, dapat %d percobaan", attempts)
+		t.Fatalf("non-transient error must fail-fast on first attempt, got %d attempts", attempts)
 	}
 }
 
@@ -653,12 +653,12 @@ func TestIsTransientError_Klasifikasi(t *testing.T) {
 		{"nil", nil, false},
 		{"context dibatalkan", context.Canceled, false},
 		{"tenggat terlampaui", context.DeadlineExceeded, false},
-		{"galat aplikasi biasa", errors.New("validasi gagal"), false},
-		{"galat aplikasi terbungkus", fmt.Errorf("simpan: %w", errors.New("kolom unik bentrok")), false},
-		{"opt-in eksplisit", fmt.Errorf("%w: status 503", ErrTransient), true},
+		{"ordinary application error", errors.New("validation failed"), false},
+		{"wrapped application error", fmt.Errorf("save: %w", errors.New("unique column conflict")), false},
+		{"explicit opt-in", fmt.Errorf("%w: status 503", ErrTransient), true},
 		{"timeout jaringan", galatSementara{}, true},
-		{"koneksi ditolak", syscall.ECONNREFUSED, true},
-		{"koneksi di-reset", fmt.Errorf("baca: %w", syscall.ECONNRESET), true},
+		{"connection refused", syscall.ECONNREFUSED, true},
+		{"connection reset", fmt.Errorf("read: %w", syscall.ECONNRESET), true},
 	}
 	for _, k := range kasus {
 		t.Run(k.nama, func(t *testing.T) {
@@ -677,7 +677,7 @@ func TestStatusLayakDiulang(t *testing.T) {
 		501: false,
 		200: false,
 	} {
-		if got := StatusLayakDiulang(kode); got != mau {
+		if got := StatusRetryable(kode); got != mau {
 			t.Errorf("StatusLayakDiulang(%d) = %v, mau %v", kode, got, mau)
 		}
 	}

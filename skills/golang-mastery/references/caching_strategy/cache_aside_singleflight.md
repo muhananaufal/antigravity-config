@@ -137,7 +137,7 @@ type User struct {
 // Custom errors
 var ErrNotFound = errors.New("record not found")
 
-const penandaTidakAda = "NOT_FOUND"
+const notFoundMarker = "NOT_FOUND"
 
 // UserCacheService membungkus klien Redis, singleflight group, dan logic DB.
 type UserCacheService struct {
@@ -151,10 +151,10 @@ type UserCacheService struct {
 	// pemanggil kunci itu selama query tersebut menggantung -- dan karena
 	// pemuatannya sengaja dilepas dari context pemanggil (lihat GetUser),
 	// tidak ada satu pun pembatalan klien yang bisa mengakhirinya.
-	BatasMuat time.Duration
+	LoadTimeout time.Duration
 
 	// Metrik, bukan log per pemanggil. Lihat catatan pada `shared` di GetUser.
-	digabung atomic.Int64
+	merged atomic.Int64
 }
 
 // NewUserCacheService inisiasi service caching
@@ -174,13 +174,13 @@ func NewUserCacheService(r *redis.Client, dbFn func(ctx context.Context, id stri
 		redisClient: r,
 		fetchFromDB: dbFn,
 		baseTTL:     15 * time.Minute,
-		BatasMuat:   5 * time.Second,
+		LoadTimeout:   5 * time.Second,
 	}
 }
 
 // JumlahDigabung mengembalikan berapa pemanggil yang hasilnya dipenuhi oleh
 // pemuatan milik pemanggil lain. Ini metrik kesehatan singleflight.
-func (s *UserCacheService) JumlahDigabung() int64 { return s.digabung.Load() }
+func (s *UserCacheService) MergedCount() int64 { return s.merged.Load() }
 
 // GetUser mengimplementasikan Cache-Aside yang divaksinasi Singleflight.
 func (s *UserCacheService) GetUser(ctx context.Context, id string) (*User, error) {
@@ -190,7 +190,7 @@ func (s *UserCacheService) GetUser(ctx context.Context, id string) (*User, error
 	val, err := s.redisClient.Get(ctx, cacheKey).Result()
 	switch {
 	case err == nil:
-		if val == penandaTidakAda {
+		if val == notFoundMarker {
 			return nil, ErrNotFound
 		}
 		var user User
@@ -200,8 +200,8 @@ func (s *UserCacheService) GetUser(ctx context.Context, id string) (*User, error
 			// `err` di sini dulu tertukar dengan galat Get yang sudah nil,
 			// sehingga peringatannya selalu mencetak "<nil>" dan galat
 			// unmarshal yang sebenarnya tidak pernah terlihat.
-			slog.WarnContext(ctx, "data cache rusak, jatuh ke sumber asli",
-				"key", cacheKey, "galat", uErr)
+			slog.WarnContext(ctx, "cache data corrupted, falling back to source",
+				"key", cacheKey, "error", uErr)
 		}
 	case errors.Is(err, redis.Nil):
 		// Cache miss biasa. Bukan galat.
@@ -212,8 +212,8 @@ func (s *UserCacheService) GetUser(ctx context.Context, id string) (*User, error
 		// Redis dan membanjiri log saat trafik normal.
 	default:
 		// Degradasi Layanan: Redis bermasalah -> catat, lanjut ke DB.
-		slog.ErrorContext(ctx, "GET redis gagal, melanjutkan ke sumber asli",
-			"key", cacheKey, "galat", err)
+		slog.ErrorContext(ctx, "redis GET failed, falling back to source",
+			"key", cacheKey, "error", err)
 	}
 
 	// FASE 2: Cache Miss -> Proteksi Thundering Herd via Singleflight.
@@ -234,9 +234,9 @@ func (s *UserCacheService) GetUser(ctx context.Context, id string) (*User, error
 	// melepaskan pembatalannya; WithTimeout memastikan pemuatan yang
 	// menggantung tidak menahan entri singleflight selamanya.
 	ch := s.requestGroup.DoChan(cacheKey, func() (any, error) {
-		ctxMuat, batal := context.WithTimeout(context.WithoutCancel(ctx), s.BatasMuat)
-		defer batal()
-		return s.muat(ctxMuat, cacheKey, id)
+		loadCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.LoadTimeout)
+		defer cancel()
+		return s.load(loadCtx, cacheKey, id)
 	})
 
 	select {
@@ -257,7 +257,7 @@ func (s *UserCacheService) GetUser(ctx context.Context, id string) (*User, error
 			// milidetik, tepat ketika sistem sedang tertekan dan log pipeline
 			// paling tidak sanggup menerimanya. Singleflight yang bekerja
 			// dengan baik justru menghasilkan log paling banyak.
-			s.digabung.Add(1)
+			s.merged.Add(1)
 		}
 		u, ok := res.Val.(*User)
 		if !ok {
@@ -265,7 +265,7 @@ func (s *UserCacheService) GetUser(ctx context.Context, id string) (*User, error
 			// mengembalikan `any`, dan assertion tanpa comma-ok adalah panic
 			// yang menunggu giliran -- di jalur yang dilewati setiap
 			// permintaan.
-			return nil, fmt.Errorf("tipe hasil singleflight tak terduga: %T", res.Val)
+			return nil, fmt.Errorf("unexpected singleflight result type: %T", res.Val)
 		}
 		// SALINAN PER PEMANGGIL. Ini bukan kehati-hatian berlebihan:
 		// singleflight secara desain membagikan SATU nilai ke semua penumpang,
@@ -274,14 +274,14 @@ func (s *UserCacheService) GetUser(ctx context.Context, id string) (*User, error
 		// semua pemanggil lain, dan `go test -race` akan menandainya. Tidak
 		// ada dalam tanda tangan `GetUser` yang memberi tahu pemanggil bahwa
 		// pointer itu dibagi.
-		salinan := *u
-		return &salinan, nil
+		uCopy := *u
+		return &uCopy, nil
 	}
 }
 
 // muat mengambil dari sumber asli dan mengisi cache. Dipanggil paling banyak
 // sekali per kunci per gelombang, di dalam singleflight.
-func (s *UserCacheService) muat(ctx context.Context, cacheKey, id string) (hasil any, err error) {
+func (s *UserCacheService) load(ctx context.Context, cacheKey, id string) (result any, err error) {
 	// Panic di dalam closure singleflight DISEBARKAN ULANG ke SEMUA goroutine
 	// yang menunggu kunci ini -- satu nil pointer dereference menjatuhkan
 	// ribuan permintaan sekaligus. Karena itu ia harus ditangkap DI SINI.
@@ -294,9 +294,9 @@ func (s *UserCacheService) muat(ctx context.Context, cacheKey, id string) (hasil
 	// mencatat stack-nya; tanpa stack, satu-satunya petunjuk letak bug hilang.
 	defer func() {
 		if r := recover(); r != nil {
-			slog.ErrorContext(ctx, "panic saat memuat cache",
+			slog.ErrorContext(ctx, "panic while loading cache",
 				"key", cacheKey, "panic", r, "stack", string(debug.Stack()))
-			hasil, err = nil, fmt.Errorf("panic saat memuat %s: %v", cacheKey, r)
+			result, err = nil, fmt.Errorf("panic while loading %s: %v", cacheKey, r)
 		}
 	}()
 
@@ -311,12 +311,12 @@ func (s *UserCacheService) muat(ctx context.Context, cacheKey, id string) (hasil
 		// Akibatnya proteksi penetrasi ini diam-diam tidak pernah aktif,
 		// justru bila Anda mengikuti anjuran korpus ini sendiri.
 		if errors.Is(dbErr, ErrNotFound) {
-			if setErr := s.redisClient.Set(ctx, cacheKey, penandaTidakAda, time.Minute).Err(); setErr != nil {
+			if setErr := s.redisClient.Set(ctx, cacheKey, notFoundMarker, time.Minute).Err(); setErr != nil {
 				// Dibuang dengan `_ =` berarti proteksi penetrasi bisa mati
 				// tanpa satu pun tanda. Justru penyerang yang membanjiri ID
 				// palsulah yang paling mungkin membuat Redis menolak tulisan.
-				slog.ErrorContext(ctx, "gagal menulis negative cache; proteksi penetrasi tidak aktif",
-					"key", cacheKey, "galat", setErr)
+				slog.ErrorContext(ctx, "failed to write negative cache; penetration protection inactive",
+					"key", cacheKey, "error", setErr)
 			}
 		}
 		return nil, dbErr
@@ -329,23 +329,23 @@ func (s *UserCacheService) muat(ctx context.Context, cacheKey, id string) (hasil
 
 	userBytes, jsonErr := json.Marshal(user)
 	if jsonErr != nil {
-		return nil, fmt.Errorf("menserialisasi user %s: %w", id, jsonErr)
+		return nil, fmt.Errorf("serialize user %s: %w", id, jsonErr)
 	}
 
-	if setErr := s.redisClient.Set(ctx, cacheKey, userBytes, s.ttlBerjitter()).Err(); setErr != nil {
+	if setErr := s.redisClient.Set(ctx, cacheKey, userBytes, s.jitteredTTL()).Err(); setErr != nil {
 		// Gagal menulis cache BUKAN alasan menggagalkan permintaan -- datanya
 		// sudah ada. Tapi ia harus terlihat: cache yang tidak pernah terisi
 		// berarti setiap permintaan menjadi cache miss, dan gejalanya hanya
 		// muncul sebagai beban DB yang tidak turun-turun.
-		slog.ErrorContext(ctx, "SET redis gagal; permintaan berikutnya akan tetap miss",
-			"key", cacheKey, "galat", setErr)
+		slog.ErrorContext(ctx, "redis SET failed; subsequent requests will still miss",
+			"key", cacheKey, "error", setErr)
 	}
 
 	return user, nil
 }
 
 // ttlBerjitter menambahkan variansi acak ke TTL dasar untuk mencegah Expiry Storm.
-func (s *UserCacheService) ttlBerjitter() time.Duration {
+func (s *UserCacheService) jitteredTTL() time.Duration {
 	// Variansi 0%–20% dari base TTL. rand.Float64 memakai sumber global yang
 	// sudah di-seed acak oleh runtime sejak Go 1.20 -- tidak perlu rand.Seed.
 	return s.baseTTL + time.Duration(float64(s.baseTTL)*0.20*rand.Float64())
@@ -421,8 +421,8 @@ redisClient.Set(ctx, "user:1", val, 24 * time.Hour)
 // Jitter 0–20% dari TTL dasar. Persentase, bukan durasi tetap: TTL 5 menit
 // dan TTL 24 jam butuh sebaran yang berbeda, dan angka tetap salah untuk
 // salah satunya.
-const dasar = 24 * time.Hour
-ttl := dasar + time.Duration(float64(dasar)*0.20*rand.Float64())
+const base = 24 * time.Hour
+ttl := base + time.Duration(float64(base)*0.20*rand.Float64())
 redisClient.Set(ctx, "user:1", val, ttl)
 ```
 
@@ -456,9 +456,9 @@ ch := s.requestGroup.DoChan(cacheKey, func() (any, error) {
     //
     // ✅ WithoutCancel + WithTimeout (Go 1.21+): nilai context dipertahankan,
     //    pembatalan dilepas, dan pemuatannya tetap punya batas.
-    ctxMuat, batal := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-    defer batal()
-    return s.muat(ctxMuat, cacheKey, id)
+    loadCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+    defer cancel()
+    return s.load(loadCtx, cacheKey, id)
 })
 
 select {
@@ -487,7 +487,7 @@ defer func() {
     if r := recover(); r != nil {
         slog.ErrorContext(ctx, "panic saat memuat cache",
             "key", cacheKey, "panic", r, "stack", string(debug.Stack()))  // 1. stack
-        hasil, err = nil, fmt.Errorf("panic saat memuat %s: %v", cacheKey, r)  // 2. jadi galat
+        result, err = nil, fmt.Errorf("panic saat memuat %s: %v", cacheKey, r)  // 2. jadi galat
     }
 }()
 ```
@@ -577,7 +577,7 @@ func TestUserCacheService_Singleflight_Suppression(t *testing.T) {
 	// sebagian bisa tiba SETELAH pemuatan pertama selesai -- lalu lolos lewat
 	// cache, bukan lewat singleflight. Ujinya tetap hijau, tapi yang terbukti
 	// bukan yang dimaksud.
-	gerbang := make(chan struct{})
+	gate := make(chan struct{})
 	var wg sync.WaitGroup
 	const requestCount = 500
 
@@ -585,7 +585,7 @@ func TestUserCacheService_Singleflight_Suppression(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			<-gerbang
+			<-gate
 			user, err := svc.GetUser(ctx, "999") // Kunci id yang sama "999"
 			// assert (bukan require) memang benar di dalam goroutine:
 			// require memanggil t.FailNow, dan t.FailNow dari goroutine
@@ -595,14 +595,14 @@ func TestUserCacheService_Singleflight_Suppression(t *testing.T) {
 			}
 		}()
 	}
-	close(gerbang)
+	close(gate)
 	wg.Wait()
 
 	// Verifikasi Kritis: Meskipun ada 500 panggilan konkuren, eksekusi Fetch DB HANYA BOLEH 1 KALI.
-	assert.Equal(t, int32(1), atomic.LoadInt32(&dbHitCounter), "Singleflight gagal! Database dihajar!")
+	assert.Equal(t, int32(1), atomic.LoadInt32(&dbHitCounter), "Singleflight failed! Database hammered!")
 	// Dan buktikan penekanannya benar-benar terjadi -- bukan sekadar semua
 	// pemanggil kebetulan mendapat cache hit.
-	assert.Greater(t, svc.JumlahDigabung(), int64(0), "tidak ada satu pun pemanggil yang digabung")
+	assert.Greater(t, svc.MergedCount(), int64(0), "tidak ada satu pun pemanggil yang digabung")
 }
 
 // TEST CASE 2b: Pembatalan oleh SATU pemanggil tidak boleh menjatuhkan yang lain.
@@ -610,37 +610,37 @@ func TestUserCacheService_Singleflight_Suppression(t *testing.T) {
 // Inilah uji yang membuktikan perbedaan antara `Do(key, fn(ctx))` dan
 // `DoChan` + context yang dilepas. Dengan bentuk lama, pemanggil kedua
 // menerima context.Canceled yang bukan miliknya dan cache tetap kosong.
-func TestUserCacheService_PembatalanSatuKlienTidakMenularkanKegagalan(t *testing.T) {
+func TestUserCacheService_ClientCancellationDoesNotPropagate(t *testing.T) {
 	rdb := setupTestRedis(t)
 
-	mulai := make(chan struct{})
+	start := make(chan struct{})
 	var dbHits int32
 	svc := cache.NewUserCacheService(rdb, func(c context.Context, id string) (*cache.User, error) {
 		if atomic.AddInt32(&dbHits, 1) == 1 {
-			close(mulai)
+			close(start)
 		}
 		time.Sleep(150 * time.Millisecond)
 		return &cache.User{ID: id, Name: "Selamat", Role: "User"}, nil
 	})
 
-	ctxPertama, batal := context.WithCancel(context.Background())
+	firstCtx, cancel := context.WithCancel(context.Background())
 	go func() {
-		_, _ = svc.GetUser(ctxPertama, "777")
+		_, _ = svc.GetUser(firstCtx, "777")
 	}()
-	<-mulai // pemuatan sudah berjalan
+	<-start // pemuatan sudah berjalan
 
 	// Pemanggil kedua menumpang pemuatan yang sama.
-	hasil := make(chan error, 1)
+	result := make(chan error, 1)
 	go func() {
 		_, err := svc.GetUser(context.Background(), "777")
-		hasil <- err
+		result <- err
 	}()
 
 	time.Sleep(20 * time.Millisecond)
-	batal() // klien pertama menutup koneksinya
+	cancel() // klien pertama menutup koneksinya
 
 	select {
-	case err := <-hasil:
+	case err := <-result:
 		assert.NoError(t, err, "pembatalan klien pertama menular ke klien kedua")
 	case <-time.After(2 * time.Second):
 		t.Fatal("klien kedua tidak pernah mendapat hasil")
@@ -656,20 +656,20 @@ func TestUserCacheService_PembatalanSatuKlienTidakMenularkanKegagalan(t *testing
 
 // TEST CASE 2c: Hasil singleflight dibagikan, jadi setiap pemanggil wajib
 // menerima SALINANNYA SENDIRI. Jalankan dengan -race.
-func TestUserCacheService_HasilTidakDibagiSebagaiPointerSama(t *testing.T) {
+func TestUserCacheService_ResultNotSharedAsSamePointer(t *testing.T) {
 	rdb := setupTestRedis(t)
 	svc := cache.NewUserCacheService(rdb, func(c context.Context, id string) (*cache.User, error) {
 		time.Sleep(50 * time.Millisecond)
 		return &cache.User{ID: id, Name: "Asli", Role: "User"}, nil
 	})
 
-	gerbang := make(chan struct{})
+	gate := make(chan struct{})
 	var wg sync.WaitGroup
 	for i := 0; i < 20; i++ {
 		wg.Add(1)
 		go func(n int) {
 			defer wg.Done()
-			<-gerbang
+			<-gate
 			u, err := svc.GetUser(context.Background(), "555")
 			if !assert.NoError(t, err) {
 				return
@@ -680,7 +680,7 @@ func TestUserCacheService_HasilTidakDibagiSebagaiPointerSama(t *testing.T) {
 			assert.Equal(t, fmt.Sprintf("pemanggil-%d", n), u.Name)
 		}(i)
 	}
-	close(gerbang)
+	close(gate)
 	wg.Wait()
 }
 

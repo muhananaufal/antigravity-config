@@ -99,33 +99,33 @@ import (
 )
 
 // Asal menandai dari lapis mana sebuah nilai berasal.
-type Asal string
+type Source string
 
 const (
-	AsalDefault Asal = "default"
-	AsalBerkas  Asal = "berkas"
-	AsalEnv     Asal = "env"
-	AsalFlag    Asal = "flag"
+	SourceDefault Source = "default"
+	SourceFile  Source = "berkas"
+	SourceEnv     Source = "env"
+	SourceFlag    Source = "flag"
 )
 
 // Nilai membungkus nilai efektif beserta asalnya.
 // Menyimpan asal adalah inti dari seluruh berkas ini — tanpa itu,
 // `config debug` mustahil dan salah konfigurasi jadi tak terlacak.
-type Nilai[T any] struct {
+type Value[T any] struct {
 	V    T
-	Asal Asal
+	Source Source
 }
 
 // Config adalah konfigurasi efektif aplikasi.
 type Config struct {
-	DBHost   Nilai[string]
-	DBPort   Nilai[int]
-	Timeout  Nilai[time.Duration]
-	LogLevel Nilai[string]
+	DBHost   Value[string]
+	DBPort   Value[int]
+	Timeout  Value[time.Duration]
+	LogLevel Value[string]
 }
 
 // berkasConfig memetakan struktur YAML.
-type berkasConfig struct {
+type fileConfig struct {
 	DB struct {
 		Host *string `yaml:"host"`
 		Port *int    `yaml:"port"`
@@ -144,20 +144,20 @@ type Flags struct {
 }
 
 // ErrValidasi menandai konfigurasi yang tidak masuk akal.
-var ErrValidasi = errors.New("config: nilai tidak valid")
+var ErrValidation = errors.New("config: nilai tidak valid")
 
 // levelSah adalah level log yang diterima.
-var levelSah = map[string]bool{"debug": true, "info": true, "warn": true, "error": true}
+var validLevels = map[string]bool{"debug": true, "info": true, "warn": true, "error": true}
 
 // Muat menggabungkan keempat lapis sesuai presedensi.
 // Urutan penerapan sengaja dari yang PALING LEMAH ke PALING KUAT,
 // sehingga lapis berikutnya menimpa — dan asalnya ikut tercatat.
-func Muat(path string, env func(string) (string, bool), f Flags) (*Config, error) {
+func Load(path string, env func(string) (string, bool), f Flags) (*Config, error) {
 	c := &Config{
-		DBHost:   Nilai[string]{"localhost", AsalDefault},
-		DBPort:   Nilai[int]{5432, AsalDefault},
-		Timeout:  Nilai[time.Duration]{10 * time.Second, AsalDefault},
-		LogLevel: Nilai[string]{"info", AsalDefault},
+		DBHost:   Value[string]{"localhost", SourceDefault},
+		DBPort:   Value[int]{5432, SourceDefault},
+		Timeout:  Value[time.Duration]{10 * time.Second, SourceDefault},
+		LogLevel: Value[string]{"info", SourceDefault},
 	}
 
 	// Lapis 2: berkas. Berkas tidak ada BUKAN error — itu kasus normal.
@@ -165,25 +165,25 @@ func Muat(path string, env func(string) (string, bool), f Flags) (*Config, error
 		raw, err := os.ReadFile(path)
 		switch {
 		case err == nil:
-			var bc berkasConfig
+			var bc fileConfig
 			if err := yaml.Unmarshal(raw, &bc); err != nil {
 				return nil, fmt.Errorf("urai %s: %w", path, err)
 			}
 			if bc.DB.Host != nil {
-				c.DBHost = Nilai[string]{*bc.DB.Host, AsalBerkas}
+				c.DBHost = Value[string]{*bc.DB.Host, SourceFile}
 			}
 			if bc.DB.Port != nil {
-				c.DBPort = Nilai[int]{*bc.DB.Port, AsalBerkas}
+				c.DBPort = Value[int]{*bc.DB.Port, SourceFile}
 			}
 			if bc.Timeout != nil {
 				d, perr := time.ParseDuration(*bc.Timeout)
 				if perr != nil {
 					return nil, fmt.Errorf("%s: timeout %q: %w", path, *bc.Timeout, perr)
 				}
-				c.Timeout = Nilai[time.Duration]{d, AsalBerkas}
+				c.Timeout = Value[time.Duration]{d, SourceFile}
 			}
 			if bc.LogLevel != nil {
-				c.LogLevel = Nilai[string]{*bc.LogLevel, AsalBerkas}
+				c.LogLevel = Value[string]{*bc.LogLevel, SourceFile}
 			}
 		case errors.Is(err, os.ErrNotExist):
 			// Sengaja diabaikan. Berkas konfigurasi bersifat opsional.
@@ -194,41 +194,41 @@ func Muat(path string, env func(string) (string, bool), f Flags) (*Config, error
 
 	// Lapis 3: environment.
 	if v, ok := env("APP_DB_HOST"); ok {
-		c.DBHost = Nilai[string]{v, AsalEnv}
+		c.DBHost = Value[string]{v, SourceEnv}
 	}
 	if v, ok := env("APP_DB_PORT"); ok {
 		n, err := strconv.Atoi(v)
 		if err != nil {
 			return nil, fmt.Errorf("APP_DB_PORT %q: %w", v, err)
 		}
-		c.DBPort = Nilai[int]{n, AsalEnv}
+		c.DBPort = Value[int]{n, SourceEnv}
 	}
 	if v, ok := env("APP_TIMEOUT"); ok {
 		d, err := time.ParseDuration(v)
 		if err != nil {
 			return nil, fmt.Errorf("APP_TIMEOUT %q: %w", v, err)
 		}
-		c.Timeout = Nilai[time.Duration]{d, AsalEnv}
+		c.Timeout = Value[time.Duration]{d, SourceEnv}
 	}
 	if v, ok := env("APP_LOG_LEVEL"); ok {
-		c.LogLevel = Nilai[string]{v, AsalEnv}
+		c.LogLevel = Value[string]{v, SourceEnv}
 	}
 
 	// Lapis 4: flag — paling menang.
 	if f.DBHost != nil {
-		c.DBHost = Nilai[string]{*f.DBHost, AsalFlag}
+		c.DBHost = Value[string]{*f.DBHost, SourceFlag}
 	}
 	if f.DBPort != nil {
-		c.DBPort = Nilai[int]{*f.DBPort, AsalFlag}
+		c.DBPort = Value[int]{*f.DBPort, SourceFlag}
 	}
 	if f.Timeout != nil {
-		c.Timeout = Nilai[time.Duration]{*f.Timeout, AsalFlag}
+		c.Timeout = Value[time.Duration]{*f.Timeout, SourceFlag}
 	}
 	if f.LogLevel != nil {
-		c.LogLevel = Nilai[string]{*f.LogLevel, AsalFlag}
+		c.LogLevel = Value[string]{*f.LogLevel, SourceFlag}
 	}
 
-	if err := c.Validasi(); err != nil {
+	if err := c.Validate(); err != nil {
 		return nil, err
 	}
 	return c, nil
@@ -236,37 +236,37 @@ func Muat(path string, env func(string) (string, bool), f Flags) (*Config, error
 
 // Validasi menolak konfigurasi yang mustahil SEBELUM aplikasi berjalan.
 // Gagal saat boot jauh lebih murah daripada gagal saat request pertama.
-func (c *Config) Validasi() error {
-	var masalah []string
+func (c *Config) Validate() error {
+	var issues []string
 	if c.DBHost.V == "" {
-		masalah = append(masalah, "db.host kosong")
+		issues = append(issues, "db.host empty")
 	}
 	if c.DBPort.V < 1 || c.DBPort.V > 65535 {
-		masalah = append(masalah, fmt.Sprintf("db.port %d di luar 1-65535", c.DBPort.V))
+		issues = append(issues, fmt.Sprintf("db.port %d di luar 1-65535", c.DBPort.V))
 	}
 	if c.Timeout.V <= 0 {
-		masalah = append(masalah, fmt.Sprintf("timeout %v harus positif", c.Timeout.V))
+		issues = append(issues, fmt.Sprintf("timeout %v harus positif", c.Timeout.V))
 	}
-	if !levelSah[c.LogLevel.V] {
-		masalah = append(masalah, fmt.Sprintf("log_level %q tidak dikenal", c.LogLevel.V))
+	if !validLevels[c.LogLevel.V] {
+		issues = append(issues, fmt.Sprintf("log_level %q tidak dikenal", c.LogLevel.V))
 	}
-	if len(masalah) > 0 {
-		return fmt.Errorf("%w: %s", ErrValidasi, strings.Join(masalah, "; "))
+	if len(issues) > 0 {
+		return fmt.Errorf("%w: %s", ErrValidation, strings.Join(issues, "; "))
 	}
 	return nil
 }
 
 // Jejak mengembalikan penjelasan asal tiap kunci, terurut.
 // Inilah keluaran perintah `app config debug`.
-func (c *Config) Jejak() []string {
-	baris := []string{
-		fmt.Sprintf("db.host   = %-20s <- %s", c.DBHost.V, c.DBHost.Asal),
-		fmt.Sprintf("db.port   = %-20d <- %s", c.DBPort.V, c.DBPort.Asal),
-		fmt.Sprintf("timeout   = %-20v <- %s", c.Timeout.V, c.Timeout.Asal),
-		fmt.Sprintf("log.level = %-20s <- %s", c.LogLevel.V, c.LogLevel.Asal),
+func (c *Config) Trace() []string {
+	lines := []string{
+		fmt.Sprintf("db.host   = %-20s <- %s", c.DBHost.V, c.DBHost.Source),
+		fmt.Sprintf("db.port   = %-20d <- %s", c.DBPort.V, c.DBPort.Source),
+		fmt.Sprintf("timeout   = %-20v <- %s", c.Timeout.V, c.Timeout.Source),
+		fmt.Sprintf("log.level = %-20s <- %s", c.LogLevel.V, c.LogLevel.Source),
 	}
-	sort.Strings(baris)
-	return baris
+	sort.Strings(lines)
+	return lines
 }
 ```
 
@@ -285,58 +285,58 @@ import (
 )
 
 // envDari membuat pencari env palsu — tanpa menyentuh env proses.
-func envDari(m map[string]string) func(string) (string, bool) {
+func envFrom(m map[string]string) func(string) (string, bool) {
 	return func(k string) (string, bool) { v, ok := m[k]; return v, ok }
 }
 
-func tulisBerkas(t *testing.T, isi string) string {
+func writeFile(t *testing.T, content string) string {
 	t.Helper()
 	p := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(p, []byte(isi), 0o600); err != nil {
+	if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return p
 }
 
-func TestPresedensi_FlagMenangSegalanya(t *testing.T) {
-	p := tulisBerkas(t, "db:\n  host: file-db\n")
+func TestPrecedence_FlagMenangSegalanya(t *testing.T) {
+	p := writeFile(t, "db:\n  host: file-db\n")
 	host := "flag-db"
-	c, err := Muat(p, envDari(map[string]string{"APP_DB_HOST": "env-db"}), Flags{DBHost: &host})
+	c, err := Load(p, envFrom(map[string]string{"APP_DB_HOST": "env-db"}), Flags{DBHost: &host})
 	if err != nil {
 		t.Fatalf("tak terduga: %v", err)
 	}
-	if c.DBHost.V != "flag-db" || c.DBHost.Asal != AsalFlag {
-		t.Fatalf("mau flag-db dari flag, dapat %q dari %s", c.DBHost.V, c.DBHost.Asal)
+	if c.DBHost.V != "flag-db" || c.DBHost.Source != SourceFlag {
+		t.Fatalf("mau flag-db dari flag, dapat %q dari %s", c.DBHost.V, c.DBHost.Source)
 	}
 }
 
-func TestPresedensi_EnvMenangAtasBerkas(t *testing.T) {
-	p := tulisBerkas(t, "db:\n  host: file-db\n")
-	c, err := Muat(p, envDari(map[string]string{"APP_DB_HOST": "env-db"}), Flags{})
+func TestPrecedence_EnvMenangAtasBerkas(t *testing.T) {
+	p := writeFile(t, "db:\n  host: file-db\n")
+	c, err := Load(p, envFrom(map[string]string{"APP_DB_HOST": "env-db"}), Flags{})
 	if err != nil {
 		t.Fatalf("tak terduga: %v", err)
 	}
-	if c.DBHost.V != "env-db" || c.DBHost.Asal != AsalEnv {
-		t.Fatalf("mau env-db dari env, dapat %q dari %s", c.DBHost.V, c.DBHost.Asal)
+	if c.DBHost.V != "env-db" || c.DBHost.Source != SourceEnv {
+		t.Fatalf("mau env-db dari env, dapat %q dari %s", c.DBHost.V, c.DBHost.Source)
 	}
 }
 
-func TestPresedensi_BerkasMenangAtasDefault(t *testing.T) {
-	p := tulisBerkas(t, "db:\n  host: file-db\n  port: 6543\n")
-	c, err := Muat(p, envDari(nil), Flags{})
+func TestPrecedence_BerkasMenangAtasDefault(t *testing.T) {
+	p := writeFile(t, "db:\n  host: file-db\n  port: 6543\n")
+	c, err := Load(p, envFrom(nil), Flags{})
 	if err != nil {
 		t.Fatalf("tak terduga: %v", err)
 	}
-	if c.DBPort.V != 6543 || c.DBPort.Asal != AsalBerkas {
-		t.Fatalf("mau 6543 dari berkas, dapat %d dari %s", c.DBPort.V, c.DBPort.Asal)
+	if c.DBPort.V != 6543 || c.DBPort.Source != SourceFile {
+		t.Fatalf("mau 6543 dari berkas, dapat %d dari %s", c.DBPort.V, c.DBPort.Source)
 	}
-	if c.Timeout.Asal != AsalDefault {
-		t.Fatalf("timeout tak disebut mana pun harus default, dapat %s", c.Timeout.Asal)
+	if c.Timeout.Source != SourceDefault {
+		t.Fatalf("timeout tak disebut mana pun harus default, dapat %s", c.Timeout.Source)
 	}
 }
 
-func TestBerkasTidakAda_BukanError(t *testing.T) {
-	c, err := Muat("/tidak/ada/config.yaml", envDari(nil), Flags{})
+func TestFileNotExist_BukanError(t *testing.T) {
+	c, err := Load("/tidak/ada/config.yaml", envFrom(nil), Flags{})
 	if err != nil {
 		t.Fatalf("berkas opsional tidak boleh jadi error: %v", err)
 	}
@@ -345,42 +345,42 @@ func TestBerkasTidakAda_BukanError(t *testing.T) {
 	}
 }
 
-func TestFlagKosongEksplisitTetapMenang(t *testing.T) {
+func TestEmptyFlagStillWins(t *testing.T) {
 	// Membedakan "tidak disetel" dari "disetel ke kosong" — inilah
 	// alasan Flags memakai pointer, bukan nilai biasa.
-	p := tulisBerkas(t, "log_level: debug\n")
-	kosong := ""
-	_, err := Muat(p, envDari(nil), Flags{LogLevel: &kosong})
-	if !errors.Is(err, ErrValidasi) {
-		t.Fatalf("flag kosong eksplisit harus menimpa lalu gagal validasi, dapat %v", err)
+	p := writeFile(t, "log_level: debug\n")
+	empty := ""
+	_, err := Load(p, envFrom(nil), Flags{LogLevel: &empty})
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("explicit empty flag must override and then fail validation, got %v", err)
 	}
 }
 
-func TestValidasi_MenolakNilaiMustahil(t *testing.T) {
+func TestValidation_MenolakNilaiMustahil(t *testing.T) {
 	port := 70000
-	_, err := Muat("", envDari(nil), Flags{DBPort: &port})
-	if !errors.Is(err, ErrValidasi) {
-		t.Fatalf("mau ErrValidasi, dapat %v", err)
+	_, err := Load("", envFrom(nil), Flags{DBPort: &port})
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("mau ErrValidation, dapat %v", err)
 	}
 	if !strings.Contains(err.Error(), "di luar 1-65535") {
 		t.Fatalf("pesan harus menyebut batas, dapat %v", err)
 	}
 }
 
-func TestEnvSalahTipe_ErrorJelas(t *testing.T) {
-	_, err := Muat("", envDari(map[string]string{"APP_DB_PORT": "bukan-angka"}), Flags{})
+func TestEnvWrongType_ClearError(t *testing.T) {
+	_, err := Load("", envFrom(map[string]string{"APP_DB_PORT": "bukan-angka"}), Flags{})
 	if err == nil || !strings.Contains(err.Error(), "APP_DB_PORT") {
-		t.Fatalf("error harus menyebut nama variabel, dapat %v", err)
+		t.Fatalf("error harus menyebut name variabel, dapat %v", err)
 	}
 }
 
-func TestJejak_MenyebutAsal(t *testing.T) {
+func TestTrace_MentionsSource(t *testing.T) {
 	host := "flag-db"
-	c, err := Muat("", envDari(map[string]string{"APP_TIMEOUT": "45s"}), Flags{DBHost: &host})
+	c, err := Load("", envFrom(map[string]string{"APP_TIMEOUT": "45s"}), Flags{DBHost: &host})
 	if err != nil {
 		t.Fatalf("tak terduga: %v", err)
 	}
-	j := strings.Join(c.Jejak(), "\n")
+	j := strings.Join(c.Trace(), "\n")
 	if !strings.Contains(j, "flag") || !strings.Contains(j, "env") || !strings.Contains(j, "default") {
 		t.Fatalf("jejak harus menyebut ketiga asal:\n%s", j)
 	}
@@ -408,7 +408,7 @@ Baris terakhir menimpa dengan string kosong ketika flag tidak diberikan, menghap
 
 ```go
 if f.DBHost != nil { // hanya bila flag benar-benar diberikan
-	c.DBHost = Nilai[string]{*f.DBHost, AsalFlag}
+	c.DBHost = Value[string]{*f.DBHost, SourceFlag}
 }
 ```
 
@@ -434,7 +434,7 @@ db:
 Dan pastikan `Jejak()` **DILARANG** mencetak nilai rahasia — cukup asalnya:
 
 ```go
-fmt.Sprintf("db.password = %-20s <- %s", "********", c.DBPassword.Asal)
+fmt.Sprintf("db.password = %-20s <- %s", "********", c.DBPassword.Source)
 ```
 
 **❌ SALAH — validasi baru terjadi saat nilai dipakai**

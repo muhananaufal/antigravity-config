@@ -168,22 +168,22 @@ var idTugas = map[string]int64{
 func ExecuteExclusiveLeaderTask(ctx context.Context, pool *pgxpool.Pool, logger *slog.Logger, taskName string, fn func(context.Context) error) error {
 	lockID, ada := idTugas[taskName]
 	if !ada {
-		return fmt.Errorf("tugas %q tidak terdaftar di idTugas", taskName)
+		return fmt.Errorf("task %q is not registered in idTugas", taskName)
 	}
 
 	// Koneksi khusus: lock sesi terikat pada KONEKSI, bukan pada pool.
 	conn, err := pool.Acquire(ctx)
 	if err != nil {
-		return fmt.Errorf("ambil koneksi leader: %w", err)
+		return fmt.Errorf("acquire leader connection: %w", err)
 	}
 	defer conn.Release()
 
 	var dapat bool
 	if err := conn.QueryRow(ctx, "SELECT pg_try_advisory_lock($1)", lockID).Scan(&dapat); err != nil {
-		return fmt.Errorf("ambil advisory lock: %w", err)
+		return fmt.Errorf("acquire advisory lock: %w", err)
 	}
 	if !dapat {
-		logger.DebugContext(ctx, "tugas sedang berjalan di node lain, dilewati",
+		logger.DebugContext(ctx, "task is running on another node, skipping",
 			slog.String("task", taskName))
 		return nil
 	}
@@ -196,18 +196,18 @@ func ExecuteExclusiveLeaderTask(ctx context.Context, pool *pgxpool.Pool, logger 
 		lepasCtx, batal := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer batal()
 		if _, err := conn.Exec(lepasCtx, "SELECT pg_advisory_unlock($1)", lockID); err != nil {
-			logger.ErrorContext(ctx, "GAGAL melepas advisory lock -- node lain akan terblokir",
+			logger.ErrorContext(ctx, "FAILED to release advisory lock -- other nodes will be blocked",
 				slog.String("task", taskName), slog.String("error", err.Error()))
 		}
 	}()
 
-	logger.InfoContext(ctx, "advisory lock diperoleh, menjalankan tugas",
+	logger.InfoContext(ctx, "advisory lock acquired, executing task",
 		slog.String("task", taskName))
 
 	// fn berjalan TANPA transaksi terbuka. Ia bebas memakai pool secara
 	// normal, dan durasinya tidak menahan snapshot apa pun.
 	if err := fn(ctx); err != nil {
-		return fmt.Errorf("tugas leader gagal: %w", err)
+		return fmt.Errorf("leader task failed: %w", err)
 	}
 	return nil
 }
@@ -248,7 +248,7 @@ func ProcessPaymentAsync(ctx context.Context, pool *pgxpool.Pool, userID int) er
 	tag, err := pool.Exec(ctx,
 		"UPDATE users SET status='paying' WHERE id=$1 AND status='idle'", userID)
 	if err != nil {
-		return fmt.Errorf("klaim pembayaran: %w", err)
+		return fmt.Errorf("claim payment: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
 		// Pemanggil lain sudah memegangnya. JANGAN memanggil Stripe.
@@ -262,7 +262,7 @@ func ProcessPaymentAsync(ctx context.Context, pool *pgxpool.Pool, userID int) er
 		// Konteks terpisah: ctx mungkin sudah mati bersama permintaannya.
 		_, _ = pool.Exec(context.WithoutCancel(ctx),
 			"UPDATE users SET status='idle' WHERE id=$1 AND status='paying'", userID)
-		return fmt.Errorf("charge gagal: %w", err)
+		return fmt.Errorf("charge failed: %w", err)
 	}
 
 	// 3. Selesaikan. Bila baris ini gagal, pelanggan SUDAH terpotong --
@@ -270,7 +270,7 @@ func ProcessPaymentAsync(ctx context.Context, pool *pgxpool.Pool, userID int) er
 	//    bisa menemukan dan memperbaiki keadaan yang menggantung.
 	if _, err := pool.Exec(context.WithoutCancel(ctx),
 		"UPDATE users SET status='paid', ref_pembayaran=$2 WHERE id=$1", userID, resp.ID); err != nil {
-		return fmt.Errorf("pembayaran berhasil tapi status gagal disimpan (ref %s): %w", resp.ID, err)
+		return fmt.Errorf("payment succeeded but failed to save status (ref %s): %w", resp.ID, err)
 	}
 	return nil
 }

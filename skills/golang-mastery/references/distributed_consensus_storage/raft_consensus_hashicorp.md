@@ -231,23 +231,23 @@ func TestRaftSingleNodeBootstrap(t *testing.T) {
 	addr := "127.0.0.1:0" // auto port
 
 	node, err := SetupRaftNode(nodeID, addr, tempDir)
-	if err != nil { t.Fatalf("Gagal setup: %v", err) }
+	if err != nil { t.Fatalf("Setup failed: %v", err) }
 
 	// Karena Node ini sendirian, ia harus mem-bootstrap clusternya sendiri agar jadi Leader
 	err = node.BootstrapCluster(nodeID, node.Raft.Transport().LocalAddr().String())
-	if err != nil { t.Fatalf("Gagal bootstrap: %v", err) }
+	if err != nil { t.Fatalf("Bootstrap failed: %v", err) }
 
 	// Tunggu sampai Raft berdikusi dalam batinnya dan mengesahkan dirinya sebagai Leader
 	time.Sleep(3 * time.Second)
 
 	if node.Raft.State() != raft.Leader {
-		t.Fatalf("Node gagal terpilih menjadi leader")
+		t.Fatalf("Node failed to be elected as leader")
 	}
 
 	// Coba operasikan penyimpanan data lewat State Machine yang terlindungi Consensus
 	err = node.SetValue("kopi", "hitam")
 	if err != nil {
-		t.Fatalf("Gagal menset log data: %v", err)
+		t.Fatalf("Failed to set log data: %v", err)
 	}
 
 	// Baca FSM murni lokal
@@ -256,7 +256,7 @@ func TestRaftSingleNodeBootstrap(t *testing.T) {
 	node.FSM.mu.RUnlock()
 
 	if val != "hitam" {
-		t.Errorf("FSM tidak menerima mutasi apply raft. Dapat: %s", val)
+		t.Errorf("FSM did not receive raft apply mutation. Got: %s", val)
 	}
 }
 ```

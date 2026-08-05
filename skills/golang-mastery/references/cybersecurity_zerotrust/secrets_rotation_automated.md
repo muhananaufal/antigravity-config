@@ -445,7 +445,7 @@ vault list -format=json sys/leases/lookup/database/creds | jq length
 
 # Kredensial lama yang masih dipakai: cabut hanya setelah angka ini nol
 kubectl logs -l app=api --since=24h \
-  | jq -r 'select(.kredensial_versi) | .kredensial_versi' | sort | uniq -c
+  | jq -r 'select(.credential_version) | .credential_version' | sort | uniq -c
 
 # Rotasi yang gagal
 kubectl logs -l app=rotator --since=7d | grep -ci 'rotasi gagal\|rotation failed'

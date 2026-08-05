@@ -127,7 +127,7 @@ import (
 var ErrInsufficientStock = errors.New("insufficient stock for reservation")
 var ErrItemNotFound = errors.New("item not found in inventory")
 
-var ErrKuantitasTidakValid = errors.New("kuantitas harus lebih besar dari nol")
+var ErrInvalidQuantity = errors.New("quantity must be greater than zero")
 
 // InventoryFacade adalah kontrak publik yang boleh dipanggil modul lain.
 // Harus tetap berukuran kecil (Interface Segregation Principle).
@@ -166,11 +166,11 @@ func NewInventoryModule(initialStock map[string]int) InventoryFacade {
 	// diadopsi menjadi state modul.
 	//
 	// maps.Clone(nil) mengembalikan nil, jadi urutannya: clone dulu, baru jaga.
-	stok := maps.Clone(initialStock)
-	if stok == nil {
-		stok = make(map[string]int)
+	stockCopy := maps.Clone(initialStock)
+	if stockCopy == nil {
+		stockCopy = make(map[string]int)
 	}
-	return &inventoryInternalService{stock: stok}
+	return &inventoryInternalService{stock: stockCopy}
 }
 
 // ReserveStock mengamankan I/O lintas Goroutine di satu proses yang sama.
@@ -180,10 +180,10 @@ func (s *inventoryInternalService) ReserveStock(ctx context.Context, itemID stri
 	// pembatalan menjadi murah: satu pemeriksaan mencegah seluruh sisa rantai
 	// lintas modul dieksekusi untuk permintaan yang kliennya sudah pergi.
 	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("reservasi %s dibatalkan: %w", itemID, err)
+		return fmt.Errorf("reservation for %s canceled: %w", itemID, err)
 	}
 	if qty <= 0 {
-		return fmt.Errorf("%w: %d", ErrKuantitasTidakValid, qty)
+		return fmt.Errorf("%w: %d", ErrInvalidQuantity, qty)
 	}
 
 	s.mu.Lock()
@@ -194,7 +194,7 @@ func (s *inventoryInternalService) ReserveStock(ctx context.Context, itemID stri
 		return fmt.Errorf("%w: %s", ErrItemNotFound, itemID)
 	}
 	if current < qty {
-		return fmt.Errorf("%w: diminta %d, tersedia %d", ErrInsufficientStock, qty, current)
+		return fmt.Errorf("%w: requested %d, available %d", ErrInsufficientStock, qty, current)
 	}
 
 	s.stock[itemID] = current - qty
@@ -211,7 +211,7 @@ func (s *inventoryInternalService) ReserveStock(ctx context.Context, itemID stri
 // terpisah (lihat `observability_resilience/graceful_shutdown_drain.md`).
 func (s *inventoryInternalService) ReleaseStock(_ context.Context, itemID string, qty int) error {
 	if qty <= 0 {
-		return fmt.Errorf("%w: %d", ErrKuantitasTidakValid, qty)
+		return fmt.Errorf("%w: %d", ErrInvalidQuantity, qty)
 	}
 
 	s.mu.Lock()
@@ -230,24 +230,24 @@ func (s *inventoryInternalService) ReleaseStock(_ context.Context, itemID string
 // File: pkg/billing/internal/service.go
 // =====================================
 
-// ErrKompensasiGagal menandai kondisi yang HARUS memicu alert dan rekonsiliasi
+// ErrCompensationFailed menandai kondisi yang HARUS memicu alert dan rekonsiliasi
 // manual: langkah utama gagal DAN pembatalannya juga gagal. Sistem kini berada
 // di state yang tidak konsisten dan tidak ada kode yang bisa memperbaikinya
 // sendiri.
-var ErrKompensasiGagal = errors.New("kompensasi saga gagal, perlu rekonsiliasi manual")
+var ErrCompensationFailed = errors.New("saga compensation failed, manual reconciliation required")
 
 type BillingService struct {
 	// Modul Billing menampung instance dari modul Inventory
 	// Komunikasi ini berkecepatan RAM (nanodetik) tanpa TCP Overhead
 	inventory InventoryFacade
-	terbitkan func() (string, error)
+	issue     func() (string, error)
 }
 
 func NewBillingModule(inv InventoryFacade) *BillingService {
-	return &BillingService{inventory: inv, terbitkan: nomorFakturBaru}
+	return &BillingService{inventory: inv, issue: newInvoiceNumber}
 }
 
-// nomorFakturBaru menghasilkan ID faktur yang acak, bukan berbasis jam.
+// newInvoiceNumber menghasilkan ID faktur yang acak, bukan berbasis jam.
 //
 // `fmt.Sprintf("INV-%d", time.Now().UnixNano())` gagal sebagai ID keuangan
 // karena tiga hal sekaligus:
@@ -258,10 +258,10 @@ func NewBillingModule(inv InventoryFacade) *BillingService {
 //   - MEMBOCORKAN informasi. Nomor faktur dapat ditebak berurutan, dan
 //     menyingkap waktu penerbitan serta volume transaksi kepada siapa pun
 //     yang memegang dua faktur.
-func nomorFakturBaru() (string, error) {
+func newInvoiceNumber() (string, error) {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
-		return "", fmt.Errorf("membangkitkan nomor faktur: %w", err)
+		return "", fmt.Errorf("generate invoice number: %w", err)
 	}
 	return "INV-" + hex.EncodeToString(b), nil
 }
@@ -272,7 +272,7 @@ func (b *BillingService) ProcessOrder(ctx context.Context, itemID string, qty in
 	if err := b.inventory.ReserveStock(ctx, itemID, qty); err != nil {
 		// Belum ada state yang berubah di sini -- tidak ada yang perlu
 		// dikompensasi. Yang perlu dikompensasi justru kasus SESUDAH ini.
-		return "", fmt.Errorf("billing gagal karena aturan inventory: %w", err)
+		return "", fmt.Errorf("billing failed due to inventory rule: %w", err)
 	}
 
 	// 2. Modul 2 (Billing) - Menyelesaikan Transaksi & State miliknya sendiri.
@@ -282,21 +282,21 @@ func (b *BillingService) ProcessOrder(ctx context.Context, itemID string, qty in
 	// stok tetap tertahan tanpa faktur yang pernah terbit -- kebocoran yang
 	// tidak terlihat di log mana pun, hanya muncul sebagai stok yang perlahan
 	// habis tanpa penjualan.
-	invoiceID, err := b.terbitkan()
+	invoiceID, err := b.issue()
 	if err != nil {
 		// SAGA: batalkan langkah 1.
-		if errLepas := b.inventory.ReleaseStock(ctx, itemID, qty); errLepas != nil {
+		if errRelease := b.inventory.ReleaseStock(ctx, itemID, qty); errRelease != nil {
 			// Kegagalan KOMPENSASI adalah satu-satunya galat di alur ini yang
 			// DILARANG ditelan. Stok sekarang tertahan permanen; hanya manusia
 			// yang bisa membereskannya. errors.Join menjaga kedua sebab tetap
 			// bisa diperiksa dengan errors.Is oleh pemanggil dan oleh alert.
 			return "", errors.Join(
-				fmt.Errorf("%w: melepas %d unit %s", ErrKompensasiGagal, qty, itemID),
-				errLepas,
+				fmt.Errorf("%w: release %d units of %s", ErrCompensationFailed, qty, itemID),
+				errRelease,
 				err,
 			)
 		}
-		return "", fmt.Errorf("penerbitan faktur gagal, stok sudah dilepas: %w", err)
+		return "", fmt.Errorf("invoice issuance failed, stock released: %w", err)
 	}
 
 	return invoiceID, nil
@@ -310,7 +310,7 @@ func (b *BillingService) ProcessOrder(ctx context.Context, itemID string, qty in
 type MockInventory struct {
 	ReserveStockFunc func(ctx context.Context, itemID string, quantity int) error
 	ReleaseStockFunc func(ctx context.Context, itemID string, quantity int) error
-	JumlahRelease    int
+	ReleaseCount     int
 }
 
 func (m *MockInventory) ReserveStock(ctx context.Context, itemID string, quantity int) error {
@@ -318,7 +318,7 @@ func (m *MockInventory) ReserveStock(ctx context.Context, itemID string, quantit
 }
 
 func (m *MockInventory) ReleaseStock(ctx context.Context, itemID string, quantity int) error {
-	m.JumlahRelease++
+	m.ReleaseCount++
 	if m.ReleaseStockFunc == nil {
 		return nil
 	}
@@ -330,12 +330,12 @@ func TestInventory_ReserveStock(t *testing.T) {
 	inv := NewInventoryModule(map[string]int{"SKU-1": 10})
 
 	if err := inv.ReserveStock(context.Background(), "SKU-1", 5); err != nil {
-		t.Fatalf("mengharapkan tanpa galat, dapat %v", err)
+		t.Fatalf("expected no error, got %v", err)
 	}
 
 	err := inv.ReserveStock(context.Background(), "SKU-1", 10)
 	if !errors.Is(err, ErrInsufficientStock) {
-		t.Fatalf("mengharapkan ErrInsufficientStock, dapat %v", err)
+		t.Fatalf("expected ErrInsufficientStock, got %v", err)
 	}
 
 	// Sisa 5 -> dilepas 5 -> kembali 10 -> reservasi 10 harus lolos.
@@ -343,7 +343,7 @@ func TestInventory_ReserveStock(t *testing.T) {
 		t.Fatalf("ReleaseStock: %v", err)
 	}
 	if err := inv.ReserveStock(context.Background(), "SKU-1", 10); err != nil {
-		t.Fatalf("setelah dilepas, reservasi 10 harus lolos, dapat %v", err)
+		t.Fatalf("after release, reservation of 10 should succeed, got %v", err)
 	}
 }
 
@@ -352,17 +352,17 @@ func TestInventory_TepiInput(t *testing.T) {
 	ctx := context.Background()
 
 	if err := inv.ReserveStock(ctx, "SKU-TIDAK-ADA", 1); !errors.Is(err, ErrItemNotFound) {
-		t.Errorf("item tak dikenal: mengharapkan ErrItemNotFound, dapat %v", err)
+		t.Errorf("unknown item: expected ErrItemNotFound, got %v", err)
 	}
 	// Tanpa penjaga ini, qty negatif MENAMBAH stok lewat `current - qty`.
-	if err := inv.ReserveStock(ctx, "SKU-1", -5); !errors.Is(err, ErrKuantitasTidakValid) {
-		t.Errorf("qty negatif: mengharapkan ErrKuantitasTidakValid, dapat %v", err)
+	if err := inv.ReserveStock(ctx, "SKU-1", -5); !errors.Is(err, ErrInvalidQuantity) {
+		t.Errorf("negative qty: expected ErrInvalidQuantity, got %v", err)
 	}
 
 	ctxBatal, batal := context.WithCancel(ctx)
 	batal()
 	if err := inv.ReserveStock(ctxBatal, "SKU-1", 1); !errors.Is(err, context.Canceled) {
-		t.Errorf("context dibatalkan: mengharapkan context.Canceled, dapat %v", err)
+		t.Errorf("canceled context: expected context.Canceled, got %v", err)
 	}
 }
 
@@ -370,15 +370,15 @@ func TestInventory_TepiInput(t *testing.T) {
 // Tanpa maps.Clone, ia gagal -- atau lebih buruk, `go test -race` melaporkan
 // data race dan produksi mendapat `fatal error: concurrent map writes`.
 func TestInventory_KonstruktorMenyalinMap(t *testing.T) {
-	stokAwal := map[string]int{"SKU-1": 10}
-	inv := NewInventoryModule(stokAwal)
+	initialStock := map[string]int{"SKU-1": 10}
+	inv := NewInventoryModule(initialStock)
 
 	// Pemanggil memutasi map-nya sendiri setelah modul dibangun.
-	stokAwal["SKU-1"] = 0
-	delete(stokAwal, "SKU-1")
+	initialStock["SKU-1"] = 0
+	delete(initialStock, "SKU-1")
 
 	if err := inv.ReserveStock(context.Background(), "SKU-1", 10); err != nil {
-		t.Fatalf("state modul terpengaruh mutasi pemanggil: %v", err)
+		t.Fatalf("module state affected by caller mutation: %v", err)
 	}
 }
 
@@ -386,21 +386,21 @@ func TestInventory_KonstruktorMenyalinMap(t *testing.T) {
 // artinya lintas goroutine. Modul yang tidak diuji dengan -race hanya
 // MENGAKU thread-safe.
 func TestInventory_ReservasiSerentak(t *testing.T) {
-	const stok, pekerja = 100, 50
-	inv := NewInventoryModule(map[string]int{"SKU-1": stok})
+	const stock, workers = 100, 50
+	inv := NewInventoryModule(map[string]int{"SKU-1": stock})
 
 	var wg sync.WaitGroup
-	var berhasil int64
-	var muHitung sync.Mutex
+	var success int64
+	var muCount sync.Mutex
 
-	for i := 0; i < pekerja; i++ {
+	for i := 0; i < workers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			if err := inv.ReserveStock(context.Background(), "SKU-1", 3); err == nil {
-				muHitung.Lock()
-				berhasil++
-				muHitung.Unlock()
+				muCount.Lock()
+				success++
+				muCount.Unlock()
 			}
 		}()
 	}
@@ -408,11 +408,11 @@ func TestInventory_ReservasiSerentak(t *testing.T) {
 
 	// 50 pekerja x 3 unit = 150 > 100, jadi sebagian WAJIB ditolak.
 	// Yang diuji: tidak ada oversell -- total terjual tak pernah melebihi stok.
-	if berhasil*3 > stok {
-		t.Errorf("oversell: %d reservasi x3 = %d unit dari stok %d", berhasil, berhasil*3, stok)
+	if success*3 > stock {
+		t.Errorf("oversell: %d reservations x3 = %d units from stock of %d", success, success*3, stock)
 	}
-	if berhasil == 0 {
-		t.Error("tidak ada satu pun reservasi berhasil; uji ini tidak menguji apa pun")
+	if success == 0 {
+		t.Error("no reservation succeeded; test did not verify anything")
 	}
 }
 
@@ -451,10 +451,10 @@ func TestBilling_ProcessOrder_Fail(t *testing.T) {
 	_, err := billing.ProcessOrder(context.Background(), "SKU-99", 100)
 
 	if !errors.Is(err, ErrInsufficientStock) {
-		t.Fatalf("mengharapkan galat membungkus ErrInsufficientStock, dapat %v", err)
+		t.Fatalf("expected error wrapping ErrInsufficientStock, got %v", err)
 	}
-	if mockInv.JumlahRelease != 0 {
-		t.Errorf("kompensasi dipanggil %dx padahal tak ada yang direservasi", mockInv.JumlahRelease)
+	if mockInv.ReleaseCount != 0 {
+		t.Errorf("compensation called %dx when nothing was reserved", mockInv.ReleaseCount)
 	}
 }
 
@@ -465,41 +465,41 @@ func TestBilling_ProcessOrder_GagalSetelahReservasi_MelepasStok(t *testing.T) {
 		ReserveStockFunc: func(context.Context, string, int) error { return nil },
 	}
 	billing := NewBillingModule(mockInv)
-	galatTerbit := errors.New("generator faktur mati")
-	billing.terbitkan = func() (string, error) { return "", galatTerbit }
+	errIssue := errors.New("invoice generator offline")
+	billing.issue = func() (string, error) { return "", errIssue }
 
 	_, err := billing.ProcessOrder(context.Background(), "SKU-99", 2)
 
-	if !errors.Is(err, galatTerbit) {
-		t.Fatalf("mengharapkan galat membungkus galatTerbit, dapat %v", err)
+	if !errors.Is(err, errIssue) {
+		t.Fatalf("expected error wrapping errIssue, got %v", err)
 	}
-	if mockInv.JumlahRelease != 1 {
-		t.Fatalf("stok harus dilepas tepat 1x, dipanggil %dx", mockInv.JumlahRelease)
+	if mockInv.ReleaseCount != 1 {
+		t.Fatalf("stock must be released exactly 1x, called %dx", mockInv.ReleaseCount)
 	}
-	if errors.Is(err, ErrKompensasiGagal) {
-		t.Error("kompensasi berhasil, galat tidak boleh ditandai butuh rekonsiliasi")
+	if errors.Is(err, ErrCompensationFailed) {
+		t.Error("compensation succeeded, error should not be flagged for reconciliation")
 	}
 }
 
 // Unit Test 3c: Kompensasi ITU SENDIRI gagal. Ini state paling berbahaya di
 // seluruh pola Saga, dan satu-satunya yang wajib memicu alert manusia.
 func TestBilling_KompensasiGagal_DitandaiUntukRekonsiliasi(t *testing.T) {
-	galatLepas := errors.New("modul inventory tidak merespons")
+	errRelease := errors.New("inventory module unresponsive")
 	mockInv := &MockInventory{
 		ReserveStockFunc: func(context.Context, string, int) error { return nil },
-		ReleaseStockFunc: func(context.Context, string, int) error { return galatLepas },
+		ReleaseStockFunc: func(context.Context, string, int) error { return errRelease },
 	}
 	billing := NewBillingModule(mockInv)
-	galatTerbit := errors.New("generator faktur mati")
-	billing.terbitkan = func() (string, error) { return "", galatTerbit }
+	errIssue := errors.New("invoice generator offline")
+	billing.issue = func() (string, error) { return "", errIssue }
 
 	_, err := billing.ProcessOrder(context.Background(), "SKU-99", 2)
 
 	// errors.Join mempertahankan KETIGA sebab agar bisa diperiksa terpisah:
 	// penanda rekonsiliasi, kegagalan kompensasi, dan kegagalan aslinya.
-	for _, target := range []error{ErrKompensasiGagal, galatLepas, galatTerbit} {
+	for _, target := range []error{ErrCompensationFailed, errRelease, errIssue} {
 		if !errors.Is(err, target) {
-			t.Errorf("galat gabungan harus cocok dengan %v, tidak", target)
+			t.Errorf("joined error must match %v", target)
 		}
 	}
 }
@@ -513,29 +513,29 @@ func TestModularMonolith_CrossModuleFlow(t *testing.T) {
 	billingModule := NewBillingModule(inventoryModule)
 
 	// 2. Eksekusi End-to-End Success flow
-	faktur1, err := billingModule.ProcessOrder(ctx, "SKU-123", 4)
+	invoice1, err := billingModule.ProcessOrder(ctx, "SKU-123", 4)
 	if err != nil {
-		t.Fatalf("kegagalan tak terduga: %v", err)
+		t.Fatalf("unexpected failure: %v", err)
 	}
-	if faktur1 == "" {
-		t.Errorf("mengharapkan ID faktur yang valid")
+	if invoice1 == "" {
+		t.Errorf("expected valid invoice ID")
 	}
 
 	// 3. Eksekusi Flow Kegagalan Aturan Bisnis Lintas Domain
 	_, err = billingModule.ProcessOrder(ctx, "SKU-123", 20) // Sisa stok: 6
 	if !errors.Is(err, ErrInsufficientStock) {
-		t.Errorf("mengharapkan ErrInsufficientStock, dapat: %v", err)
+		t.Errorf("expected ErrInsufficientStock, got: %v", err)
 	}
 
 	// 4. Dua faktur berbeda WAJIB punya ID berbeda. `receipt == ""` saja tidak
 	//    pernah menangkap generator yang mengembalikan nilai sama berulang --
 	//    dan justru itulah cacat pada ID berbasis time.Now().UnixNano().
-	faktur2, err := billingModule.ProcessOrder(ctx, "SKU-123", 1)
+	invoice2, err := billingModule.ProcessOrder(ctx, "SKU-123", 1)
 	if err != nil {
-		t.Fatalf("pesanan kedua gagal: %v", err)
+		t.Fatalf("second order failed: %v", err)
 	}
-	if faktur1 == faktur2 {
-		t.Errorf("dua faktur berbagi ID yang sama: %s", faktur1)
+	if invoice1 == invoice2 {
+		t.Errorf("two invoices share the same ID: %s", invoice1)
 	}
 }
 ```
@@ -610,82 +610,82 @@ func (o *OrderListener) Handle(event InventoryDecreasedEvent) {
 }
 ```
 **Solusi (Benar):** Terapkan pembalikan dependensi (*Dependency Inversion*) atau Event-Driven Pub/Sub. Modul Inventory tidak boleh mengimpor Order. Alih-alih, Inventory cukup me-lempar *event* asinkron menggunakan *Go channel* atau *in-memory event bus* (seperti Watermill), yang akan "didengarkan" (subscribed) oleh modul Order tanpa saling mengetahui implementasi konkret (Loose Coupling).
+**Solution (Correct):** Apply dependency inversion or Event-Driven Pub/Sub. The Inventory Module must not import Order. Instead, Inventory simply emits asynchronous events using Go channels or an in-memory event bus (like Watermill), which will be "subscribed" to by the Order module without knowing each other's concrete implementation (Loose Coupling).
 
-## Edge Cases & Defensive Programming Konkrit
+## Edge Cases & Defensive Programming Concrete
 
-1. **Distributed Transactions di Memori (Implementasi Saga Pattern):**
-   Karena Modul A dan Modul B menggunakan koneksi / transaksi database (`*sql.Tx`) lokalnya masing-masing secara terpisah, properti konsistensi lintas-modul (ACID) hilang. Jika Billing berhasil menarik saldo dompet dari modul Payment, tapi reservasi ke Modul Inventory gagal karena stok kosong, saldo tersebut hangus tak tercatat.
-   *Defensive:* Jangan mencoba mem-passing `*sql.Tx` lintasi batasan antarmuka modul. Implementasikan pola **Saga (Kompensasi)** in-process. Saat pemanggilan operasi sinkron modul dua gagal, modul satu HANYA bertanggung jawab untuk memanggil fungsi kompensator miliknya secara in-memory untuk membalikkan state.
+1. **In-Memory Distributed Transactions (Saga Pattern Implementation):**
+   Because Module A and Module B use their own separate local database connections / transactions (`*sql.Tx`), cross-module ACID consistency properties are lost. If Billing successfully deducts a balance from the Payment module, but the reservation to the Inventory module fails due to out-of-stock, that balance is left unrecorded and effectively lost.
+   *Defensive:* Do not attempt to pass `*sql.Tx` across module interface boundaries. Implement an in-process **Saga (Compensation)** pattern. When the synchronous operation of the second module fails, the first module is solely responsible for calling its own compensator function in-memory to reverse state.
    ```go
-   // Contoh Implementasi Saga In-Memory
-   func (o *OrderUsecase) Checkout(ctx context.Context) error {
-       // 1. Modul Payment
-       txID, err := o.payment.Deduct(ctx, 1000)
-       if err != nil {
-           // WAJIB diperiksa di sini. Bila galat ini dilewati, txID kosong dan
-           // alur berlanjut seolah pembayaran berhasil -- lalu "refund" nanti
-           // dijalankan atas transaksi yang tidak pernah ada.
-           return fmt.Errorf("pemotongan saldo gagal: %w", err)
-       }
+    // Example In-Memory Saga Implementation
+    func (o *OrderUsecase) Checkout(ctx context.Context) error {
+        // 1. Payment Module
+        txID, err := o.payment.Deduct(ctx, 1000)
+        if err != nil {
+            // MUST be checked here. If this error is skipped, txID is empty and
+            // the flow proceeds as if payment succeeded -- then a "refund" is
+            // executed later for a transaction that never existed.
+            return fmt.Errorf("balance deduction failed: %w", err)
+        }
 
-       // 2. Modul Inventory (Transaksi Gagal!)
-       if err := o.inventory.Reserve(ctx, "SKU-1"); err != nil {
-           // SAGA COMPENSATING TRANSACTION: kembalikan saldo.
-           //
-           // Kompensasi memakai context TERPISAH, bukan ctx pemanggil.
-           // Kompensasi biasanya berjalan justru karena sesuatu gagal, dan
-           // sering kali yang gagal adalah ctx itu sendiri (timeout/batal).
-           // Meneruskan ctx yang sudah mati membuat refund gagal seketika --
-           // tepat pada saat ia paling dibutuhkan.
-           ctxKomp, batal := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-           defer batal()
+        // 2. Inventory Module (Transaction Failed!)
+        if err := o.inventory.Reserve(ctx, "SKU-1"); err != nil {
+            // SAGA COMPENSATING TRANSACTION: refund balance.
+            //
+            // Compensation uses a SEPARATE context, not the caller's ctx.
+            // Compensation usually runs precisely because something failed,
+            // and often what failed is the ctx itself (timeout/cancellation).
+            // Passing the already-dead ctx makes the refund fail instantly --
+            // exactly when it is needed most.
+            ctxKomp, batal := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+            defer batal()
 
-           if errRefund := o.payment.Refund(ctxKomp, txID); errRefund != nil {
-               // JANGAN PERNAH `_ =` di baris ini. Uang sudah keluar dari
-               // dompet pelanggan dan pesanannya tidak ada. Tidak ada kode
-               // yang bisa memperbaiki ini sendiri; yang dibutuhkan adalah
-               // alert dan entri rekonsiliasi manual.
-               slog.ErrorContext(ctx, "KOMPENSASI GAGAL: saldo terpotong tanpa pesanan",
-                   "tx_id", txID, "jumlah_minor", 1000,
-                   "galat_refund", errRefund, "galat_asli", err)
-               return errors.Join(ErrKompensasiGagal, errRefund, err)
-           }
-           return fmt.Errorf("checkout gagal, saldo dikembalikan: %w", err)
-       }
-       return nil
-   }
-   ```
-   *Tiga hal yang membedakan Saga sungguhan dari yang hanya terlihat seperti Saga:*
-   - **Galat langkah pertama diperiksa.** `txID, err := ...` yang `err`-nya langsung ditimpa baris berikutnya adalah bug diam — `staticcheck` menandainya sebagai SA4006, `go vet` tidak.
-   - **Kompensasi punya context sendiri.** `context.WithoutCancel` (Go 1.21+) mempertahankan nilai-nilai ctx (trace ID, tenant) sambil melepaskan pembatalannya.
-   - **Kegagalan kompensasi tidak pernah ditelan.** Ini satu-satunya cabang di seluruh alur yang berakhir dengan state tidak konsisten permanen, dan karenanya satu-satunya yang wajib memicu alert.
-   - *Catatan kejujuran:* kompensasi in-process ini tetap hilang bila prosesnya mati di antara langkah 1 dan langkah kompensasi. Jaminannya lebih lemah daripada Saga berbasis log persisten. Bila uangnya cukup penting, langkah kompensasi harus dicatat dulu ke tabel (outbox) sebelum dieksekusi — lihat `arch_patterns/event_driven_pubsub.md`.
+            if errRefund := o.payment.Refund(ctxKomp, txID); errRefund != nil {
+                // NEVER `_ =` on this line. Money has left the customer's
+                // wallet and the order does not exist. No code can fix this
+                // itself; what is needed is an alert and a manual reconciliation
+                // entry.
+                slog.ErrorContext(ctx, "COMPENSATION FAILED: balance deducted without order",
+                    "tx_id", txID, "amount_minor", 1000,
+                    "refund_error", errRefund, "original_error", err)
+                return errors.Join(ErrCompensationFailed, errRefund, err)
+            }
+            return fmt.Errorf("checkout failed, balance refunded: %w", err)
+        }
+        return nil
+    }
+    ```
+    *Three things that differentiate a true Saga from one that just looks like a Saga:*
+    - **First-step errors are checked.** `txID, err := ...` where the `err` is immediately overwritten in the next line is a silent bug — `staticcheck` flags it as SA4006, `go vet` does not.
+    - **Compensation has its own context.** `context.WithoutCancel` (Go 1.21+) preserves ctx values (trace ID, tenant) while detaching from its cancellation.
+    - **Compensation failure is never swallowed.** This is the only branch in the entire flow that results in permanently inconsistent state, and therefore the only one that must trigger an alert.
+    - *Honesty note:* this in-process compensation is still lost if the process dies between step 1 and the compensation step. Guarantees are weaker than persistent log-based Sagas. If the money is important enough, the compensation step must be written to a table (outbox) before execution — see `arch_patterns/event_driven_pubsub.md`.
 
-2. **Propagasi Eventual melalui Pub/Sub Lokal (Goroutine Leak Prevention):**
-   Pemanggilan in-memory facade bisa macet (bottleneck) jika lintas-koordinasi terlalu dalam (`Modul A -> Modul B -> Modul C -> Modul D`). Menahan respon HTTP User sembari modul D mengirim Email sangat rentan timeout.
-   *Defensive:* Monolith modular dapat dan seharusnya mengaplikasikan arsitektur *Event Driven*. Gunakan `watermill/pubsub/gochannel` internal agar saat Modul A selesai (seperti User Terdaftar), ia mem-publish *memory event* yang membiarkan goroutine modul lain menangkapnya di latar belakang tanpa menunda waktu respon (RTT) request HTTP utama. Gunakan `context` untuk mencegah Goroutine leak.
+2. **Eventual Propagation via Local Pub/Sub (Goroutine Leak Prevention):**
+   In-memory facade calls can bottleneck if cross-coordination goes too deep (`Module A -> Module B -> Module C -> Module D`). Holding an HTTP User response while Module D sends an email is highly susceptible to timeouts.
+   *Defensive:* Modular monoliths can and should apply Event Driven architecture. Use internal `watermill/pubsub/gochannel` so that when Module A finishes (e.g., User Registered), it publishes a memory event that lets other modules' goroutines handle it in the background without delaying the primary HTTP request response time (RTT). Use `context` to prevent Goroutine leaks.
    ```go
-   // Dispatcher yang BENAR-BENAR non-blocking: `default` menjadikannya
-   // paling banyak satu operasi channel, tanpa timer, tanpa penundaan.
+   // Truly non-blocking dispatcher: `default` makes it
+   // at most one channel operation, no timers, no delays.
    func (e *EventBus) PublishOrderCreated(ctx context.Context, orderID string) {
        select {
        case e.orderChan <- orderID:
-           // Diterima background worker modul lain
+           // Accepted by background worker of another module
        default:
-           // Buffer penuh. Ini keputusan KEHILANGAN DATA, bukan sekadar
-           // catatan log -- perlakukan sebagai metrik ber-alert, bukan
-           // baris log yang tenggelam.
+           // Buffer full. This is a DATA LOSS decision, not just a
+           // log entry -- treat as an alerted metric.
            e.eventDrop.Inc()
-           slog.ErrorContext(ctx, "event dibuang, buffer bus penuh",
+           slog.ErrorContext(ctx, "event dropped, bus buffer full",
                "event", "order_created", "order_id", orderID,
-               "kapasitas", cap(e.orderChan))
-       }
-   }
-   ```
-   *Tiga hal yang salah pada bentuk yang lebih sering ditulis* (`case <-time.After(100 * time.Millisecond)`):
-   - **Ia memblokir hingga 100 ms** — di jalur respons HTTP, persis hal yang bagian ini justru ingin dihindari. Komentar "bebas blocking" di atas potongan yang memblokir adalah cara termudah membuat orang berhenti membacanya.
-   - **`time.After` mengalokasikan timer yang tidak bisa dihentikan.** Pada Go 1.21/1.22 timer itu bertahan sampai firing penuh meski select sudah keluar; di jalur panas ia menumpuk. (Go 1.23+ membuatnya bisa di-GC lebih awal, tetapi berkas ini menyatakan berlaku untuk 1.21+, jadi jangan andalkan itu.) Bila memang perlu batas waktu, pakai `time.NewTimer` + `defer t.Stop()`.
-   - **Urutan `case` tidak menjamin apa pun.** `select` memilih ACAK di antara case yang siap. Menaruh `ctx.Done()` di urutan terakhir tidak membuatnya berprioritas rendah, dan menaruhnya pertama tidak membuatnya berprioritas tinggi — event tetap bisa terkirim meski context sudah dibatalkan. Bila pembatalan harus benar-benar menang, periksa `ctx.Err()` secara eksplisit sebelum `select`.
+               "capacity", cap(e.orderChan))
+        }
+    }
+    ```
+    *Tiga hal yang salah pada bentuk yang lebih sering ditulis* (`case <-time.After(100 * time.Millisecond)`):
+    - **Ia memblokir hingga 100 ms** — di jalur respons HTTP, persis hal yang bagian ini justru ingin dihindari.
+    - **`time.After` mengalokasikan timer yang tidak bisa dihentikan.** Pada Go 1.21/1.22 timer itu bertahan sampai firing penuh meski select sudah keluar; di jalur panas ia menumpuk. Bila memang perlu batas waktu, pakai `time.NewTimer` + `defer t.Stop()`.
+    - **Urutan `case` tidak menjamin apa pun.** `select` memilih ACAK di antara case yang siap. Menaruh `ctx.Done()` di urutan terakhir tidak membuatnya berprioritas rendah, dan menaruhnya pertama tidak membuatnya berprioritas tinggi — event tetap bisa terkirim meski context sudah dibatalkan. Bila pembatalan harus benar-benar menang, periksa `ctx.Err()` secara eksplisit sebelum `select`.
 
    *Dan pertanyaan yang harus dijawab sebelum memilih `default`:* apakah event ini boleh hilang? Notifikasi "selamat datang" — boleh. Pembaruan saldo — tidak. Untuk yang tidak boleh hilang, channel in-memory adalah pilihan yang salah sejak awal; yang dibutuhkan Transactional Outbox, dan bagaimana persisnya ada di `arch_patterns/event_driven_pubsub.md`.
 
@@ -711,23 +711,23 @@ func (o *OrderListener) Handle(event InventoryDecreasedEvent) {
        s.mu.RLock()
        defer s.mu.RUnlock()
 
-       u, ada := s.cache[id]     // comma-ok, bukan dereference buta
-       if !ada {
+       u, exists := s.cache[id]     // comma-ok, bukan dereference buta
+       if !exists {
            return User{}, fmt.Errorf("%w: %s", ErrUserNotFound, id)
        }
-       return u.Salin(), nil     // penyalinan dimiliki entity-nya sendiri
+       return u.Copy(), nil     // penyalinan dimiliki entity-nya sendiri
    }
 
    // Salin hidup di sebelah definisi User, sehingga field baru dan
    // penyalinannya diubah di satu tempat yang sama.
-   func (u *User) Salin() User {
+   func (u *User) Copy() User {
        c := *u                          // field bertipe nilai: selesai di sini
        c.Roles = slices.Clone(u.Roles)  // field referensi: WAJIB disebut satu per satu
        c.Meta = maps.Clone(u.Meta)
        return c
    }
    ```
-   *Yang membuat versi terakhir berbeda:* `*u` sendirian adalah salinan **dangkal**. Ia terlihat benar hari ini hanya karena `User` kebetulan berisi field bertipe nilai saja. Begitu seseorang menambah `Roles []string`, isolasinya bocor tanpa satu baris pun berubah di sini, dan gejalanya muncul di modul lain sebagai data yang berubah sendiri. Menaruh penyalinan di dalam method `Salin()` milik entity tidak menghapus kewajiban itu — tetapi memindahkannya ke satu tempat yang pasti terlihat oleh orang yang menambah field.
+   *Yang membuat versi terakhir berbeda:* `*u` sendirian adalah salinan **dangkal**. Ia terlihat benar hari ini hanya karena `User` kebetulan berisi field bertipe nilai saja. Begitu seseorang menambah `Roles []string`, isolasinya bocor tanpa satu baris pun berubah di sini, dan gejalanya muncul di modul lain sebagai data yang berubah sendiri. Menaruh penyalinan di dalam method `Copy()` milik entity tidak menghapus kewajiban itu — tetapi memindahkannya ke satu tempat yang pasti terlihat oleh orang yang menambah field.
 
 ## Kapan JANGAN Pakai Ini
 

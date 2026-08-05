@@ -408,12 +408,12 @@ func createTensor(data []float32) {
 
 ```sql
 -- Versi model per vektor: tanpa ini, pergantian model berarti hitung ulang semuanya
-SELECT versi_model, count(*), min(dibuat_pada), max(dibuat_pada)
-FROM dokumen_embedding GROUP BY 1;
+SELECT model_version, count(*), min(created_at), max(created_at)
+FROM document_embeddings GROUP BY 1;
 
 -- Dokumen yang belum punya embedding
-SELECT count(*) FROM dokumen d
-LEFT JOIN dokumen_embedding e ON e.dokumen_id = d.id WHERE e.id IS NULL;
+SELECT count(*) FROM documents d
+LEFT JOIN document_embeddings e ON e.document_id = d.id WHERE e.id IS NULL;
 ```
 
 ```bash

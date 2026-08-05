@@ -304,17 +304,17 @@ if merchant == "Grab" {
 
 ```sql
 -- Transaksi WAJIB menyimpan versi aturan yang dipakai
-SELECT versi_aturan, count(*), min(dibuat_pada), max(dibuat_pada)
-FROM transaksi GROUP BY 1 ORDER BY 2 DESC;
+SELECT rule_version, count(*), min(created_at), max(created_at)
+FROM transactions GROUP BY 1 ORDER BY 2 DESC;
 
 -- Estimasi vs tagihan: selisih yang konsisten searah adalah masalah pembulatan
-SELECT count(*) FILTER (WHERE estimasi <> final)          AS berbeda,
-       avg(final - estimasi)                              AS rata_selisih,
-       max(abs(final - estimasi))                         AS selisih_terbesar
-FROM transaksi WHERE dibuat_pada > now() - interval '7 days';
+SELECT count(*) FILTER (WHERE estimation <> final)          AS diff_count,
+       avg(final - estimation)                              AS avg_diff,
+       max(abs(final - estimation))                         AS max_diff
+FROM transactions WHERE created_at > now() - interval '7 days';
 ```
 
 ```bash
 # Uji regresi harga terhadap kasus nyata yang tercatat
-go test -run=TestHargaRegresi -v ./pricing/...
+go test -run=TestPriceRegression -v ./pricing/...
 ```

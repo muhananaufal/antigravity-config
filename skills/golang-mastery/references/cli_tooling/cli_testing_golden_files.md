@@ -118,7 +118,7 @@ type Normalizer struct {
 }
 
 // Bersihkan menerapkan seluruh normalisasi secara berurutan.
-func (n Normalizer) Bersihkan(s string) string {
+func (n Normalizer) Clean(s string) string {
 	// Akhir baris duluan, agar regex di bawah tidak perlu memikirkannya.
 	s = strings.ReplaceAll(s, "\r\n", "\n")
 	s = reANSI.ReplaceAllString(s, "")
@@ -129,33 +129,33 @@ func (n Normalizer) Bersihkan(s string) string {
 			s = strings.ReplaceAll(s, resolved, "<TMP>")
 		}
 	}
-	s = reWaktuRFC3339.ReplaceAllString(s, "<WAKTU>")
-	s = reDurasi.ReplaceAllString(s, "<DURASI>")
+	s = reWaktuRFC3339.ReplaceAllString(s, "<TIME>")
+	s = reDurasi.ReplaceAllString(s, "<DURATION>")
 	s = reHexID.ReplaceAllString(s, "<ID>")
 	for _, f := range n.Ekstra {
 		s = f(s)
 	}
 	// Spasi di akhir baris tidak terlihat mata tapi merusak perbandingan.
-	baris := strings.Split(s, "\n")
-	for i := range baris {
-		baris[i] = strings.TrimRight(baris[i], " \t")
+	lines := strings.Split(s, "\n")
+	for i := range lines {
+		lines[i] = strings.TrimRight(lines[i], " \t")
 	}
-	return strings.TrimRight(strings.Join(baris, "\n"), "\n") + "\n"
+	return strings.TrimRight(strings.Join(lines, "\n"), "\n") + "\n"
 }
 
 // Golden membandingkan hasil dengan berkas testdata/<nama>.golden.
 // Nama berkas diturunkan dari nama test agar tidak perlu diketik manual.
-func Golden(t *testing.T, n Normalizer, hasil string) {
+func Golden(t *testing.T, n Normalizer, result string) {
 	t.Helper()
-	nama := strings.ReplaceAll(t.Name(), "/", "_") + ".golden"
-	path := filepath.Join("testdata", nama)
-	bersih := n.Bersihkan(hasil)
+	name := strings.ReplaceAll(t.Name(), "/", "_") + ".golden"
+	path := filepath.Join("testdata", name)
+	clean := n.Clean(result)
 
 	if *update {
 		if err := os.MkdirAll("testdata", 0o755); err != nil {
 			t.Fatalf("buat testdata: %v", err)
 		}
-		if err := os.WriteFile(path, []byte(bersih), 0o644); err != nil {
+		if err := os.WriteFile(path, []byte(clean), 0o644); err != nil {
 			t.Fatalf("tulis golden: %v", err)
 		}
 		t.Logf("golden diperbarui: %s — WAJIB dibaca di diff PR", path)
@@ -165,12 +165,12 @@ func Golden(t *testing.T, n Normalizer, hasil string) {
 	want, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			t.Fatalf("golden %s belum ada. Jalankan: go test -run %s -update", path, t.Name())
+			t.Fatalf("golden %s belum ada. Run: go test -run %s -update", path, t.Name())
 		}
 		t.Fatalf("baca golden: %v", err)
 	}
 
-	if got := bersih; got != string(want) {
+	if got := clean; got != string(want) {
 		t.Errorf("keluaran tidak cocok dengan %s\n%s", path, diffBaris(string(want), got))
 	}
 }
@@ -181,11 +181,11 @@ func diffBaris(want, got string) string {
 	w := strings.Split(want, "\n")
 	g := strings.Split(got, "\n")
 	var b bytes.Buffer
-	maks := len(w)
-	if len(g) > maks {
-		maks = len(g)
+	max := len(w)
+	if len(g) > max {
+		max = len(g)
 	}
-	for i := 0; i < maks; i++ {
+	for i := 0; i < max; i++ {
 		var lw, lg string
 		if i < len(w) {
 			lw = w[i]
@@ -224,11 +224,11 @@ import (
 // TANPA proses eksternal — testscript menjalankannya di dalam proses test.
 func TestMain(m *testing.M) {
 	os.Exit(testscript.RunMain(m, map[string]func() int{
-		"katalog": func() int { return jalankanCLI() },
+		"katalog": func() int { return runCLI() },
 	}))
 }
 
-func TestSkrip(t *testing.T) {
+func TestScript(t *testing.T) {
 	testscript.Run(t, testscript.Params{
 		Dir: "testdata/skrip",
 		Setup: func(e *testscript.Env) error {
@@ -273,8 +273,8 @@ import (
 func TestNormalizer_WaktuDanDurasi(t *testing.T) {
 	n := Normalizer{}
 	in := "selesai pada 2026-08-05T10:04:00Z dalam 1.234s\n"
-	got := n.Bersihkan(in)
-	want := "selesai pada <WAKTU> dalam <DURASI>\n"
+	got := n.Clean(in)
+	want := "selesai pada <TIME> dalam <DURATION>\n"
 	if got != want {
 		t.Fatalf("mau %q, dapat %q", want, got)
 	}
@@ -282,26 +282,26 @@ func TestNormalizer_WaktuDanDurasi(t *testing.T) {
 
 func TestNormalizer_ANSIDilucuti(t *testing.T) {
 	n := Normalizer{}
-	in := "\x1b[31mgagal\x1b[0m\n"
-	if got := n.Bersihkan(in); got != "gagal\n" {
-		t.Fatalf("ANSI harus dilucuti, dapat %q", got)
+	in := "\x1b[31mfailed\x1b[0m\n"
+	if got := n.Clean(in); got != "failed\n" {
+		t.Fatalf("ANSI must be stripped, got %q", got)
 	}
 }
 
 func TestNormalizer_PathSementara(t *testing.T) {
 	dir := t.TempDir()
 	n := Normalizer{TmpDir: dir}
-	in := "menulis ke " + dir + "/keluaran.json\n"
-	if got := n.Bersihkan(in); got != "menulis ke <TMP>/keluaran.json\n" {
-		t.Fatalf("path harus dinormalkan, dapat %q", got)
+	in := "writing to " + dir + "/output.json\n"
+	if got := n.Clean(in); got != "writing to <TMP>/output.json\n" {
+		t.Fatalf("path must be normalized, got %q", got)
 	}
 }
 
 func TestNormalizer_CRLFDanSpasiAkhir(t *testing.T) {
 	n := Normalizer{}
-	in := "baris satu   \r\nbaris dua\t\r\n"
-	want := "baris satu\nbaris dua\n"
-	if got := n.Bersihkan(in); got != want {
+	in := "lines satu   \r\nbaris dua\t\r\n"
+	want := "lines satu\nbaris dua\n"
+	if got := n.Clean(in); got != want {
 		t.Fatalf("mau %q, dapat %q", want, got)
 	}
 }
@@ -310,15 +310,15 @@ func TestNormalizer_AturanEkstra(t *testing.T) {
 	n := Normalizer{Ekstra: []func(string) string{
 		func(s string) string { return strings.ReplaceAll(s, "v1.2.3", "<VERSI>") },
 	}}
-	if got := n.Bersihkan("katalog v1.2.3\n"); got != "katalog <VERSI>\n" {
+	if got := n.Clean("katalog v1.2.3\n"); got != "katalog <VERSI>\n" {
 		t.Fatalf("aturan ekstra tidak jalan, dapat %q", got)
 	}
 }
 
-func TestDiffBaris_HanyaMenampilkanYangBerbeda(t *testing.T) {
+func TestLineDiff_HanyaMenampilkanYangBerbeda(t *testing.T) {
 	d := diffBaris("a\nb\nc\n", "a\nX\nc\n")
 	if strings.Contains(d, "a") || strings.Contains(d, "c") {
-		t.Fatalf("baris identik tidak boleh muncul di diff:\n%s", d)
+		t.Fatalf("lines identik tidak boleh muncul di diff:\n%s", d)
 	}
 	if !strings.Contains(d, "- b") || !strings.Contains(d, "+ X") {
 		t.Fatalf("diff tidak menunjukkan perubahan:\n%s", d)
@@ -395,7 +395,7 @@ testdata/TestProdukList_Kosong.golden     — 2 baris
 
 ```go
 func TestDiskonBerlaku(t *testing.T) {
-	out, _, _ := jalankan(t, app, "produk", "harga", "--sku", "A-1", "--kupon", "HEMAT10")
+	out, _, _ := run(t, app, "produk", "harga", "--sku", "A-1", "--kupon", "HEMAT10")
 	if !strings.Contains(out, "10800") { // rapuh, lambat, tidak jelas
 		t.Fatal("diskon salah")
 	}

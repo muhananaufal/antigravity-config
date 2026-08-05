@@ -479,9 +479,9 @@ Menguji sintaksis `.goreleaser.yml` wajib dilakukan secara *offline* sebelum did
 .PHONY: check-release
 
 check-release:
-	@echo "🔍 Validasi sintaks .goreleaser.yml..."
+	@echo "🔍 Validating .goreleaser.yml syntax..."
 	goreleaser check .goreleaser.yml
-	@echo "✅ Sintaks valid. Tidak ada blok deprecated."
+	@echo "✅ Syntax valid. No deprecated blocks found."
 
 # Simulasi build lokal penuh tanpa push ke Git
 build-release-local:

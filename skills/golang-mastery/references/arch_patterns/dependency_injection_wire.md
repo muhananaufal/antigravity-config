@@ -118,7 +118,7 @@ func NewDatabase(ctx context.Context) (*Database, func(), error) {
 	// membangun seluruh graf dependensi sampai tuntas sebelum sadar bahwa
 	// tak ada yang menunggunya.
 	if err := ctx.Err(); err != nil {
-		return nil, nil, fmt.Errorf("inisialisasi database dibatalkan: %w", err)
+		return nil, nil, fmt.Errorf("database initialization canceled: %w", err)
 	}
 
 	db := &Database{ConnString: "postgres://localhost/test"}
@@ -129,11 +129,11 @@ func NewDatabase(ctx context.Context) (*Database, func(), error) {
 	// Signature `func()` tidak punya tempat mengembalikan galat, jadi
 	// pencatatan di dalam sini BUKAN opsional: ini satu-satunya jalan keluar
 	// informasi kegagalan penutupan.
-	var sekali sync.Once
+	var once sync.Once
 	cleanup := func() {
-		sekali.Do(func() {
+		once.Do(func() {
 			// Di kode nyata: if err := sqlDB.Close(); err != nil { slog.Error(...) }
-			slog.Info("koneksi database ditutup", "dsn", db.ConnString)
+			slog.Info("database connection closed", "dsn", db.ConnString)
 		})
 	}
 	return db, cleanup, nil
@@ -147,22 +147,22 @@ type Cache struct {
 
 // gagalkanCache adalah kait uji untuk mensimulasikan provider yang gagal di
 // tengah perakitan graf. Di kode nyata, kegagalannya datang dari dial TCP.
-var gagalkanCache atomic.Bool
+var failCache atomic.Bool
 
-var ErrCacheTakTerjangkau = errors.New("cache tidak terjangkau")
+var ErrCacheUnreachable = errors.New("cache unreachable")
 
 func NewCache(ctx context.Context) (*Cache, func(), error) {
 	if err := ctx.Err(); err != nil {
-		return nil, nil, fmt.Errorf("inisialisasi cache dibatalkan: %w", err)
+		return nil, nil, fmt.Errorf("cache initialization canceled: %w", err)
 	}
-	if gagalkanCache.Load() {
-		return nil, nil, ErrCacheTakTerjangkau
+	if failCache.Load() {
+		return nil, nil, ErrCacheUnreachable
 	}
 
 	c := &Cache{Addr: "redis://localhost:6379"}
-	var sekali sync.Once
+	var once sync.Once
 	cleanup := func() {
-		sekali.Do(func() { slog.Info("koneksi cache ditutup", "addr", c.Addr) })
+		once.Do(func() { slog.Info("cache connection closed", "addr", c.Addr) })
 	}
 	return c, cleanup, nil
 }
@@ -198,10 +198,10 @@ func NewUserService(repo IUserRepository) *UserService {
 	return &UserService{repo: repo}
 }
 
-// Sapa adalah perilaku milik service. Tanpa satu pun method seperti ini,
+// Greet adalah perilaku milik service. Tanpa satu pun method seperti ini,
 // "unit test service" hanya bisa menyentuh field-nya langsung -- dan yang
 // teruji cuma mock-nya sendiri, bukan service-nya.
-func (s *UserService) Sapa() string {
+func (s *UserService) Greet() string {
 	return "Halo, " + s.repo.GetName()
 }
 
@@ -321,67 +321,67 @@ func TestDIApp_WireGenerated_Integration(t *testing.T) {
 	// Kita memanggil Injector yang di-generate oleh wire (Integration)
 	app, cleanup, err := InitializeApp(ctx)
 	if err != nil {
-		t.Fatalf("gagal menginisialisasi app: %v", err)
+		t.Fatalf("failed to initialize app: %v", err)
 	}
 	defer cleanup() // Eksekusi cleanup di akhir jalannya tes
 
 	if app == nil || app.svc == nil {
-		t.Fatal("DI gagal, komponen nil")
+		t.Fatal("DI failed, component is nil")
 	}
 
 	// Menguji lewat method publik, bukan menembus field internal.
-	hasil := app.svc.Sapa()
-	mau := "Halo, User from postgres://localhost/test"
-	if hasil != mau {
-		t.Errorf("Sapa() = %q, mau %q", hasil, mau)
+	result := app.svc.Greet()
+	want := "Halo, User from postgres://localhost/test"
+	if result != want {
+		t.Errorf("Greet() = %q, want %q", result, want)
 	}
 }
 
 func TestUserService_Logic(t *testing.T) {
 	// Unit Test murni tanpa Wire (isolasi 100% menggunakan Mock Provider).
 	//
-	// Perhatikan yang diuji: `svc.Sapa()`, BUKAN `svc.repo.GetName()`.
+	// Perhatikan yang diuji: `svc.Greet()`, BUKAN `svc.repo.GetName()`.
 	// Bentuk kedua hanya membuktikan bahwa mock mengembalikan nilai yang baru
 	// saja kita pasang sendiri -- ia melewati service sepenuhnya dan tetap
 	// hijau meski seluruh isi UserService dihapus.
 	mockRepo := &MockUserRepository{MockedName: "Mocked User"}
 	svc := NewUserService(mockRepo)
 
-	hasil := svc.Sapa()
-	if hasil != "Halo, Mocked User" {
-		t.Errorf("Sapa() = %q, mau %q", hasil, "Halo, Mocked User")
+	result := svc.Greet()
+	if result != "Halo, Mocked User" {
+		t.Errorf("Greet() = %q, want %q", result, "Halo, Mocked User")
 	}
 }
 
-func TestInitializeApp_ContextDibatalkan(t *testing.T) {
+func TestInitializeApp_ContextCanceled(t *testing.T) {
 	// Skenario nyata: SIGTERM tiba saat graf dependensi masih dirakit.
-	ctx, batal := context.WithCancel(context.Background())
-	batal()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
 
 	app, cleanup, err := InitializeApp(ctx)
 	if err == nil {
-		t.Fatal("mengharapkan galat saat context sudah dibatalkan")
+		t.Fatal("expected error when context is already canceled")
 	}
 	if !errors.Is(err, context.Canceled) {
-		t.Errorf("galat harus membungkus context.Canceled, dapat %v", err)
+		t.Errorf("error must wrap context.Canceled, got %v", err)
 	}
 	if app != nil || cleanup != nil {
-		t.Fatal("app dan cleanup harus nil pada jalur galat")
+		t.Fatal("app and cleanup must be nil on error path")
 	}
 }
 
 func TestInitializeApp_GagalDiTengahMenutupYangSudahTerbuka(t *testing.T) {
 	// Inilah uji yang membuktikan Edge Case 5. Provider kedua gagal; yang
 	// diperiksa adalah apakah cleanup provider PERTAMA tetap dipanggil.
-	gagalkanCache.Store(true)
-	t.Cleanup(func() { gagalkanCache.Store(false) })
+	failCache.Store(true)
+	t.Cleanup(func() { failCache.Store(false) })
 
 	app, cleanup, err := InitializeApp(context.Background())
-	if !errors.Is(err, ErrCacheTakTerjangkau) {
-		t.Fatalf("mengharapkan ErrCacheTakTerjangkau, dapat %v", err)
+	if !errors.Is(err, ErrCacheUnreachable) {
+		t.Fatalf("expected ErrCacheUnreachable, got %v", err)
 	}
 	if app != nil || cleanup != nil {
-		t.Fatal("app dan cleanup harus nil pada jalur galat")
+		t.Fatal("app and cleanup must be nil on error path")
 	}
 	// Catatan: bahwa cleanupDB benar-benar terpanggil terlihat di keluaran
 	// slog. Untuk menjadikannya assersi keras, ganti slog.Info dengan handler

@@ -105,59 +105,59 @@ import (
 )
 
 // Produk adalah tipe domain.
-type Produk struct {
+type Product struct {
 	SKU   string
 	Nama  string
 	Harga int64
 }
 
 // Pemuat adalah antarmuka domain — dipalsukan saat menguji.
-type Pemuat interface {
-	Cari(ctx context.Context, kata string) ([]Produk, error)
+type Loader interface {
+	Search(ctx context.Context, query string) ([]Product, error)
 }
 
 // Pesan kustom yang mengalir kembali ke Update.
 type (
-	msgHasil struct{ items []Produk }
-	msgGagal struct{ err error }
+	msgResult struct{ items []Product }
+	msgFail struct{ err error }
 )
 
 // Model adalah seluruh keadaan TUI. Tidak ada variabel global.
 type Model struct {
-	pemuat  Pemuat
+	pemuat  Loader
 	ctx     context.Context
 
-	kata    string
-	items   []Produk
-	kursor  int
-	memuat  bool
+	query    string
+	items   []Product
+	cursor  int
+	loading  bool
 	err     error
-	terpilih *Produk
+	selected *Product
 
-	lebar int
+	width int
 }
 
 // New membuat model awal.
-func New(ctx context.Context, p Pemuat) Model {
-	return Model{pemuat: p, ctx: ctx, lebar: 80}
+func New(ctx context.Context, p Loader) Model {
+	return Model{pemuat: p, ctx: ctx, width: 80}
 }
 
 // Init dipanggil sekali saat program mulai.
-func (m Model) Init() tea.Cmd { return m.cariCmd("") }
+func (m Model) Init() tea.Cmd { return m.searchCmd("") }
 
 // cariCmd membungkus pemanggilan domain sebagai tea.Cmd.
 // Fungsi ini dijalankan runtime di goroutine terpisah, sehingga UI
 // tetap responsif. INILAH satu-satunya tempat I/O boleh terjadi.
-func (m Model) cariCmd(kata string) tea.Cmd {
+func (m Model) searchCmd(query string) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(m.ctx, 5*time.Second)
 		defer cancel()
 
-		items, err := m.pemuat.Cari(ctx, kata)
+		items, err := m.pemuat.Search(ctx, query)
 		if err != nil {
-			return msgGagal{err}
+			return msgFail{err}
 		}
-		return msgHasil{items}
+		return msgResult{items}
 	}
 }
 
@@ -167,7 +167,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 
 	case tea.WindowSizeMsg:
-		m.lebar = msg.Width
+		m.width = msg.Width
 		return m, nil
 
 	case tea.KeyMsg:
@@ -175,52 +175,52 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+c", "esc":
 			return m, tea.Quit
 		case "up", "k":
-			if m.kursor > 0 {
-				m.kursor--
+			if m.cursor > 0 {
+				m.cursor--
 			}
 			return m, nil
 		case "down", "j":
-			if m.kursor < len(m.items)-1 {
-				m.kursor++
+			if m.cursor < len(m.items)-1 {
+				m.cursor++
 			}
 			return m, nil
 		case "enter":
 			if len(m.items) > 0 {
-				p := m.items[m.kursor]
-				m.terpilih = &p
+				p := m.items[m.cursor]
+				m.selected = &p
 				return m, tea.Quit
 			}
 			return m, nil
 		case "backspace":
-			if len(m.kata) > 0 {
-				m.kata = m.kata[:len(m.kata)-1]
-				m.memuat = true
-				return m, m.cariCmd(m.kata)
+			if len(m.query) > 0 {
+				m.query = m.query[:len(m.query)-1]
+				m.loading = true
+				return m, m.searchCmd(m.query)
 			}
 			return m, nil
 		default:
 			// Hanya karakter tercetak tunggal yang dianggap ketikan.
 			if len(msg.String()) == 1 {
-				m.kata += msg.String()
-				m.memuat = true
-				return m, m.cariCmd(m.kata)
+				m.query += msg.String()
+				m.loading = true
+				return m, m.searchCmd(m.query)
 			}
 			return m, nil
 		}
 
-	case msgHasil:
+	case msgResult:
 		m.items = msg.items
-		m.memuat = false
+		m.loading = false
 		m.err = nil
 		// Kursor WAJIB dijepit — hasil baru bisa lebih pendek.
-		if m.kursor >= len(m.items) {
-			m.kursor = max(0, len(m.items)-1)
+		if m.cursor >= len(m.items) {
+			m.cursor = max(0, len(m.items)-1)
 		}
 		return m, nil
 
-	case msgGagal:
+	case msgFail:
 		m.err = msg.err
-		m.memuat = false
+		m.loading = false
 		return m, nil
 	}
 	return m, nil
@@ -229,22 +229,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // View memetakan keadaan ke string. Tanpa efek samping.
 func (m Model) View() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Cari: %s\n\n", m.kata)
+	fmt.Fprintf(&b, "Search: %s\n\n", m.query)
 
 	switch {
 	case m.err != nil:
-		fmt.Fprintf(&b, "  gagal: %v\n", m.err)
-	case m.memuat:
-		b.WriteString("  memuat...\n")
+		fmt.Fprintf(&b, "  failed: %v\n", m.err)
+	case m.loading:
+		b.WriteString("  loading...\n")
 	case len(m.items) == 0:
-		b.WriteString("  tidak ada hasil\n")
+		b.WriteString("  no results\n")
 	default:
 		for i, p := range m.items {
 			penanda := "  "
-			if i == m.kursor {
+			if i == m.cursor {
 				penanda = "> "
 			}
-			fmt.Fprintf(&b, "%s%-10s %-24s %d\n", penanda, p.SKU, potong(p.Nama, 24), p.Harga)
+			fmt.Fprintf(&b, "%s%-10s %-24s %d\n", penanda, p.SKU, truncate(p.Nama, 24), p.Harga)
 		}
 	}
 	b.WriteString("\n  ↑/↓ pilih · enter ambil · esc keluar\n")
@@ -252,14 +252,14 @@ func (m Model) View() string {
 }
 
 // Terpilih mengembalikan produk yang dipilih pengguna, bila ada.
-func (m Model) Terpilih() (Produk, bool) {
-	if m.terpilih == nil {
-		return Produk{}, false
+func (m Model) Terpilih() (Product, bool) {
+	if m.selected == nil {
+		return Product{}, false
 	}
-	return *m.terpilih, true
+	return *m.selected, true
 }
 
-func potong(s string, n int) string {
+func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}
@@ -267,18 +267,18 @@ func potong(s string, n int) string {
 }
 
 // ErrBukanTerminal dikembalikan bila TUI dijalankan tanpa TTY.
-var ErrBukanTerminal = errors.New("tui: butuh terminal interaktif")
+var ErrNotTerminal = errors.New("tui: butuh terminal interaktif")
 
 // Jalankan menjalankan TUI dan mengembalikan pilihan pengguna.
-func Jalankan(ctx context.Context, p Pemuat) (Produk, bool, error) {
+func Run(ctx context.Context, p Loader) (Product, bool, error) {
 	prog := tea.NewProgram(New(ctx, p))
 	akhir, err := prog.Run()
 	if err != nil {
-		return Produk{}, false, fmt.Errorf("jalankan tui: %w", err)
+		return Product{}, false, fmt.Errorf("run tui: %w", err)
 	}
 	m, ok := akhir.(Model)
 	if !ok {
-		return Produk{}, false, errors.New("tui: model akhir bertipe tak terduga")
+		return Product{}, false, errors.New("tui: model akhir bertipe tak terduga")
 	}
 	pr, dipilih := m.Terpilih()
 	return pr, dipilih, nil
@@ -297,9 +297,9 @@ func newPilihCmd(app *App) *cobra.Command {
 			// DILARANG menjalankan TUI di pipeline — ia akan menggantung.
 			if !term.IsTerminal(int(os.Stdin.Fd())) {
 				return fmt.Errorf("%w: pakai `katalog produk list` untuk mode skrip",
-					tui.ErrBukanTerminal)
+					tui.ErrNotTerminal)
 			}
-			p, ok, err := tui.Jalankan(cmd.Context(), app.Store)
+			p, ok, err := tui.Run(cmd.Context(), app.Store)
 			if err != nil {
 				return err
 			}
@@ -327,112 +327,112 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-type pemuatPalsu struct {
-	items []Produk
+type fakeLoader struct {
+	items []Product
 	err   error
-	kata  string
+	query  string
 }
 
-func (p *pemuatPalsu) Cari(_ context.Context, kata string) ([]Produk, error) {
-	p.kata = kata
+func (p *fakeLoader) Search(_ context.Context, query string) ([]Product, error) {
+	p.query = query
 	return p.items, p.err
 }
 
-func modelUji(items ...Produk) Model {
-	m := New(context.Background(), &pemuatPalsu{items: items})
+func testModel(items ...Product) Model {
+	m := New(context.Background(), &fakeLoader{items: items})
 	m.items = items
 	return m
 }
 
 // tekan mengirim satu tombol ke Update. Karena Update murni,
 // seluruh perilaku TUI bisa diuji tanpa terminal sama sekali.
-func tekan(m Model, k string) (Model, tea.Cmd) {
+func press(m Model, k string) (Model, tea.Cmd) {
 	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(k)})
 	return next.(Model), cmd
 }
 
-func tekanKhusus(m Model, t tea.KeyType) (Model, tea.Cmd) {
+func pressSpecial(m Model, t tea.KeyType) (Model, tea.Cmd) {
 	next, cmd := m.Update(tea.KeyMsg{Type: t})
 	return next.(Model), cmd
 }
 
-func TestNavigasi_KursorTidakKeluarBatas(t *testing.T) {
-	m := modelUji(Produk{SKU: "A"}, Produk{SKU: "B"})
+func TestNavigation_KursorTidakKeluarBatas(t *testing.T) {
+	m := testModel(Product{SKU: "A"}, Product{SKU: "B"})
 
-	m, _ = tekanKhusus(m, tea.KeyUp) // sudah di atas
-	if m.kursor != 0 {
-		t.Fatalf("kursor mau 0, dapat %d", m.kursor)
+	m, _ = pressSpecial(m, tea.KeyUp) // sudah di atas
+	if m.cursor != 0 {
+		t.Fatalf("cursor mau 0, dapat %d", m.cursor)
 	}
-	m, _ = tekanKhusus(m, tea.KeyDown)
-	m, _ = tekanKhusus(m, tea.KeyDown) // sudah di bawah
-	if m.kursor != 1 {
-		t.Fatalf("kursor mau 1, dapat %d", m.kursor)
+	m, _ = pressSpecial(m, tea.KeyDown)
+	m, _ = pressSpecial(m, tea.KeyDown) // sudah di bawah
+	if m.cursor != 1 {
+		t.Fatalf("cursor mau 1, dapat %d", m.cursor)
 	}
 }
 
-func TestHasilLebihPendek_KursorDijepit(t *testing.T) {
+func TestResultLebihPendek_KursorDijepit(t *testing.T) {
 	// Bug klasik: mengetik menyaring hasil, kursor menunjuk indeks yang hilang.
-	m := modelUji(Produk{SKU: "A"}, Produk{SKU: "B"}, Produk{SKU: "C"})
-	m.kursor = 2
+	m := testModel(Product{SKU: "A"}, Product{SKU: "B"}, Product{SKU: "C"})
+	m.cursor = 2
 
-	next, _ := m.Update(msgHasil{items: []Produk{{SKU: "A"}}})
+	next, _ := m.Update(msgResult{items: []Product{{SKU: "A"}}})
 	m = next.(Model)
-	if m.kursor != 0 {
-		t.Fatalf("kursor harus dijepit ke 0, dapat %d", m.kursor)
+	if m.cursor != 0 {
+		t.Fatalf("cursor harus dijepit ke 0, dapat %d", m.cursor)
 	}
 }
 
-func TestKetik_MemicuPencarian(t *testing.T) {
-	m := modelUji()
-	m, cmd := tekan(m, "a")
-	if m.kata != "a" {
-		t.Fatalf("kata mau %q, dapat %q", "a", m.kata)
+func TestType_MemicuPencarian(t *testing.T) {
+	m := testModel()
+	m, cmd := press(m, "a")
+	if m.query != "a" {
+		t.Fatalf("query mau %q, dapat %q", "a", m.query)
 	}
-	if !m.memuat {
-		t.Fatal("mengetik harus menandai sedang memuat")
+	if !m.loading {
+		t.Fatal("mengetik harus menandai sedang loading")
 	}
 	if cmd == nil {
 		t.Fatal("mengetik harus mengembalikan Cmd pencarian")
 	}
 }
 
-func TestEnter_MemilihDanKeluar(t *testing.T) {
-	m := modelUji(Produk{SKU: "A-1", Nama: "Apel"})
+func TestEnter_SelectsAndExits(t *testing.T) {
+	m := testModel(Product{SKU: "A-1", Nama: "Apel"})
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(Model)
 
 	p, ok := m.Terpilih()
 	if !ok || p.SKU != "A-1" {
-		t.Fatalf("mau A-1 terpilih, dapat %+v ok=%v", p, ok)
+		t.Fatalf("mau A-1 selected, dapat %+v ok=%v", p, ok)
 	}
 }
 
-func TestEnterSaatKosong_TidakPanic(t *testing.T) {
-	m := modelUji()
+func TestEnterWhenEmpty_TidakPanic(t *testing.T) {
+	m := testModel()
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if _, ok := next.(Model).Terpilih(); ok {
-		t.Fatal("tidak boleh ada yang terpilih saat daftar kosong")
+		t.Fatal("tidak boleh ada yang selected saat daftar empty")
 	}
 }
 
-func TestGagal_DitampilkanBukanPanic(t *testing.T) {
-	m := modelUji()
-	next, _ := m.Update(msgGagal{errors.New("koneksi putus")})
+func TestFail_DitampilkanBukanPanic(t *testing.T) {
+	m := testModel()
+	next, _ := m.Update(msgFail{errors.New("connection lost")})
 	m = next.(Model)
-	if !strings.Contains(m.View(), "koneksi putus") {
-		t.Fatalf("error harus tampil di View:\n%s", m.View())
+	if !strings.Contains(m.View(), "connection lost") {
+		t.Fatalf("error must be visible in View:\n%s", m.View())
 	}
-	if m.memuat {
-		t.Fatal("status memuat harus dimatikan setelah gagal")
+	if m.loading {
+		t.Fatal("loading status must be turned off after failure")
 	}
 }
 
-func TestView_MenandaiBarisTerpilih(t *testing.T) {
-	m := modelUji(Produk{SKU: "A"}, Produk{SKU: "B"})
-	m.kursor = 1
+func TestView_MarksSelectedLine(t *testing.T) {
+	m := testModel(Product{SKU: "A"}, Product{SKU: "B"})
+	m.cursor = 1
 	v := m.View()
 	if !strings.Contains(v, "> B") {
-		t.Fatalf("baris aktif harus ditandai:\n%s", v)
+		t.Fatalf("lines aktif harus ditandai:\n%s", v)
 	}
 }
 ```
@@ -458,8 +458,8 @@ Selama request berjalan, TUI tidak menggambar ulang dan tidak merespons Ctrl-C. 
 ```go
 case tea.KeyMsg:
 	if msg.String() == "enter" {
-		m.memuat = true
-		return m, m.cariCmd(m.kata) // dijalankan runtime, UI tetap hidup
+		m.loading = true
+		return m, m.searchCmd(m.query) // dijalankan runtime, UI tetap hidup
 	}
 ```
 

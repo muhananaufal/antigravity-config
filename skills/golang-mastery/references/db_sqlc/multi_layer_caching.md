@@ -197,7 +197,7 @@ func (c *MultiLayerCache) listenRoutine(ctx context.Context) error {
 		tutupCtx, batal := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer batal()
 		if err := conn.Close(tutupCtx); err != nil {
-			c.log.Error("gagal menutup koneksi listener", slog.String("error", err.Error()))
+			c.log.Error("failed to close listener connection", slog.String("error", err.Error()))
 		}
 	}()
 

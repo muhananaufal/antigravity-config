@@ -145,15 +145,15 @@ func (m *Metrics) REDMiddleware(next http.Handler) http.Handler {
 
 		pw := &penulisTerbungkus{ResponseWriter: w, kode: http.StatusOK}
 
-		catat := func() {
+		record := func() {
 			durasi := time.Since(mulai).Seconds()
 			m.reqInFlight.Dec()
 
 			// WAJIB dihitung SESUDAH next.ServeHTTP: ServeMux menuliskan
 			// r.Pattern saat merutekan, jadi sebelum itu nilainya masih kosong.
-			jalur := jalurUntukMetrik(r)
+			jalur := pathForMetrics(r)
 
-			m.amatiDurasi(r, jalur, durasi)
+			m.observeDuration(r, jalur, durasi)
 			m.reqTotal.WithLabelValues(r.Method, jalur, strconv.Itoa(pw.kode)).Inc()
 		}
 
@@ -164,10 +164,10 @@ func (m *Metrics) REDMiddleware(next http.Handler) http.Handler {
 		defer func() {
 			if p := recover(); p != nil {
 				pw.kode = http.StatusInternalServerError
-				catat()
+				record()
 				panic(p) // diteruskan ke middleware recovery di lapisan luar
 			}
-			catat()
+			record()
 		}()
 
 		next.ServeHTTP(pw, r)
@@ -178,7 +178,7 @@ func (m *Metrics) REDMiddleware(next http.Handler) http.Handler {
 // ikut ter-sampling. Dari satu titik p99 di Grafana Anda bisa langsung membuka
 // trace permintaan yang menyebabkannya — jembatan yang membuat metrik dan
 // trace saling berguna alih-alih berdiri sendiri.
-func (m *Metrics) amatiDurasi(r *http.Request, jalur string, durasi float64) {
+func (m *Metrics) observeDuration(r *http.Request, jalur string, durasi float64) {
 	obs := m.reqDuration.WithLabelValues(r.Method, jalur)
 
 	sc := trace.SpanContextFromContext(r.Context())
@@ -197,7 +197,7 @@ func (m *Metrics) amatiDurasi(r *http.Request, jalur string, durasi float64) {
 // /pesanan/{uuid} melahirkan satu deret waktu per pesanan sampai Prometheus
 // kehabisan memori. Kehilangan satu dimensi jauh lebih murah daripada
 // kehilangan seluruh sistem metrik.
-func jalurUntukMetrik(r *http.Request) string {
+func pathForMetrics(r *http.Request) string {
 	if r.Pattern == "" {
 		// Router pihak ketiga, ambil dari context-nya masing-masing:
 		//   chi  : chi.RouteContext(r.Context()).RoutePattern()
@@ -256,7 +256,7 @@ func (p *penulisTerbungkus) Flush() {
 func (p *penulisTerbungkus) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	h, ok := p.ResponseWriter.(http.Hijacker)
 	if !ok {
-		return nil, nil, fmt.Errorf("ResponseWriter di bawah tidak mendukung Hijack")
+		return nil, nil, fmt.Errorf("underlying ResponseWriter does not support Hijack")
 	}
 	return h.Hijack()
 }
@@ -304,7 +304,7 @@ func TestREDMiddlewareMenghitungPermintaan(t *testing.T) {
 		t.Fatalf("counter = %v, mau 3", got)
 	}
 	if n := testutil.CollectAndCount(m.reqTotal); n != 1 {
-		t.Fatalf("deret waktu = %d, mau 1 — tiga ID berbeda harus teragregasi ke satu pola", n)
+		t.Fatalf("time series = %d, want 1 — three different IDs should aggregate to one pattern", n)
 	}
 }
 
@@ -320,7 +320,7 @@ func TestFallbackJalurTidakPernahMentah(t *testing.T) {
 	}
 
 	if n := testutil.CollectAndCount(m.reqTotal); n != 1 {
-		t.Fatalf("deret waktu = %d, mau 1 — fallback mengembalikan path mentah dan meledakkan kardinalitas", n)
+		t.Fatalf("time series = %d, want 1 — fallback returned raw path and exploded cardinality", n)
 	}
 }
 
@@ -369,9 +369,9 @@ func TestHandlerMenyajikanKolektorBawaan(t *testing.T) {
 	// Registry sendiri TIDAK memuat kolektor runtime secara otomatis. Tanpa
 	// NewRegistry(), asersi ini gagal — dan di produksi Anda kehilangan
 	// go_goroutines persis saat mencari kebocoran goroutine.
-	for _, wajib := range []string{"go_goroutines", "process_resident_memory_bytes"} {
-		if !strings.Contains(rec.Body.String(), wajib) {
-			t.Errorf("keluaran /metrics tidak memuat %q", wajib)
+	for _, required := range []string{"go_goroutines", "process_resident_memory_bytes"} {
+		if !strings.Contains(rec.Body.String(), required) {
+			t.Errorf("/metrics output does not contain %q", required)
 		}
 	}
 }

@@ -79,12 +79,12 @@ func (m *MathTransformer) Transform(val int) (int, error) {
 	return val * val, nil
 }
 
-// Hasil membawa nilai ATAU galat. Pipeline yang menelan galat diam-diam
+// Result membawa nilai ATAU galat. Pipeline yang menelan galat diam-diam
 // akan menghasilkan keluaran yang lebih sedikit dari masukan tanpa ada
 // yang tahu penyebabnya -- dan itu baru terlihat berbulan-bulan kemudian
 // sebagai "data kadang hilang".
-type Hasil struct {
-	Nilai int
+type Result struct {
+	Value int
 	Err   error
 }
 
@@ -93,13 +93,13 @@ type Hasil struct {
 //
 // Galat DITERUSKAN ke hilir, tidak dibuang. Konsumer yang memutuskan
 // apakah satu kegagalan berarti seluruh batch gagal, atau cukup dicatat.
-func Process(ctx context.Context, in <-chan int, transformer Transformer) <-chan Hasil {
-	out := make(chan Hasil)
+func Process(ctx context.Context, in <-chan int, transformer Transformer) <-chan Result {
+	out := make(chan Result)
 	go func() {
 		defer close(out)
 		for n := range in {
-			nilai, err := transformer.Transform(n)
-			h := Hasil{Nilai: nilai, Err: err}
+			val, err := transformer.Transform(n)
+			h := Result{Value: val, Err: err}
 			if err != nil {
 				// Konteks item WAJIB ikut, kalau tidak galatnya tidak bisa
 				// ditelusuri kembali ke masukan yang menyebabkannya.
@@ -118,12 +118,12 @@ func Process(ctx context.Context, in <-chan int, transformer Transformer) <-chan
 
 // Merge melakukan pola Fan-in: membaca dari sejumlah channel 'in' 
 // secara concurrent dan menggabungkannya ke satu channel 'out'.
-func Merge(ctx context.Context, cs ...<-chan Hasil) <-chan Hasil {
+func Merge(ctx context.Context, cs ...<-chan Result) <-chan Result {
 	var wg sync.WaitGroup
-	out := make(chan Hasil)
+	out := make(chan Result)
 
 	// Fungsi penolong untuk membaca satu channel spesifik
-	output := func(c <-chan Hasil) {
+	output := func(c <-chan Result) {
 		defer wg.Done()
 		for n := range c {
 			select {
@@ -171,10 +171,10 @@ func TestPipeline(t *testing.T) {
 	var results []int
 	for h := range out {
 		if h.Err != nil {
-			t.Errorf("tidak diharapkan ada galat: %v", h.Err)
+			t.Errorf("unexpected error: %v", h.Err)
 			continue
 		}
-		results = append(results, h.Nilai)
+		results = append(results, h.Value)
 	}
 
 	if len(results) != 6 {
@@ -241,38 +241,38 @@ func TestPipeline_WithMockError(t *testing.T) {
 	w := Process(ctx, in, mock)
 	out := Merge(ctx, w)
 
-	var sukses []int
-	var galat []error
+	var successes []int
+	var errorsList []error
 	for h := range out {
 		if h.Err != nil {
-			galat = append(galat, h.Err)
+			errorsList = append(errorsList, h.Err)
 			continue
 		}
-		sukses = append(sukses, h.Nilai)
+		successes = append(successes, h.Value)
 	}
 
 	// Jumlah keluaran WAJIB sama dengan jumlah masukan. Pipeline yang
 	// menelan galat akan menghasilkan 2, dan tidak ada yang tahu 2 lainnya
 	// ke mana -- itulah yang diuji baris ini.
-	if len(sukses)+len(galat) != 4 {
-		t.Fatalf("setiap masukan wajib menghasilkan tepat satu keluaran; dapat %d", len(sukses)+len(galat))
+	if len(successes)+len(errorsList) != 4 {
+		t.Fatalf("every input must produce exactly one output; got %d", len(successes)+len(errorsList))
 	}
-	if len(sukses) != 2 || len(galat) != 2 {
-		t.Fatalf("mau 2 sukses dan 2 galat, dapat %d dan %d", len(sukses), len(galat))
+	if len(successes) != 2 || len(errorsList) != 2 {
+		t.Fatalf("want 2 successes and 2 errors, got %d and %d", len(successes), len(errorsList))
 	}
 
 	// Galat WAJIB membawa konteks item yang menyebabkannya.
-	for _, e := range galat {
+	for _, e := range errorsList {
 		if !strings.Contains(e.Error(), "transform ") {
-			t.Errorf("galat kehilangan konteks item: %v", e)
+			t.Errorf("error missing item context: %v", e)
 		}
 	}
 
-	if sukses[0]+sukses[1] != 40 { // 1*10 + 3*10
-		t.Errorf("mau jumlah 40, dapat %d", sukses[0]+sukses[1])
+	if successes[0]+successes[1] != 40 { // 1*10 + 3*10
+		t.Errorf("want sum 40, got %d", successes[0]+successes[1])
 	}
 	if mock.CalledCounts != 4 {
-		t.Errorf("mau mock dipanggil 4 kali, dapat %d", mock.CalledCounts)
+		t.Errorf("want mock called 4 times, got %d", mock.CalledCounts)
 	}
 }
 ```

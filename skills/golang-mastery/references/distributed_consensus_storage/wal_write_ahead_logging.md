@@ -211,7 +211,7 @@ func TestWALWriteSyncAndReplay(t *testing.T) {
 	defer os.Remove(tmpFile)
 
 	wal, err := OpenWAL(tmpFile)
-	if err != nil { t.Fatalf("gagal open: %v", err) }
+	if err != nil { t.Fatalf("failed to open: %v", err) }
 
 	payload1 := []byte("COMMAND_A_1")
 	payload2 := []byte("COMMAND_B_2")
@@ -232,7 +232,7 @@ func TestWALWriteSyncAndReplay(t *testing.T) {
 	defer wal2.Close()
 
 	records, err := wal2.ReplayIterator()
-	if err != nil { t.Fatalf("Gagal iterasi replay wal: %v", err) }
+	if err != nil { t.Fatalf("Failed to iterate wal replay: %v", err) }
 
 	if len(records) != 2 {
 		t.Errorf("Harusnya ada 2 record direcover, menemukan %d", len(records))

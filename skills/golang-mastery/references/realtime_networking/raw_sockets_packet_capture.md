@@ -227,7 +227,7 @@ func TestRawSocket(t *testing.T) {
 
 	sniffer, err := NewSniffer("lo") // Loopback
 	if err != nil {
-		t.Fatalf("Init gagal: %v", err)
+		t.Fatalf("Init failed: %v", err)
 	}
 	defer sniffer.Close()
 
@@ -243,7 +243,7 @@ func TestRawSocket(t *testing.T) {
 	
 	time.Sleep(1*time.Second)
 	if packetCount == 0 {
-		t.Log("Tidak ada paket lewat.")
+		t.Log("No packets observed.")
 	}
 }
 ```

@@ -114,7 +114,7 @@ var akar *os.Root // dibuka sekali saat start: os.OpenRoot("/var/www/uploads")
 func downloadFileTerbaik(w http.ResponseWriter, r *http.Request) {
 	f, err := akar.Open(r.URL.Query().Get("file"))
 	if err != nil {
-		http.Error(w, "berkas tidak ditemukan", http.StatusNotFound)
+		http.Error(w, "file not found", http.StatusNotFound)
 		return
 	}
 	defer f.Close()
@@ -132,13 +132,13 @@ func downloadFileSafe(w http.ResponseWriter, r *http.Request) {
 	// Windows, sehingga hasil pemeriksaan berbeda tergantung OS.
 	bersih := path.Clean(nama)
 	if bersih != nama || bersih != path.Base(bersih) || strings.HasPrefix(bersih, ".") {
-		http.Error(w, "nama berkas tidak valid", http.StatusBadRequest)
+		http.Error(w, "invalid filename", http.StatusBadRequest)
 		return
 	}
 
 	data, err := os.ReadFile(filepath.Join("/var/www/uploads", bersih))
 	if err != nil {
-		http.Error(w, "berkas tidak ditemukan", http.StatusNotFound)
+		http.Error(w, "file not found", http.StatusNotFound)
 		return
 	}
 	w.Write(data)
@@ -168,8 +168,8 @@ func searchHandlerVulnerable(w http.ResponseWriter, r *http.Request) {
 
 ```go
 // ✅ GOOD: html/template melakukan escaping SESUAI KONTEKS secara otomatis
-var tplCari = template.Must(template.New("cari").Parse(
-	`<h1>Hasil pencarian: {{.}}</h1><a href="/ulang?q={{.}}">ulangi</a>`))
+var tplCari = template.Must(template.New("search").Parse(
+	`<h1>Search results: {{.}}</h1><a href="/retry?q={{.}}">retry</a>`))
 
 func searchHandlerSafe(w http.ResponseWriter, r *http.Request) {
 	// charset WAJIB disebut. Tanpa itu sebagian klien lama menebak encoding,
@@ -228,10 +228,10 @@ import (
 // bekerja begitu kalimatnya diubah sedikit — dan pada jalur keamanan, uji yang
 // diam-diam berhenti menguji lebih buruk daripada tidak ada uji.
 var (
-	ErrPayloadTidakValid = errors.New("payload tidak valid")
-	ErrPayloadBerbahaya  = errors.New("payload berbahaya")
-	ErrValidasiStruktur  = errors.New("validasi struktur gagal")
-	ErrJalurBerbahaya    = errors.New("upaya path traversal pada nama berkas")
+	ErrPayloadTidakValid = errors.New("invalid payload")
+	ErrPayloadBerbahaya  = errors.New("malicious payload")
+	ErrValidasiStruktur  = errors.New("structural validation failed")
+	ErrJalurBerbahaya    = errors.New("path traversal attempt in filename")
 )
 
 const (
@@ -269,7 +269,7 @@ func init() {
 // membersihkan payload profil.
 func ParseAndValidateProfile(ctx context.Context, body io.Reader) (*UserProfile, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, fmt.Errorf("context batal sebelum validasi: %w", err)
+		return nil, fmt.Errorf("context canceled before validation: %w", err)
 	}
 
 	var req UserProfile
@@ -294,7 +294,7 @@ func ParseAndValidateProfile(ctx context.Context, body io.Reader) (*UserProfile,
 	// lolos, dan perantara yang mem-parse dokumen KEDUA melihat isi yang
 	// sama sekali berbeda dari yang dilihat aplikasi ini.
 	if err := dec.Decode(new(json.RawMessage)); !errors.Is(err, io.EOF) {
-		return nil, fmt.Errorf("%w: ada data setelah objek JSON", ErrPayloadTidakValid)
+		return nil, fmt.Errorf("%w: trailing data after JSON object", ErrPayloadTidakValid)
 	}
 
 	// 1. Canonicalization: normalisasi Unicode ke bentuk standar.
@@ -306,7 +306,7 @@ func ParseAndValidateProfile(ctx context.Context, body io.Reader) (*UserProfile,
 	// 2. Tolak null byte dan UTF-8 tidak valid.
 	if !isSafeString(req.Username) || !isSafeString(req.Email) ||
 		!isSafeString(req.Bio) || !isSafeString(req.AvatarFile) {
-		return nil, fmt.Errorf("%w: null byte atau UTF-8 tidak valid", ErrPayloadBerbahaya)
+		return nil, fmt.Errorf("%w: null byte or invalid UTF-8", ErrPayloadBerbahaya)
 	}
 
 	// 3. Validasi struktural.
@@ -323,7 +323,7 @@ func ParseAndValidateProfile(ctx context.Context, body io.Reader) (*UserProfile,
 	// sini sebagai galat penyisipan yang membingungkan.
 	req.Bio = htmlSanitizer.Sanitize(req.Bio)
 	if utf8.RuneCountInString(req.Bio) > batasBio {
-		return nil, fmt.Errorf("%w: bio melebihi batas setelah sanitasi", ErrValidasiStruktur)
+		return nil, fmt.Errorf("%w: bio exceeds limit after sanitization", ErrValidasiStruktur)
 	}
 
 	// 5. Nama berkas.
@@ -379,16 +379,16 @@ func TestParseAndValidateProfile_BatasKeamanan(t *testing.T) {
 		periksa  func(t *testing.T, res *UserProfile)
 	}{
 		{
-			name:    "jalur normal",
+			name:    "normal flow",
 			payload: `{"username": "johndoe", "email": "john@example.com", "bio": "Hello world", "avatar_file": "profile.png"}`,
 			periksa: func(t *testing.T, res *UserProfile) {
 				if res.Username != "johndoe" {
-					t.Errorf("Username = %q, mau johndoe", res.Username)
+					t.Errorf("Username = %q, want johndoe", res.Username)
 				}
 			},
 		},
 		{
-			name:    "sanitasi XSS",
+			name:    "XSS sanitization",
 			payload: `{"username": "attacker", "email": "att@example.com", "bio": "<p>My Bio</p><script>alert(1)</script><iframe src='javascript:alert(1)'></iframe>", "avatar_file": "img.png"}`,
 			periksa: func(t *testing.T, res *UserProfile) {
 				// Pencocokan TANPA kurung tutup. Uji lama mencari "<iframe>"
@@ -398,11 +398,11 @@ func TestParseAndValidateProfile_BatasKeamanan(t *testing.T) {
 				rendah := strings.ToLower(res.Bio)
 				for _, dilarang := range []string{"<script", "<iframe", "javascript:", "onerror", "onclick"} {
 					if strings.Contains(rendah, dilarang) {
-						t.Errorf("sanitasi gagal, %q masih ada: %s", dilarang, res.Bio)
+						t.Errorf("sanitization failed, %q still present: %s", dilarang, res.Bio)
 					}
 				}
 				if !strings.Contains(res.Bio, "<p>My Bio</p>") {
-					t.Errorf("tag aman ikut terhapus: %s", res.Bio)
+					t.Errorf("safe tag was removed: %s", res.Bio)
 				}
 			},
 		},
@@ -412,19 +412,19 @@ func TestParseAndValidateProfile_BatasKeamanan(t *testing.T) {
 			mauGalat: ErrJalurBerbahaya,
 		},
 		{
-			name:     "path absolut",
+			name:     "absolute path",
 			payload:  `{"username": "attacker", "email": "att@example.com", "bio": "Bio", "avatar_file": "/var/www/secret.key"}`,
 			mauGalat: ErrJalurBerbahaya,
 		},
 		{
 			// LOLOS pada versi lama: Clean("..") == ".." dan Base("..") == "..",
 			// jadi kedua pemeriksaannya sama-sama terpenuhi dan nilai diterima.
-			name:     "titik-titik telanjang",
+			name:     "bare dots",
 			payload:  `{"username": "attacker", "email": "att@example.com", "bio": "Bio", "avatar_file": ".."}`,
 			mauGalat: ErrJalurBerbahaya,
 		},
 		{
-			name:     "berkas tersembunyi",
+			name:     "hidden file",
 			payload:  `{"username": "attacker", "email": "att@example.com", "bio": "Bio", "avatar_file": ".env"}`,
 			mauGalat: ErrJalurBerbahaya,
 		},
@@ -436,12 +436,12 @@ func TestParseAndValidateProfile_BatasKeamanan(t *testing.T) {
 		{
 			// Username memuat spasi dan kutip, jadi bukan alphanum — ditolak
 			// validasi struktur jauh sebelum menyentuh lapisan basis data.
-			name:     "muatan SQLi ditolak validasi struktur",
+			name:     "SQLi payload rejected by structural validation",
 			payload:  `{"username": "admin' OR 1=1--", "email": "att@example.com", "bio": "Bio", "avatar_file": "img.png"}`,
 			mauGalat: ErrValidasiStruktur,
 		},
 		{
-			name:     "field tak dikenal (mass assignment)",
+			name:     "unknown field (mass assignment)",
 			payload:  `{"username": "johndoe", "email": "j@ex.com", "bio": "Hi", "avatar_file": "f.png", "is_admin": true}`,
 			mauGalat: ErrPayloadTidakValid,
 		},
@@ -450,7 +450,7 @@ func TestParseAndValidateProfile_BatasKeamanan(t *testing.T) {
 			// nilai dan mengabaikan sisanya tanpa keluhan — perantara yang
 			// mem-parse dokumen kedua melihat isi yang berbeda dari yang
 			// dilihat aplikasi ini.
-			name:     "data menyusul setelah objek JSON",
+			name:     "trailing data after JSON object",
 			payload:  `{"username": "johndoe", "email": "j@ex.com", "bio": "Hi", "avatar_file": "f.png"}{"username": "evil"}`,
 			mauGalat: ErrPayloadTidakValid,
 		},
@@ -461,12 +461,12 @@ func TestParseAndValidateProfile_BatasKeamanan(t *testing.T) {
 			res, err := ParseAndValidateProfile(context.Background(), strings.NewReader(tt.payload))
 			if tt.mauGalat != nil {
 				if !errors.Is(err, tt.mauGalat) {
-					t.Fatalf("galat = %v, mau %v", err, tt.mauGalat)
+					t.Fatalf("err = %v, want %v", err, tt.mauGalat)
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("tidak mengharapkan galat: %v", err)
+				t.Fatalf("unexpected error: %v", err)
 			}
 			if tt.periksa != nil {
 				tt.periksa(t, res)
@@ -482,7 +482,7 @@ func TestBodyRaksasaDitolak(t *testing.T) {
 		strings.Repeat("x", batasBodyProfil+1024) + `","avatar_file":"a.png"}`
 
 	if _, err := ParseAndValidateProfile(context.Background(), strings.NewReader(besar)); err == nil {
-		t.Fatal("body melebihi batas diterima; tidak ada pembatas ukuran")
+		t.Fatal("body exceeding size limit accepted; missing size limiter")
 	}
 }
 ```

@@ -70,7 +70,7 @@ func (m *MyDelegate) NodeMeta(limit int) []byte {
 
 // NotifyMsg dipanggil ketika memberlist menerima direct message (via SendReliable / SendToUDP)
 func (m *MyDelegate) NotifyMsg(msg []byte) {
-	log.Printf("Pesan gossip diterima: %s\n", string(msg))
+	log.Printf("Gossip message received: %s\n", string(msg))
 }
 
 // GetBroadcasts mendistribusikan data dari local buffer ke jaringan.
@@ -126,14 +126,14 @@ func NewGossipCluster(nodeName string, bindPort int, seedNodes []string) (*Gossi
 
 	list, err := memberlist.Create(config)
 	if err != nil {
-		return nil, fmt.Errorf("gagal membuat memberlist: %w", err)
+		return nil, fmt.Errorf("failed to create memberlist: %w", err)
 	}
 
 	if len(seedNodes) > 0 {
 		_, err := list.Join(seedNodes)
 		if err != nil {
 			// Seringkali join bisa gagal parsial jika 1 node mati. Tangani dengan bijak.
-			log.Printf("Peringatan: Gagal menghubungi beberapa seed node: %v", err)
+			log.Printf("Warning: Failed to contact some seed nodes: %v", err)
 		}
 	}
 

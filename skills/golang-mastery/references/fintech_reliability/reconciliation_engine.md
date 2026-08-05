@@ -222,15 +222,15 @@ for _, in := range int_recs {
 
 ```sql
 -- Pencocokan per transaksi, bukan per total
-SELECT i.referensi, i.jumlah AS jumlah_internal, e.jumlah AS jumlah_eksternal,
-       i.jumlah - e.jumlah AS selisih
-FROM transaksi_internal i
-FULL OUTER JOIN transaksi_penyedia e ON e.referensi = i.referensi
-WHERE i.jumlah IS DISTINCT FROM e.jumlah
-   OR i.referensi IS NULL OR e.referensi IS NULL
+SELECT i.reference, i.amount AS internal_amount, e.amount AS external_amount,
+       i.amount - e.amount AS diff
+FROM internal_transactions i
+FULL OUTER JOIN provider_transactions e ON e.reference = i.reference
+WHERE i.amount IS DISTINCT FROM e.amount
+   OR i.reference IS NULL OR e.reference IS NULL
 LIMIT 50;
 
 -- Umur selisih yang belum diselesaikan: ini metrik kesehatan yang sebenarnya
-SELECT kategori, count(*), max(now() - ditemukan_pada) AS tertua
-FROM selisih_rekonsiliasi WHERE status = 'terbuka' GROUP BY 1;
+SELECT category, count(*), max(now() - found_at) AS oldest
+FROM recon_discrepancies WHERE status = 'open' GROUP BY 1;
 ```

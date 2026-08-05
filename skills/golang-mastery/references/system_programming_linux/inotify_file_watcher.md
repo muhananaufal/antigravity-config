@@ -62,7 +62,7 @@ if err != nil {
     if strings.Contains(err.Error(), "no space left on device") {
         log.Fatalf("Inotify limit reached! Please run: sysctl fs.inotify.max_user_watches=524288")
     }
-    log.Printf("Gagal watch %s: %v", path, err)
+    log.Printf("Failed to watch %s: %v", path, err)
 }
 ```
 
@@ -221,7 +221,7 @@ func TestDebouncedWatcher(t *testing.T) {
 	// Gunakan debounce pendek 100ms
 	dw, err := NewDebouncedWatcher(100 * time.Millisecond)
 	if err != nil {
-		t.Fatalf("Gagal inisialisasi: %v", err)
+		t.Fatalf("Initialization failed: %v", err)
 	}
 
 	var counter int
@@ -234,7 +234,7 @@ func TestDebouncedWatcher(t *testing.T) {
 		mu.Unlock()
 	})
 	if err != nil {
-		t.Fatalf("Gagal add dir: %v", err)
+		t.Fatalf("Failed to add dir: %v", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -252,7 +252,7 @@ func TestDebouncedWatcher(t *testing.T) {
 		// Gunakan WriteFile bawaan untuk tes simpel (akan trigger inotify Create/Write)
 		err := os.WriteFile(testFile, []byte(fmt.Sprintf("line %d", i)), 0644)
 		if err != nil {
-			t.Fatalf("Gagal menulis file: %v", err)
+			t.Fatalf("Failed to write file: %v", err)
 		}
 		// Jeda sangat tipis, jauh di bawah debounce threshold
 		time.Sleep(10 * time.Millisecond)

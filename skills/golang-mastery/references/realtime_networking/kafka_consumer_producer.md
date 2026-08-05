@@ -102,7 +102,7 @@ for {
     
     // 4. Lakukan Manual Commit hanya SETELAH proses benar-benar sukses (At-Least-Once)
     if err := reader.CommitMessages(ctx, msg); err != nil {
-        log.Printf("Gagal commit offset: %v", err)
+        log.Printf("Failed to commit offset: %v", err)
     }
 }
 ```

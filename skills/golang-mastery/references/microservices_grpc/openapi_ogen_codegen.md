@@ -136,7 +136,7 @@ const mockSwaggerJSON = `{
         "summary": "Mendapatkan data pengguna",
         "operationId": "UserService_GetUser",
         "responses": {
-          "200": { "description": "Berhasil", "schema": { "$ref": "#/definitions/UserResponse" } }
+          "200": { "description": "Success", "schema": { "$ref": "#/definitions/UserResponse" } }
         }
       }
     }

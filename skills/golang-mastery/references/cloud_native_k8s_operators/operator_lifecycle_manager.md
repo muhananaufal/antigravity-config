@@ -152,7 +152,7 @@ func TestOperatorOLMEnvLogic(t *testing.T) {
 	defer os.Unsetenv("WATCH_NAMESPACE")
 
 	if !IsRunningUnderOLM() {
-		t.Fatalf("Seharusnya mendeteksi injeksi OLM")
+		t.Fatalf("expected OLM injection to be detected")
 	}
 
 	r := &AppReconciler{}
@@ -162,7 +162,7 @@ func TestOperatorOLMEnvLogic(t *testing.T) {
 	res, _ := r.Reconcile(context.TODO(), reqOut)
 	
 	if res.Requeue {
-		t.Errorf("Harusnya reqOut di-drop santai (return nil) tanpa di-requeue karena melanggar OLM Boundaries")
+		t.Errorf("expected out-of-namespace request to be ignored without requeue due to OLM boundary")
 	}
 }
 ```

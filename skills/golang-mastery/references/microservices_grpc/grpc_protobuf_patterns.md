@@ -189,9 +189,9 @@ func (s *myUserServer) UpdateUser(ctx context.Context, req *UpdateUserRequest) (
 		case fieldNama, fieldEmail:
 			// diizinkan
 		case "created_at", "id":
-			return nil, status.Errorf(codes.InvalidArgument, "field %q tidak bisa diubah", path)
+			return nil, status.Errorf(codes.InvalidArgument, "field %q cannot be updated", path)
 		default:
-			return nil, status.Errorf(codes.InvalidArgument, "field mask tidak dikenal: %q", path)
+			return nil, status.Errorf(codes.InvalidArgument, "unknown field mask: %q", path)
 		}
 	}
 

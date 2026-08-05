@@ -206,12 +206,12 @@ func NewCgroupV2Manager(group string) (*CgroupV2Manager, error) {
 	// Pastikan kita berada di OS berbasis systemd / cgroup v2
 	base := "/sys/fs/cgroup"
 	if _, err := os.Stat(base); os.IsNotExist(err) {
-		return nil, fmt.Errorf("cgroups v2 tidak didukung atau belum di-mount")
+		return nil, fmt.Errorf("cgroups v2 is not supported or not mounted")
 	}
 
 	path := filepath.Join(base, group)
 	if err := os.MkdirAll(path, 0755); err != nil {
-		return nil, fmt.Errorf("gagal membuat cgroup dir: %w", err)
+		return nil, fmt.Errorf("failed to create cgroup dir: %w", err)
 	}
 
 	return &CgroupV2Manager{basePath: base, group: group}, nil
@@ -263,14 +263,14 @@ func LaunchIsolatedProcess(ctx context.Context, cg *CgroupV2Manager, cmdPath str
 	cmd.Stderr = os.Stderr
 
 	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("gagal start cmd: %w", err)
+		return nil, fmt.Errorf("failed to start cmd: %w", err)
 	}
 
 	// Masukkan PID baru (dari host perspective) ke dalam Cgroup V2
 	if err := cg.AddProcess(cmd.Process.Pid); err != nil {
 		// Cleanup process karena gagal masuk cgroup
 		cmd.Process.Kill()
-		return nil, fmt.Errorf("gagal memasukkan pid ke cgroup: %w", err)
+		return nil, fmt.Errorf("failed to add pid to cgroup: %w", err)
 	}
 
 	return cmd, nil
@@ -283,18 +283,18 @@ func TestCgroupAndNamespace(t *testing.T) {
 	// Tes ini hanya bisa berjalan di Linux sebagai root.
 	// Jika bukan root, skip dengan graceful.
 	if os.Getuid() != 0 {
-		t.Skip("Test membutuhkan akses root (sudo) untuk manipulasi Cgroups & Namespaces")
+		t.Skip("Test requires root (sudo) access for Cgroups & Namespaces manipulation")
 	}
 
 	cg, err := NewCgroupV2Manager("test_golang_cg")
 	if err != nil {
-		t.Fatalf("Gagal inisialisasi cgroup: %v", err)
+		t.Fatalf("Failed to initialize cgroup: %v", err)
 	}
 	defer cg.Cleanup() // Pastikan folder terhapus
 
 	// Limit memori ke 50 MB
 	if err := cg.SetMemoryLimit(50 * 1024 * 1024); err != nil {
-		t.Fatalf("Gagal set memory limit: %v", err)
+		t.Fatalf("Failed to set memory limit: %v", err)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -308,7 +308,7 @@ func TestCgroupAndNamespace(t *testing.T) {
 
 	// Tunggu sampai perintah selesai
 	if err := cmd.Wait(); err != nil {
-		t.Errorf("Proses tidak berhenti secara wajar: %v", err)
+		t.Errorf("Process did not stop gracefully: %v", err)
 	}
 }
 
@@ -322,7 +322,7 @@ func TestCgroupManager_MissingMount(t *testing.T) {
 	
 	err := manager.SetMemoryLimit(1024)
 	if err == nil {
-		t.Error("Diharapkan gagal ketika path cgroup tidak ada, tapi berhasil")
+		t.Error("Expected failure when cgroup path does not exist, but succeeded")
 	}
 }
 
@@ -340,7 +340,7 @@ func TestCgroupManager_InvalidWrite(t *testing.T) {
 
 	err := manager.AddProcess(999999) // PID dummy
 	if err == nil {
-		t.Error("Diharapkan gagal memasukkan PID karena write permissions mock, tapi sukses")
+		t.Error("Expected failure adding PID due to mock write permissions, but succeeded")
 	}
 }
 ```

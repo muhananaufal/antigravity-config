@@ -149,7 +149,7 @@ func DecodeClientFrame(buf []byte) (opcode byte, payload []byte, err error) {
 	fin := (buf[0] & 0x80) != 0
 	if !fin {
 		// Edge Case: Fragmentasi diabaikan di contoh sederhana ini
-		return 0, nil, errors.New("fragmentasi tidak didukung (FIN=0)")
+		return 0, nil, errors.New("fragmentation not supported (FIN=0)")
 	}
 
 	opcode = buf[0] & 0x0F
@@ -157,7 +157,7 @@ func DecodeClientFrame(buf []byte) (opcode byte, payload []byte, err error) {
 	
 	if !isMasked {
 		// RFC6455: Klien WAJIB masking payloadnya. Keamanan.
-		return 0, nil, errors.New("frame dari client tidak di-mask")
+		return 0, nil, errors.New("client frame is not masked")
 	}
 
 	payloadLen := int(buf[1] & 0x7F)
@@ -166,7 +166,7 @@ func DecodeClientFrame(buf []byte) (opcode byte, payload []byte, err error) {
 	// Ekstensi Length (Mencegah OOM: batasi max 64KB)
 	if payloadLen == 126 {
 		if len(buf) < 8 {
-			return 0, nil, errors.New("frame tidak utuh (length 126)")
+			return 0, nil, errors.New("incomplete frame (length 126)")
 		}
 		payloadLen = int(buf[2])<<8 | int(buf[3])
 		headerOffset = 4
@@ -251,7 +251,7 @@ func TestWebSocketFrameCodec(t *testing.T) {
 	clientNaughtyFrame := append([]byte{0x81, 0x05}, []byte("Hello")...) // Mask bit = 0
 	_, _, err = DecodeClientFrame(clientNaughtyFrame)
 	if err == nil {
-		t.Errorf("Klien mengirim data tanpa mask harusnya error!")
+		t.Errorf("Client sending unmasked data should result in an error!")
 	}
 
 	// Skenario 3: Server membangun frame balasan

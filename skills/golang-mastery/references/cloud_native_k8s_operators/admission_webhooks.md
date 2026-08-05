@@ -92,7 +92,7 @@ func (w *MyAppWebhook) SetupWebhookWithManager(mgr ctrl.Manager) error {
 func (w *MyAppWebhook) Default(ctx context.Context, obj runtime.Object) error {
 	cm, ok := obj.(*corev1.ConfigMap)
 	if !ok {
-		return fmt.Errorf("tipe data aneh terdeteksi")
+		return fmt.Errorf("unexpected data type detected")
 	}
 
 	// 1. Mutasi: Tambahkan metadata otomatis jika tidak ada
@@ -135,7 +135,7 @@ func (w *MyAppWebhook) ValidateUpdate(ctx context.Context, oldObj, newObj runtim
 	// Logika: Cegah user mengubah label kritikal yang sudah di-inject
 	oldCM := oldObj.(*corev1.ConfigMap)
 	if oldCM.Labels["critical-lock"] == "true" && cm.Labels["critical-lock"] != "true" {
-		return nil, fmt.Errorf("dilarang keras menghapus label 'critical-lock'")
+		return nil, fmt.Errorf("strictly forbidden to remove 'critical-lock' label")
 	}
 
 	return w.validate(cm)
@@ -148,7 +148,7 @@ func (w *MyAppWebhook) ValidateDelete(ctx context.Context, obj runtime.Object) (
 
 	if cm.Labels["protected"] == "true" {
 		// Tolak Keras command `kubectl delete`!
-		return nil, fmt.Errorf("penghapusan ditolak: resource dilindungi oleh label protected=true")
+		return nil, fmt.Errorf("deletion denied: resource is protected by protected=true label")
 	}
 	return nil, nil
 }
@@ -162,7 +162,7 @@ func (w *MyAppWebhook) validate(cm *corev1.ConfigMap) (admission.Warnings, error
 		allErrs = append(allErrs, field.Invalid(
 			field.NewPath("data").Child("environment"),
 			val,
-			"environment 'test' dilarang beredar di production namespace",
+			"environment 'test' is forbidden in production namespace",
 		))
 	}
 
@@ -194,10 +194,10 @@ func TestWebhookValidation(t *testing.T) {
 	
 	warnings, err := hook.ValidateCreate(context.TODO(), badCM)
 	if err == nil {
-		t.Fatalf("Seharusnya error ter-trigger karena env 'test'!")
+		t.Fatalf("Error should be triggered because of env 'test'!")
 	}
 	if len(warnings) > 0 {
-		t.Logf("Ada warning kembalian: %v", warnings)
+		t.Logf("Returned warnings: %v", warnings)
 	}
 	
 	// Test Update proteksi label (Kritis)
@@ -209,15 +209,15 @@ func TestWebhookValidation(t *testing.T) {
 	}
 	
 	_, err = hook.ValidateUpdate(context.TODO(), oldCM, newCM)
-	if err == nil || err.Error() != "dilarang keras menghapus label 'critical-lock'" {
-		t.Fatalf("Gagal memproteksi old resource modifikasi ilegal: %v", err)
+	if err == nil || err.Error() != "strictly forbidden to remove 'critical-lock' label" {
+		t.Fatalf("Failed to protect old resource from illegal modification: %v", err)
 	}
 	
 	// Test Default Mutating
 	cmDef := &corev1.ConfigMap{}
 	hook.Default(context.TODO(), cmDef)
 	if cmDef.Data["environment"] != "production" {
-		t.Errorf("Gagal melakukan inject default mutation")
+		t.Errorf("Failed to inject default mutation")
 	}
 }
 ```

@@ -148,7 +148,7 @@ func StreamUsers(ctx context.Context, db *sql.DB, batas int) *Rows {
 		for rows.Next() {
 			var u User
 			if err := rows.Scan(&u.ID, &u.Email, &u.Aktif); err != nil {
-				out.err = fmt.Errorf("scan baris: %w", err)
+				out.err = fmt.Errorf("scan row: %w", err)
 				return
 			}
 			// yield=false berarti pemanggil sudah cukup. Berhenti dengan rapi.
@@ -157,7 +157,7 @@ func StreamUsers(ctx context.Context, db *sql.DB, batas int) *Rows {
 			}
 		}
 		if err := rows.Err(); err != nil {
-			out.err = fmt.Errorf("iterasi baris: %w", err)
+			out.err = fmt.Errorf("iterate rows: %w", err)
 		}
 	}
 	return out
@@ -269,7 +269,7 @@ func TestFilterMapTake(t *testing.T) {
 	got := slices.Collect(dua)
 	want := []int{20, 40}
 	if !slices.Equal(got, want) {
-		t.Fatalf("mau %v, dapat %v", want, got)
+		t.Fatalf("want %v, got %v", want, got)
 	}
 }
 
@@ -287,20 +287,20 @@ func TestTake_MenghentikanHulu(t *testing.T) {
 
 	got := slices.Collect(Take(src, 3))
 	if len(got) != 3 {
-		t.Fatalf("mau 3 elemen, dapat %d", len(got))
+		t.Fatalf("want 3 elements, got %d", len(got))
 	}
 	if dibaca != 3 {
-		t.Fatalf("hulu seharusnya berhenti setelah 3, tapi membaca %d", dibaca)
+		t.Fatalf("upstream should stop after 3, but read %d", dibaca)
 	}
 }
 
 func TestChunk(t *testing.T) {
 	got := slices.Collect(Chunk(dari(1, 2, 3, 4, 5), 2))
 	if len(got) != 3 {
-		t.Fatalf("mau 3 potongan, dapat %d", len(got))
+		t.Fatalf("want 3 chunks, got %d", len(got))
 	}
 	if !slices.Equal(got[2], []int{5}) {
-		t.Fatalf("potongan terakhir mau [5], dapat %v", got[2])
+		t.Fatalf("last chunk want [5], got %v", got[2])
 	}
 }
 
@@ -308,7 +308,7 @@ func TestChunk_PotonganTidakSalingMenimpa(t *testing.T) {
 	// Tanpa salin di dalam Chunk, seluruh potongan akan menunjuk buffer sama.
 	got := slices.Collect(Chunk(dari(1, 2, 3, 4), 2))
 	if !slices.Equal(got[0], []int{1, 2}) {
-		t.Fatalf("potongan pertama rusak: %v", got[0])
+		t.Fatalf("first chunk corrupted: %v", got[0])
 	}
 }
 
@@ -329,7 +329,7 @@ func TestBreak_MenjalankanDefer(t *testing.T) {
 		}
 	}
 	if !dibersihkan {
-		t.Fatal("defer di iterator WAJIB jalan meski pemanggil break")
+		t.Fatal("defer in iterator must execute even when caller breaks")
 	}
 }
 ```

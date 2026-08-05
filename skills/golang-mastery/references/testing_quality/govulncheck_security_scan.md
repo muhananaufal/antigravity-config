@@ -100,12 +100,12 @@ var perintahDiizinkan = map[string]string{
 func SafeAlternatives(userInput string) (string, error) {
 	parts := strings.Fields(userInput)
 	if len(parts) == 0 {
-		return "", fmt.Errorf("perintah kosong")
+		return "", fmt.Errorf("empty command")
 	}
 
 	jalur, ok := perintahDiizinkan[parts[0]]
 	if !ok {
-		return "", fmt.Errorf("perintah %q tidak diizinkan", parts[0])
+		return "", fmt.Errorf("command %q not allowed", parts[0])
 	}
 
 	// ARGUMEN juga divalidasi, bukan hanya nama perintahnya.
@@ -117,10 +117,10 @@ func SafeAlternatives(userInput string) (string, error) {
 	// komponen path yang diterima.
 	for _, a := range parts[1:] {
 		if strings.HasPrefix(a, "-") {
-			return "", fmt.Errorf("opsi %q tidak diizinkan", a)
+			return "", fmt.Errorf("option %q not allowed", a)
 		}
 		if a != filepath.Base(a) || strings.Contains(a, "..") {
-			return "", fmt.Errorf("argumen %q memuat komponen path", a)
+			return "", fmt.Errorf("argument %q contains path components", a)
 		}
 	}
 
@@ -128,7 +128,7 @@ func SafeAlternatives(userInput string) (string, error) {
 	cmd := exec.Command(jalur, parts[1:]...) // #nosec G204 — jalur & argumen sudah divalidasi
 	out, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("jalankan %q: %w", parts[0], err)
+		return "", fmt.Errorf("execute %q: %w", parts[0], err)
 	}
 	return string(out), nil
 }
@@ -233,7 +233,7 @@ func TestSecureHTTPHeaders(t *testing.T) {
 	// HSTS adalah satu-satunya header yang komentarnya keliru pada versi
 	// sebelumnya — dan satu-satunya yang tidak diperiksa uji ini.
 	if !strings.Contains(rec.Header().Get("Strict-Transport-Security"), "max-age=") {
-		t.Error("HSTS hilang di balik terminator TLS")
+		t.Error("HSTS missing behind TLS terminator")
 	}
 }
 
@@ -244,7 +244,7 @@ func TestSecureHTTPHeaders_TanpaHTTPSTidakAdaHSTS(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	if rec.Header().Get("Strict-Transport-Security") != "" {
-		t.Error("HSTS dipasang pada koneksi non-TLS")
+		t.Error("HSTS set on non-TLS connection")
 	}
 }
 ```

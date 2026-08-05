@@ -243,5 +243,5 @@ vault kv metadata get secret/pci/dek
 ```sql
 -- Kolom yang mungkin menyimpan data kartu tanpa disadari
 SELECT table_name, column_name FROM information_schema.columns
-WHERE column_name ~* '(card|pan|cvv|cvc|kartu)';
+WHERE column_name ~* '(card|pan|cvv|cvc)';
 ```

@@ -66,7 +66,7 @@ func NewBadgerManager(dir string) (*BadgerManager, error) {
 
 	db, err := badger.Open(opts)
 	if err != nil {
-		return nil, fmt.Errorf("gagal membuka badger DB di %s: %w", dir, err)
+		return nil, fmt.Errorf("failed to open badger DB at %s: %w", dir, err)
 	}
 
 	bm := &BadgerManager{db: db}
@@ -111,7 +111,7 @@ func (bm *BadgerManager) SetUser(ctx context.Context, userID string, payload []b
 	})
 	
 	if err != nil {
-		return fmt.Errorf("gagal menulis data user: %w", err)
+		return fmt.Errorf("failed to write user data: %w", err)
 	}
 	return nil
 }
@@ -140,7 +140,7 @@ func (bm *BadgerManager) GetUser(ctx context.Context, userID string) ([]byte, er
 		if err == badger.ErrKeyNotFound {
 			return nil, nil // Interpretasi normal, not found
 		}
-		return nil, fmt.Errorf("gagal mengambil data user: %w", err)
+		return nil, fmt.Errorf("failed to fetch user data: %w", err)
 	}
 
 	return valCopy, nil
@@ -149,7 +149,7 @@ func (bm *BadgerManager) GetUser(ctx context.Context, userID string) ([]byte, er
 // Close mensinkronisasi write-buffer tersisa di memori ke disk dan menutup locks secara aman.
 func (bm *BadgerManager) Close() error {
 	if bm.db != nil {
-		log.Println("Menutup koneksi BadgerDB dan sinkronisasi ke disk...")
+		log.Println("Closing BadgerDB connection and syncing to disk...")
 		return bm.db.Close()
 	}
 	return nil
@@ -172,13 +172,13 @@ func TestBadgerStorageEngine(t *testing.T) {
 	// 1. Uji Tulis
 	err = bm.SetUser(ctx, "U_9000", []byte("JOHN DOE"))
 	if err != nil {
-		t.Fatalf("SetUser gagal: %v", err)
+		t.Fatalf("SetUser failed: %v", err)
 	}
 
 	// 2. Uji Baca
 	val, err := bm.GetUser(ctx, "U_9000")
 	if err != nil {
-		t.Fatalf("GetUser gagal: %v", err)
+		t.Fatalf("GetUser failed: %v", err)
 	}
 	if string(val) != "JOHN DOE" {
 		t.Errorf("Ekspektasi JOHN DOE tapi mendapat %s", string(val))
@@ -187,7 +187,7 @@ func TestBadgerStorageEngine(t *testing.T) {
 	// 3. Uji Not Found
 	valNotFound, err := bm.GetUser(ctx, "U_UNKNOWN")
 	if err != nil {
-		t.Fatalf("Seharusnya tidak error melainkan return nil: %v", err)
+		t.Fatalf("Should not error but return nil: %v", err)
 	}
 	if valNotFound != nil {
 		t.Errorf("Seharusnya nil, mendapat %v", valNotFound)

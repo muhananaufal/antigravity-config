@@ -293,7 +293,7 @@ type RingBufferHFT struct {
 func NewRingBufferHFT(capacity uint64) *RingBufferHFT {
 	// Pastikan power of 2 untuk fast modulo
 	if capacity == 0 || (capacity&(capacity-1)) != 0 {
-		panic("kapasitas harus kelipatan 2 (power of 2)")
+		panic("capacity must be a power of 2")
 	}
 	return &RingBufferHFT{
 		Mask:  capacity - 1,
@@ -395,13 +395,13 @@ func TestRingBuffer_PushPop(t *testing.T) {
 	// PUSH
 	ok := rb.Push(HFTTick{Timestamp: 100, Price: 1.5, Volume: 10})
 	if !ok {
-		t.Errorf("Push gagal")
+		t.Errorf("Push failed")
 	}
 	
 	// POP
 	tick, ok := rb.Pop()
 	if !ok || tick.Timestamp != 100 {
-		t.Errorf("Pop gagal atau data korup")
+		t.Errorf("Pop failed or data corrupted")
 	}
 }
 

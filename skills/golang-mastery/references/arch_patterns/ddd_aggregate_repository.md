@@ -62,8 +62,8 @@ import (
 
 var (
 	ErrCurrencyMismatch = errors.New("mata uang tidak cocok antar-operasi")
-	ErrVersiUsang       = errors.New("versi agregat usang: ada yang menulis lebih dulu")
-	ErrOrderTidakAda    = errors.New("order tidak ditemukan")
+	ErrStaleVersion     = errors.New("versi agregat usang: ada yang menulis lebih dulu")
+	ErrOrderNotFound    = errors.New("order tidak ditemukan")
 )
 
 // Money memakai SATUAN MINOR bertipe int64, bukan float64.
@@ -89,7 +89,7 @@ func (m Money) Add(other Money) (Money, error) {
 // Kali mengalikan dengan bilangan bulat — operasi yang sah untuk uang.
 // Perkalian dengan pecahan (pajak, diskon) WAJIB menyatakan pembulatannya
 // secara eksplisit; ia tidak boleh muncul sebagai efek samping tipe data.
-func (m Money) Kali(n int64) Money {
+func (m Money) Multiply(n int64) Money {
 	return Money{AmountMinor: m.AmountMinor * n, Currency: m.Currency}
 }
 
@@ -142,20 +142,20 @@ func (o *Order) CreatedAt() time.Time { return o.createdAt }
 
 // TandaiDibayar adalah SATU-SATUNYA jalan menuju status PAID, dan ia
 // membawa aturan transisinya sendiri.
-func (o *Order) TandaiDibayar() error {
+func (o *Order) MarkAsPaid() error {
 	if o.status != StatusPending {
-		return fmt.Errorf("hanya order PENDING yang bisa dibayar, status kini %s", o.status)
+		return fmt.Errorf("only PENDING orders can be marked as paid, current status: %s", o.status)
 	}
 	if len(o.items) == 0 {
-		return errors.New("order tanpa item tidak bisa dibayar")
+		return errors.New("cannot pay for an order without items")
 	}
 	o.status = StatusPaid
 	return nil
 }
 
-func (o *Order) Batalkan() error {
+func (o *Order) Cancel() error {
 	if o.status == StatusPaid {
-		return errors.New("order yang sudah dibayar tidak bisa dibatalkan; gunakan refund")
+		return errors.New("paid order cannot be canceled; issue a refund instead")
 	}
 	o.status = StatusCanceled
 	return nil
@@ -178,19 +178,19 @@ func NewOrder(id string) (*Order, error) {
 // AddItem adalah contoh perlindungan Invariant (aturan bisnis mutlak).
 func (o *Order) AddItem(item OrderItem) error {
 	if o.status != StatusPending {
-		return fmt.Errorf("tidak bisa menambah item pada order berstatus %s", o.status)
+		return fmt.Errorf("cannot add item to order with status: %s", o.status)
 	}
 	if item.Quantity <= 0 {
-		return errors.New("kuantitas item harus lebih besar dari nol")
+		return errors.New("item quantity must be greater than zero")
 	}
 	if item.Price.Currency == "" {
-		return errors.New("harga item wajib punya mata uang")
+		return errors.New("item price must have a currency")
 	}
 	// Mata uang seluruh item WAJIB seragam. Tanpa penjagaan ini, invarian
 	// baru gagal saat Total() dipanggil — jauh dari titik masuk datanya,
 	// dan agregatnya sudah terlanjur berada di keadaan yang tidak sah.
 	if len(o.items) > 0 && o.items[0].Price.Currency != item.Price.Currency {
-		return fmt.Errorf("%w: order memakai %s, item memakai %s",
+		return fmt.Errorf("%w: order uses %s, item uses %s",
 			ErrCurrencyMismatch, o.items[0].Price.Currency, item.Price.Currency)
 	}
 
@@ -221,7 +221,7 @@ func (o *Order) Total() (Money, error) {
 	total := Money{Currency: o.items[0].Price.Currency}
 	for _, item := range o.items {
 		var err error
-		total, err = total.Add(item.Price.Kali(int64(item.Quantity)))
+		total, err = total.Add(item.Price.Multiply(int64(item.Quantity)))
 		if err != nil {
 			return Money{}, err
 		}
@@ -254,7 +254,7 @@ func NewInMemoryOrderRepository() *InMemoryOrderRepository {
 	return &InMemoryOrderRepository{db: make(map[string]*Order)}
 }
 
-func salin(o *Order) *Order {
+func copyOrder(o *Order) *Order {
 	items := make([]OrderItem, len(o.items))
 	copy(items, o.items)
 	return &Order{
@@ -270,13 +270,13 @@ func (r *InMemoryOrderRepository) FindByID(ctx context.Context, id string) (*Ord
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	order, ada := r.db[id]
-	if !ada {
+	order, exists := r.db[id]
+	if !exists {
 		// Sentinel, bukan errors.New anonim: pemanggil perlu membedakan
 		// "tidak ada" dari "penyimpanan bermasalah" untuk memetakannya ke 404.
-		return nil, fmt.Errorf("%s: %w", id, ErrOrderTidakAda)
+		return nil, fmt.Errorf("%s: %w", id, ErrOrderNotFound)
 	}
-	return salin(order), nil
+	return copyOrder(order), nil
 }
 
 // Save menegakkan OPTIMISTIC LOCKING.
@@ -298,12 +298,12 @@ func (r *InMemoryOrderRepository) Save(ctx context.Context, order *Order) error 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if tersimpan, ada := r.db[order.id]; ada && tersimpan.version != order.version {
-		return fmt.Errorf("%w: order %s versi %d, penyimpanan sudah di versi %d",
-			ErrVersiUsang, order.id, order.version, tersimpan.version)
+	if saved, exists := r.db[order.id]; exists && saved.version != order.version {
+		return fmt.Errorf("%w: order %s version %d, store is already at version %d",
+			ErrStaleVersion, order.id, order.version, saved.version)
 	}
 
-	o := salin(order)
+	o := copyOrder(order)
 	o.version++      // versi naik hanya bila penulisan benar-benar terjadi
 	r.db[o.id] = o
 	order.version = o.version // agregat di tangan pemanggil ikut maju
@@ -322,8 +322,8 @@ func TestDDDAggregate_InvarianDanPersistensi(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewOrder: %v", err)
 	}
-	hargaUSD := Money{AmountMinor: 5_000, Currency: "USD"} // 50,00
-	if err := order.AddItem(OrderItem{ID: "i-1", ProductID: "prod-x", Price: hargaUSD, Quantity: 2}); err != nil {
+	priceUSD := Money{AmountMinor: 5_000, Currency: "USD"} // 50,00
+	if err := order.AddItem(OrderItem{ID: "i-1", ProductID: "prod-x", Price: priceUSD, Quantity: 2}); err != nil {
 		t.Fatalf("AddItem: %v", err)
 	}
 
@@ -333,29 +333,29 @@ func TestDDDAggregate_InvarianDanPersistensi(t *testing.T) {
 	}
 	// Perbandingan EKSAK; toleransi tidak diperlukan pada bilangan bulat.
 	if total.AmountMinor != 10_000 {
-		t.Errorf("total = %d, mau 10000", total.AmountMinor)
+		t.Errorf("total = %d, want 10000", total.AmountMinor)
 	}
 
 	if err := repo.Save(ctx, order); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 
-	tersimpan, err := repo.FindByID(ctx, "ord-999")
+	saved, err := repo.FindByID(ctx, "ord-999")
 	if err != nil {
 		t.Fatalf("FindByID: %v", err)
 	}
-	if len(tersimpan.Items()) != 1 {
-		t.Errorf("jumlah item = %d, mau 1", len(tersimpan.Items()))
+	if len(saved.Items()) != 1 {
+		t.Errorf("item count = %d, want 1", len(saved.Items()))
 	}
 
 	// Invarian ditembus lewat METODE DOMAIN, bukan dengan menugaskan field.
 	// Versi sebelumnya menulis `savedOrder.Status = StatusPaid` secara
 	// langsung — yang justru membuktikan enkapsulasinya bocor.
-	if err := tersimpan.TandaiDibayar(); err != nil {
-		t.Fatalf("TandaiDibayar: %v", err)
+	if err := saved.MarkAsPaid(); err != nil {
+		t.Fatalf("MarkAsPaid: %v", err)
 	}
-	if err := tersimpan.AddItem(OrderItem{ID: "i-2", Price: hargaUSD, Quantity: 1}); err == nil {
-		t.Error("menambah item ke order PAID seharusnya gagal")
+	if err := saved.AddItem(OrderItem{ID: "i-2", Price: priceUSD, Quantity: 1}); err == nil {
+		t.Error("adding item to PAID order should fail")
 	}
 }
 
@@ -369,35 +369,35 @@ func TestSave_OptimisticLocking(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewOrder: %v", err)
 	}
-	harga := Money{AmountMinor: 1_000, Currency: "IDR"}
-	if err := order.AddItem(OrderItem{ID: "a", Price: harga, Quantity: 1}); err != nil {
+	price := Money{AmountMinor: 1_000, Currency: "IDR"}
+	if err := order.AddItem(OrderItem{ID: "a", Price: price, Quantity: 1}); err != nil {
 		t.Fatalf("AddItem: %v", err)
 	}
 	if err := repo.Save(ctx, order); err != nil {
-		t.Fatalf("Save awal: %v", err)
+		t.Fatalf("initial Save: %v", err)
 	}
 
-	penulisA, err := repo.FindByID(ctx, "ord-1")
+	writerA, err := repo.FindByID(ctx, "ord-1")
 	if err != nil {
 		t.Fatalf("FindByID A: %v", err)
 	}
-	penulisB, err := repo.FindByID(ctx, "ord-1")
+	writerB, err := repo.FindByID(ctx, "ord-1")
 	if err != nil {
 		t.Fatalf("FindByID B: %v", err)
 	}
 
-	if err := penulisA.AddItem(OrderItem{ID: "b", Price: harga, Quantity: 1}); err != nil {
+	if err := writerA.AddItem(OrderItem{ID: "b", Price: price, Quantity: 1}); err != nil {
 		t.Fatalf("AddItem A: %v", err)
 	}
-	if err := repo.Save(ctx, penulisA); err != nil {
+	if err := repo.Save(ctx, writerA); err != nil {
 		t.Fatalf("Save A: %v", err)
 	}
 
-	if err := penulisB.AddItem(OrderItem{ID: "c", Price: harga, Quantity: 1}); err != nil {
+	if err := writerB.AddItem(OrderItem{ID: "c", Price: price, Quantity: 1}); err != nil {
 		t.Fatalf("AddItem B: %v", err)
 	}
-	if err := repo.Save(ctx, penulisB); !errors.Is(err, ErrVersiUsang) {
-		t.Fatalf("Save B = %v, mau ErrVersiUsang — pekerjaan penulis A tertimpa diam-diam", err)
+	if err := repo.Save(ctx, writerB); !errors.Is(err, ErrStaleVersion) {
+		t.Fatalf("Save B = %v, want ErrStaleVersion (writer A work overwritten silently)", err)
 	}
 }
 ```

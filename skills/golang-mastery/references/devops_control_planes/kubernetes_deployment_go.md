@@ -317,7 +317,7 @@ import (
 //
 // Ini baris log yang paling sering menyelamatkan investigasi: tanpa mereka,
 // "kenapa pod ini OOMKilled" dijawab dengan menebak.
-func Laporkan() string {
+func Report() string {
 	limit := debug.SetMemoryLimit(-1) // -1 = baca tanpa mengubah
 
 	// GOGC yang tidak disetel mencetak "GOGC=" -- yang terbaca seperti
@@ -346,23 +346,23 @@ func Laporkan() string {
 // Ambang 1,5x bukan angka keramat: sedikit di atas kuota masih wajar (Go
 // menjadwalkan lebih banyak M daripada P saat ada blocking syscall), tetapi
 // kelipatan besar berarti runtime membaca CPU host, bukan kuota pod.
-const ambangGOMAXPROCS = 1.5
+const gomaxprocsThreshold = 1.5
 
-func PeriksaKonsistensi(gomaxprocs int, kuotaCPU float64) (peringatan string, bermasalah bool) {
-	if kuotaCPU <= 0 {
+func CheckConsistency(gomaxprocs int, cpuQuota float64) (warning string, hasIssue bool) {
+	if cpuQuota <= 0 {
 		return "", false // tidak ada limits.cpu -- tidak ada yang bisa dibandingkan
 	}
-	if float64(gomaxprocs) > kuotaCPU*ambangGOMAXPROCS {
+	if float64(gomaxprocs) > cpuQuota*gomaxprocsThreshold {
 		return fmt.Sprintf(
 			"GOMAXPROCS=%d jauh di atas kuota cgroup %.1f CPU; "+
 				"impor go.uber.org/automaxprocs (Go 1.21-1.24), atau pada Go 1.25+ "+
 				"HAPUS env GOMAXPROCS agar runtime membaca cgroup sendiri",
-			gomaxprocs, kuotaCPU), true
+			gomaxprocs, cpuQuota), true
 	}
 	return "", false
 }
 
-// HitungGOMEMLIMIT menurunkan GOMEMLIMIT dari limits.memory pod.
+// CalculateGOMEMLIMIT menurunkan GOMEMLIMIT dari limits.memory pod.
 //
 // Ada fungsi di sini justru karena versi sebelumnya TIDAK punya: yang ada
 // hanya nilai "410MiB" yang ditulis tangan di manifest, plus sebuah uji yang
@@ -372,17 +372,17 @@ func PeriksaKonsistensi(gomaxprocs int, kuotaCPU float64) (peringatan string, be
 //
 // Pemakaian: baca limits.memory lewat Downward API
 // (resourceFieldRef: limits.memory) ke sebuah env, lalu panggil ini di main.
-func HitungGOMEMLIMIT(limitPodBytes int64, fraksi float64) (int64, error) {
-	if limitPodBytes <= 0 {
-		return 0, fmt.Errorf("limit pod tidak valid: %d", limitPodBytes)
+func CalculateGOMEMLIMIT(podLimitBytes int64, fraction float64) (int64, error) {
+	if podLimitBytes <= 0 {
+		return 0, fmt.Errorf("invalid pod limit: %d", podLimitBytes)
 	}
-	if fraksi <= 0 || fraksi >= 1 {
-		// fraksi >= 1 berarti tidak ada ruang untuk stack goroutine, buffer
+	if fraction <= 0 || fraction >= 1 {
+		// fraction >= 1 berarti tidak ada ruang untuk stack goroutine, buffer
 		// jaringan, dan memori non-heap -- pod tetap OOMKilled meski GC
 		// patuh sepenuhnya pada batasnya.
-		return 0, fmt.Errorf("fraksi harus di antara 0 dan 1 (eksklusif), dapat %v", fraksi)
+		return 0, fmt.Errorf("fraction must be between 0 and 1 (exclusive), got %v", fraction)
 	}
-	return int64(float64(limitPodBytes) * fraksi), nil
+	return int64(float64(podLimitBytes) * fraction), nil
 }
 ```
 
@@ -396,28 +396,28 @@ import (
 	"testing"
 )
 
-func TestLaporkan_MemuatSeluruhAngkaPenting(t *testing.T) {
-	s := Laporkan()
+func TestReport_ContainsAllImportantNumbers(t *testing.T) {
+	s := Report()
 	for _, k := range []string{"GOMAXPROCS=", "NumCPU=", "GOMEMLIMIT=", "GOGC="} {
 		if !strings.Contains(s, k) {
-			t.Errorf("laporan wajib memuat %s, dapat %q", k, s)
+			t.Errorf("report must contain %s, got %q", k, s)
 		}
 	}
 	// GOGC yang tidak disetel harus terbaca sebagai default, bukan kosong.
 	if strings.Contains(s, "GOGC=\x00") || strings.HasSuffix(s, "GOGC=") {
-		t.Errorf("GOGC kosong ambigu; harus menyebut nilai defaultnya: %q", s)
+		t.Errorf("empty GOGC is ambiguous; must mention default value: %q", s)
 	}
 }
 
 // gomaxprocs kini parameter, sehingga uji ini TIDAK LAGI memanggil
 // runtime.GOMAXPROCS(n) -- yang men-stop-the-world dan mengganggu setiap uji
 // paralel di paket yang sama.
-func TestPeriksaKonsistensi(t *testing.T) {
-	kasus := []struct {
-		nama       string
+func TestCheckConsistency(t *testing.T) {
+	cases := []struct {
+		name       string
 		gomaxprocs int
-		kuota      float64
-		mauMasalah bool
+		quota      float64
+		wantIssue  bool
 	}{
 		// Gejala klasik: node 64 CPU, pod dibatasi 2 CPU, runtime menjadwalkan
 		// seolah punya 64.
@@ -430,18 +430,18 @@ func TestPeriksaKonsistensi(t *testing.T) {
 		// sini hanya menghasilkan derau di setiap pod yang sengaja tak berlimit.
 		{"tanpa limits.cpu", 64, 0, false},
 	}
-	for _, k := range kasus {
-		t.Run(k.nama, func(t *testing.T) {
-			pesan, bermasalah := PeriksaKonsistensi(k.gomaxprocs, k.kuota)
-			if bermasalah != k.mauMasalah {
-				t.Fatalf("PeriksaKonsistensi(%d, %v) bermasalah=%v, mau %v",
-					k.gomaxprocs, k.kuota, bermasalah, k.mauMasalah)
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			msg, hasIssue := CheckConsistency(c.gomaxprocs, c.quota)
+			if hasIssue != c.wantIssue {
+				t.Fatalf("CheckConsistency(%d, %v) issue=%v, want %v",
+					c.gomaxprocs, c.quota, hasIssue, c.wantIssue)
 			}
-			if bermasalah && !strings.Contains(pesan, "automaxprocs") {
-				t.Errorf("peringatan harus menyebut jalan keluarnya, dapat %q", pesan)
+			if hasIssue && !strings.Contains(msg, "automaxprocs") {
+				t.Errorf("peringatan harus menyebut jalan keluarnya, dapat %q", msg)
 			}
-			if !bermasalah && pesan != "" {
-				t.Errorf("tidak bermasalah tapi mengembalikan pesan %q", pesan)
+			if !hasIssue && msg != "" {
+				t.Errorf("tidak bermasalah tapi mengembalikan pesan %q", msg)
 			}
 		})
 	}
@@ -451,12 +451,12 @@ func TestPeriksaKonsistensi(t *testing.T) {
 // 410 lebih kecil dari 512. Tidak ada satu pun fungsi produksi yang
 // dijalankannya -- yang teruji adalah aritmetika yang ditulis di uji itu
 // sendiri. Kini yang diuji adalah HitungGOMEMLIMIT.
-func TestHitungGOMEMLIMIT(t *testing.T) {
+func TestCalculateGOMEMLIMIT(t *testing.T) {
 	const limitPod = 512 << 20
 
-	got, err := HitungGOMEMLIMIT(limitPod, 0.8)
+	got, err := CalculateGOMEMLIMIT(limitPod, 0.8)
 	if err != nil {
-		t.Fatalf("HitungGOMEMLIMIT: %v", err)
+		t.Fatalf("CalculateGOMEMLIMIT: %v", err)
 	}
 	if got >= limitPod {
 		t.Fatalf("GOMEMLIMIT %d harus di bawah limit pod %d", got, limitPod)
@@ -465,14 +465,14 @@ func TestHitungGOMEMLIMIT(t *testing.T) {
 		t.Errorf("GOMEMLIMIT %d terlalu konservatif; memori terbuang", got)
 	}
 
-	// fraksi >= 1 tidak menyisakan ruang untuk stack goroutine dan memori
+	// fraction >= 1 tidak menyisakan ruang untuk stack goroutine dan memori
 	// non-heap: pod tetap OOMKilled meski GC patuh sepenuhnya pada batasnya.
-	for _, fraksi := range []float64{1.0, 1.2, 0, -0.5} {
-		if _, err := HitungGOMEMLIMIT(limitPod, fraksi); err == nil {
-			t.Errorf("fraksi %v harus ditolak", fraksi)
+	for _, fraction := range []float64{1.0, 1.2, 0, -0.5} {
+		if _, err := CalculateGOMEMLIMIT(limitPod, fraction); err == nil {
+			t.Errorf("fraksi %v harus ditolak", fraction)
 		}
 	}
-	if _, err := HitungGOMEMLIMIT(0, 0.8); err == nil {
+	if _, err := CalculateGOMEMLIMIT(0, 0.8); err == nil {
 		t.Error("limit pod 0 harus ditolak")
 	}
 }

@@ -147,7 +147,7 @@ func (sm *SessionManager) FlushToRedis(ctx context.Context) {
 	// Eksekusi massal (I/O Blocking terjadi di luar scope Game Loop Mutex)
 	err := pipe.Exec(ctx)
 	if err != nil {
-		log.Printf("Gagal flush state ke Redis: %v", err)
+		log.Printf("failed to flush state to Redis: %v", err)
 		// Error handling lanjutan: Kembalikan data ke dirty map (Retry mechanism)
 		sm.mu.Lock()
 		for pid, failedDelta := range dirtyCopy {
@@ -306,10 +306,10 @@ func TestSessionManager_AccumulatesAndFlushesDeltas(t *testing.T) {
 
 ```sql
 -- Jarak antara checkpoint terakhir dan sekarang: ini "berapa banyak yang hilang bila crash"
-SELECT pemain_id, now() - disimpan_pada AS sejak_checkpoint
-FROM sesi_permainan WHERE aktif ORDER BY disimpan_pada LIMIT 20;
+SELECT player_id, now() - saved_at AS since_checkpoint
+FROM game_session WHERE is_active ORDER BY saved_at LIMIT 20;
 
-SELECT pg_size_pretty(avg(pg_column_size(state))::bigint) AS rata_ukuran_state FROM sesi_permainan;
+SELECT pg_size_pretty(avg(pg_column_size(state))::bigint) AS avg_state_size FROM game_session;
 ```
 
 ```bash

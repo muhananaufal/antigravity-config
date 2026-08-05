@@ -117,14 +117,14 @@ func TestMain(m *testing.M) {
 		// Uji-uji di bawah SUDAH punya penjaga `if sharedPG == nil { t.Skip }`.
 		// Menjalankan m.Run() membuat penjaga itu bekerja dan menghasilkan
 		// keluaran SKIP yang terlihat — bukan PASS yang menipu.
-		fmt.Fprintf(os.Stderr, "PERINGATAN: testcontainers gagal disiapkan: %v\n", err)
+		fmt.Fprintf(os.Stderr, "WARNING: testcontainers failed to setup: %v\n", err)
 	}
 
 	kode := m.Run()
 
 	if sharedPG != nil {
 		if err := sharedPG.container.Terminate(ctx); err != nil {
-			fmt.Fprintf(os.Stderr, "PERINGATAN: gagal menghentikan container: %v\n", err)
+			fmt.Fprintf(os.Stderr, "WARNING: failed to terminate container: %v\n", err)
 		}
 	}
 	os.Exit(kode)
@@ -209,18 +209,18 @@ func connStr(t *testing.T, args ...string) string {
 // menjadi `testuserrepo_crud` yang masih terbaca, bukan `t___________crud`
 // yang tidak memberi tahu apa pun saat Anda memeriksa daftar skema tertinggal.
 func sanitizeIdentifier(name string) string {
-	hasil := make([]byte, 0, len(name))
+	res := make([]byte, 0, len(name))
 	for _, c := range []byte(name) {
 		switch {
 		case c >= 'A' && c <= 'Z':
-			hasil = append(hasil, c+('a'-'A'))
+			res = append(res, c+('a'-'A'))
 		case (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_':
-			hasil = append(hasil, c)
+			res = append(res, c)
 		default:
-			hasil = append(hasil, '_')
+			res = append(res, '_')
 		}
 	}
-	return string(hasil)
+	return string(res)
 }
 
 // --- Repository & Integration Tests ---
@@ -296,7 +296,7 @@ func TestUserRepository_CRUD(t *testing.T) {
 		assert.True(t, user.Active)
 	})
 
-	t.Run("username ganda menghasilkan galat", func(t *testing.T) {
+	t.Run("duplicate username returns error", func(t *testing.T) {
 		_, err := repo.CreateUser(ctx, "bob", "bob@example.com")
 		require.NoError(t, err)
 

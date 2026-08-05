@@ -119,17 +119,17 @@ type requirement struct {
 }
 
 var required = []requirement{
-	{"masalah", 40, 0},
+	{"problem", 40, 0},
 	{"bukan tujuan", 10, 1},
 	{"rancangan", 80, 0},
 	{"alternatif", 60, 2},        // minimal dua alternatif nyata
-	{"yang bisa salah", 60, 3},   // minimal tiga mode kegagalan
+	{"what could go wrong", 60, 3},   // minimal tiga mode kegagalan
 	{"tahapan & rollback", 30, 1},
 	{"dampak slo", 20, 0},
 }
 
 // ErrKosong dikembalikan bila masukan tidak memuat heading apa pun.
-var ErrKosong = errors.New("designdoc: dokumen tidak memuat heading")
+var ErrKosong = errors.New("designdoc: document contains no headings")
 
 // Parse membaca markdown dan mengelompokkan isi per bagian level dua.
 func Parse(r io.Reader) (*Doc, error) {
@@ -174,7 +174,7 @@ func Parse(r io.Reader) (*Doc, error) {
 		}
 	}
 	if err := sc.Err(); err != nil {
-		return nil, fmt.Errorf("baca dokumen: %w", err)
+		return nil, fmt.Errorf("read document: %w", err)
 	}
 	if len(d.Sections) == 0 {
 		return nil, ErrKosong
@@ -211,16 +211,16 @@ func (d *Doc) Lint() []Finding {
 	for _, req := range required {
 		s, ok := d.Sections[req.name]
 		if !ok {
-			out = append(out, Finding{req.name, "bagian wajib tidak ada"})
+			out = append(out, Finding{req.name, "missing required section"})
 			continue
 		}
 		if s.Words < req.minWords {
 			out = append(out, Finding{req.name,
-				fmt.Sprintf("terlalu tipis: %d kata, minimal %d", s.Words, req.minWords)})
+				fmt.Sprintf("too thin: %d words, minimum %d", s.Words, req.minWords)})
 		}
 		if req.minItems > 0 && s.Items < req.minItems {
 			out = append(out, Finding{req.name,
-				fmt.Sprintf("butuh minimal %d butir, ada %d", req.minItems, s.Items)})
+				fmt.Sprintf("needs at least %d items, got %d", req.minItems, s.Items)})
 		}
 	}
 	return out
@@ -269,14 +269,14 @@ func docDenganRisiko(risiko string) string {
 func TestLint_DokumenLengkapLolos(t *testing.T) {
 	risiko := "- Broker penuh menyebabkan producer memblokir dan request menumpuk\n" +
 		"- Konsumen lambat membuat lag tumbuh sampai retensi terlampaui\n" +
-		"- Kegagalan parsial meninggalkan order tanpa event pasangannya\n" +
+		"- Partial failure leaves order without counterpart event\n" +
 		strings.Repeat("kata ", 60)
 	d, err := Parse(strings.NewReader(docDenganRisiko(risiko)))
 	if err != nil {
-		t.Fatalf("tak terduga: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
 	if f := d.Lint(); len(f) != 0 {
-		t.Fatalf("mau nol temuan, dapat %v", f)
+		t.Fatalf("want zero findings, got %v", f)
 	}
 }
 
@@ -284,38 +284,38 @@ func TestLint_RisikoTipisDitolak(t *testing.T) {
 	// Inilah kegagalan paling umum: bagian risiko diisi seadanya.
 	d, err := Parse(strings.NewReader(docDenganRisiko("- Mungkin ada bug")))
 	if err != nil {
-		t.Fatalf("tak terduga: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
 	f := d.Lint()
 	if len(f) == 0 {
-		t.Fatal("bagian risiko satu baris seharusnya ditolak")
+		t.Fatal("one-line risk section should be rejected")
 	}
 	var kena bool
 	for _, x := range f {
-		if x.Section == "yang bisa salah" {
+		if x.Section == "what could go wrong" {
 			kena = true
 		}
 	}
 	if !kena {
-		t.Fatalf("temuan harus menunjuk bagian risiko, dapat %v", f)
+		t.Fatalf("finding must point to risk section, got %v", f)
 	}
 }
 
 func TestParse_BlokKodeTidakDihitung(t *testing.T) {
-	in := "# X\n\n## Masalah\n```go\n" + strings.Repeat("fmt.Println(1)\n", 50) + "```\n"
+	in := "# X\n\n## Problem\n```go\n" + strings.Repeat("fmt.Println(1)\n", 50) + "```\n"
 	d, err := Parse(strings.NewReader(in))
 	if err != nil {
-		t.Fatalf("tak terduga: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if d.Sections["masalah"].Words != 0 {
-		t.Fatalf("kode tidak boleh dihitung sebagai argumentasi, dapat %d kata",
-			d.Sections["masalah"].Words)
+	if d.Sections["problem"].Words != 0 {
+		t.Fatalf("code must not be counted as argument, got %d words",
+			d.Sections["problem"].Words)
 	}
 }
 
 func TestParse_DokumenKosong(t *testing.T) {
 	if _, err := Parse(strings.NewReader("teks biasa tanpa heading")); err == nil {
-		t.Fatal("mau error untuk dokumen tanpa heading")
+		t.Fatal("want error for document without headings")
 	}
 }
 ```

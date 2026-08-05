@@ -20,10 +20,10 @@ Empat prinsip di atas menjelaskan cara **menghadirkan** versi baru. Yang menentu
 1. **Metrik pemakaian per versi, sejak hari pertama v2 lahir.** Tanpa angka, "apakah masih ada yang pakai v1" hanya opini. Interceptor yang mencatat `FullMethod` sudah cukup:
    ```go
    // PromQL: sum by (versi) (rate(grpc_server_handled_total[24h]))
-   versi := "tak_dikenal"
+   version := "unknown"
    if i := strings.Index(info.FullMethod, ".v"); i >= 0 {
        if j := strings.Index(info.FullMethod[i+1:], "."); j > 0 {
-           versi = info.FullMethod[i+1 : i+1+j]  // "v1" / "v2"
+           version = info.FullMethod[i+1 : i+1+j]  // "v1" / "v2"
        }
    }
    ```

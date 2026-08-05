@@ -96,7 +96,7 @@ func (p *Publisher) PublishUserRegistered(ctx context.Context, userID, email str
 	// lapisan di antaranya yang bisa mendeteksi bahwa itu bukan dari Anda.
 	payload, err := json.Marshal(UserRegistered{UserID: userID, Email: email})
 	if err != nil {
-		return fmt.Errorf("serialisasi event: %w", err)
+		return fmt.Errorf("serialize event: %w", err)
 	}
 
 	// watermill.NewUUID menjamin traceability
@@ -118,18 +118,18 @@ func (p *Publisher) PublishUserRegistered(ctx context.Context, userID, email str
 // 2. EVENT CONSUMER (ROUTER)
 // =====================================
 
-// SudahDiproses mencatat event mana yang sudah pernah dikerjakan.
+// AlreadyProcessed mencatat event mana yang sudah pernah dikerjakan.
 // Di produksi: tabel dengan UNIQUE constraint pada message ID, atau Redis
 // SETNX ber-TTL. Lihat `distributed_patterns_resilience/idempotency_key_engine.md`.
-type SudahDiproses interface {
-	// Tandai mengembalikan false bila id SUDAH pernah ditandai sebelumnya.
-	Tandai(ctx context.Context, id string) (baru bool, err error)
+type AlreadyProcessed interface {
+	// Mark mengembalikan false bila id SUDAH pernah ditandai sebelumnya.
+	Mark(ctx context.Context, id string) (isNew bool, err error)
 }
 
 // UserRegistrationHandler adalah instance handler untuk consumer.
 type UserRegistrationHandler struct {
 	emailSender func(email string) error
-	dedup       SudahDiproses
+	dedup       AlreadyProcessed
 }
 
 // Handle memproses satu buah pesan secara aman.
@@ -154,23 +154,23 @@ func (h *UserRegistrationHandler) Handle(msg *message.Message) error {
 		// Payload rusak TIDAK akan membaik dengan diulang. Di-Ack agar tidak
 		// menyumbat antrean, tetapi dicatat keras — inilah yang seharusnya
 		// masuk dead-letter queue di sistem sungguhan.
-		slog.Error("payload event tidak dapat diurai, dibuang",
-			"pesan_id", msg.UUID, "galat", err)
+		slog.Error("failed to unmarshal event payload, discarding",
+			"message_id", msg.UUID, "error", err)
 		return nil
 	}
 
-	baru, err := h.dedup.Tandai(msg.Context(), msg.UUID)
+	isNew, err := h.dedup.Mark(msg.Context(), msg.UUID)
 	if err != nil {
-		return fmt.Errorf("periksa idempotensi: %w", err) // layak diulang
+		return fmt.Errorf("check idempotency: %w", err) // layak diulang
 	}
-	if !baru {
-		slog.Info("event sudah pernah diproses, dilewati", "pesan_id", msg.UUID)
+	if !isNew {
+		slog.Info("event already processed, skipping", "message_id", msg.UUID)
 		return nil
 	}
 
 	if err := h.emailSender(ev.Email); err != nil {
 		// Mengembalikan error memicu Nack/RETRY oleh Watermill.
-		return fmt.Errorf("kirim email ke %s: %w", ev.Email, err)
+		return fmt.Errorf("send email to %s: %w", ev.Email, err)
 	}
 	return nil
 }
@@ -202,11 +202,11 @@ func TestEventDrivenPubSub_FullCycle(t *testing.T) {
 	// dibaca fungsi uji adalah DATA RACE — `go test -race` menandainya, di
 	// berkas yang seluruh isinya tentang pemrosesan asinkron. Channel
 	// sekaligus menghapus kebutuhan akan time.Sleep di bawah.
-	diproses := make(chan string, 1)
+	processed := make(chan string, 1)
 	handler := &UserRegistrationHandler{
-		dedup: &dedupMemori{}, // pointer: Tandai punya receiver pointer
+		dedup: &memDedup{}, // pointer: Mark punya receiver pointer
 		emailSender: func(email string) error {
-			diproses <- email
+			processed <- email
 			return nil
 		},
 	}
@@ -222,7 +222,7 @@ func TestEventDrivenPubSub_FullCycle(t *testing.T) {
 	// Jalankan Router di background
 	go func() {
 		if err := router.Run(context.Background()); err != nil {
-			slog.Info("router berhenti", "galat", err)
+			slog.Info("router stopped", "error", err)
 		}
 	}()
 
@@ -243,51 +243,51 @@ func TestEventDrivenPubSub_FullCycle(t *testing.T) {
 	// eksekusi. Batas waktu di bawah hanya jaring pengaman untuk kegagalan
 	// sungguhan — bukan mekanisme sinkronisasinya.
 	select {
-	case email := <-diproses:
+	case email := <-processed:
 		if email != "alice@example.com" {
-			t.Errorf("email tujuan = %q, mau alice@example.com", email)
+			t.Errorf("recipient email = %q, want alice@example.com", email)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("event tidak pernah diproses consumer")
+		t.Fatal("event was never processed by consumer")
 	}
 
 	if err := router.Close(); err != nil {
-		t.Errorf("tutup router: %v", err)
+		t.Errorf("close router: %v", err)
 	}
 }
 
-// dedupMemori adalah SudahDiproses untuk uji.
-type dedupMemori struct{ terlihat sync.Map }
+// memDedup adalah AlreadyProcessed untuk uji.
+type memDedup struct{ seen sync.Map }
 
-func (d *dedupMemori) Tandai(_ context.Context, id string) (bool, error) {
-	_, sudahAda := d.terlihat.LoadOrStore(id, struct{}{})
-	return !sudahAda, nil
+func (d *memDedup) Mark(_ context.Context, id string) (bool, error) {
+	_, alreadyExists := d.seen.LoadOrStore(id, struct{}{})
+	return !alreadyExists, nil
 }
 
 // Redelivery WAJIB tidak menghasilkan email kedua. Tanpa uji ini, cacat
 // idempotensi baru terlihat sebagai keluhan pengguna menerima email ganda.
 func TestHandler_RedeliveryTidakMengirimUlang(t *testing.T) {
-	var jumlah atomic.Int32
+	var count atomic.Int32
 	h := &UserRegistrationHandler{
-		dedup:       &dedupMemori{},
-		emailSender: func(string) error { jumlah.Add(1); return nil },
+		dedup:       &memDedup{},
+		emailSender: func(string) error { count.Add(1); return nil },
 	}
 
-	muatan, err := json.Marshal(UserRegistered{UserID: "usr-1", Email: "a@b.co"})
+	payload, err := json.Marshal(UserRegistered{UserID: "usr-1", Email: "a@b.co"})
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	msg := message.NewMessage("id-tetap", muatan)
+	msg := message.NewMessage("id-tetap", payload)
 	msg.Metadata.Set("event_type", "UserRegistered")
 	msg.SetContext(context.Background())
 
 	for i := 0; i < 3; i++ { // broker mengirim ulang pesan yang sama
 		if err := h.Handle(msg); err != nil {
-			t.Fatalf("Handle ke-%d: %v", i, err)
+			t.Fatalf("Handle attempt %d: %v", i, err)
 		}
 	}
-	if got := jumlah.Load(); got != 1 {
-		t.Fatalf("email terkirim %d kali untuk satu event, mau 1", got)
+	if got := count.Load(); got != 1 {
+		t.Fatalf("email sent %d times for single event, want 1", got)
 	}
 }
 ```
@@ -393,7 +393,7 @@ func RegisterUser(ctx context.Context, tx *sql.Tx, userID string, email string) 
 	// hilang — dan transaksi bisnisnya sudah terlanjur commit.
 	payload, err := json.Marshal(map[string]string{"email": email})
 	if err != nil {
-		return fmt.Errorf("serialisasi payload outbox: %w", err)
+		return fmt.Errorf("serialize outbox payload: %w", err)
 	}
 
 	outboxQuery := `
@@ -438,7 +438,7 @@ func StartOutboxForwarder(ctx context.Context, db *sql.DB, brokerPublisher messa
 		return err
 	}
 
-	slog.InfoContext(ctx, "outbox relay dimulai")
+	slog.InfoContext(ctx, "outbox relay started")
 
 	// Loop pengiriman (Relay) pesan
 	for msg := range messages {
@@ -446,8 +446,8 @@ func StartOutboxForwarder(ctx context.Context, db *sql.DB, brokerPublisher messa
 			// slog, bukan fmt.Printf: kegagalan relay adalah hal yang
 			// dipasangi alert. Yang tercetak ke stdout tanpa level tidak
 			// akan pernah memicu apa pun.
-			slog.ErrorContext(ctx, "gagal merelai pesan outbox",
-				"pesan_id", msg.UUID, "galat", err)
+			slog.ErrorContext(ctx, "failed to relay outbox message",
+				"message_id", msg.UUID, "error", err)
 			msg.Nack() // kembalikan ke antrean untuk dicoba ulang
 			continue
 		}
@@ -462,7 +462,7 @@ func StartOutboxForwarder(ctx context.Context, db *sql.DB, brokerPublisher messa
 		// idempoten hanya memindahkan kehilangan data menjadi penggandaan
 		// data.
 		msg.Ack()
-		slog.DebugContext(ctx, "pesan direlai ke broker", "pesan_id", msg.UUID)
+		slog.DebugContext(ctx, "message relayed to broker", "message_id", msg.UUID)
 	}
 
 	return nil

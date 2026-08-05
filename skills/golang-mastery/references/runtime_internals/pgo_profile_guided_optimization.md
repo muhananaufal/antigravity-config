@@ -113,7 +113,7 @@ type Server struct {
 }
 
 // ErrTokenSalah dikembalikan bila autentikasi gagal.
-var ErrTokenSalah = errors.New("pgoserver: token tidak valid")
+var ErrTokenSalah = errors.New("pgoserver: invalid token")
 
 // New membangun server profil. Token diambil dari env agar tidak masuk kode.
 func New(cfg Config) (*Server, error) {
@@ -121,7 +121,7 @@ func New(cfg Config) (*Server, error) {
 		cfg.Token = os.Getenv("PPROF_TOKEN")
 	}
 	if cfg.Token == "" {
-		return nil, errors.New("pgoserver: PPROF_TOKEN wajib diisi")
+		return nil, errors.New("pgoserver: PPROF_TOKEN is required")
 	}
 	if cfg.MaxDuration == 0 {
 		cfg.MaxDuration = 60 * time.Second
@@ -158,13 +158,13 @@ func (s *Server) jaga(next http.Handler) http.Handler {
 			s.mu.Unlock()
 			w.Header().Set("Retry-After",
 				fmt.Sprintf("%d", int((s.cfg.MinAntarProfil-sejak).Seconds())))
-			http.Error(w, "terlalu sering", http.StatusTooManyRequests)
+			http.Error(w, "too frequent", http.StatusTooManyRequests)
 			return
 		}
 		s.terakhir = time.Now()
 		s.mu.Unlock()
 
-		s.cfg.Logger.Info("pengambilan profil dimulai",
+		s.cfg.Logger.Info("profile capture started",
 			"remote", r.RemoteAddr, "path", r.URL.Path, "goroutine", runtime.NumGoroutine())
 		next.ServeHTTP(w, r)
 	})
@@ -178,7 +178,7 @@ func (s *Server) Start() (net.Addr, error) {
 	}
 	go func() {
 		if err := s.srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			s.cfg.Logger.Error("server profil berhenti", "err", err)
+			s.cfg.Logger.Error("profile server stopped", "err", err)
 		}
 	}()
 	return ln.Addr(), nil
@@ -208,7 +208,7 @@ func serverUji(t *testing.T, minJeda time.Duration) (string, func()) {
 	t.Helper()
 	cfg := DefaultConfig()
 	cfg.Addr = "127.0.0.1:0"
-	cfg.Token = "rahasia-uji"
+	cfg.Token = "test-secret"
 	cfg.MinAntarProfil = minJeda
 	cfg.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 
@@ -249,15 +249,15 @@ func TestJaga_TanpaTokenDitolak(t *testing.T) {
 	base, stop := serverUji(t, 0)
 	defer stop()
 	if got := minta(t, base+"/debug/pprof/heap", ""); got != http.StatusUnauthorized {
-		t.Fatalf("mau 401, dapat %d", got)
+		t.Fatalf("want 401, got %d", got)
 	}
 }
 
 func TestJaga_TokenSalahDitolak(t *testing.T) {
 	base, stop := serverUji(t, 0)
 	defer stop()
-	if got := minta(t, base+"/debug/pprof/heap", "salah"); got != http.StatusUnauthorized {
-		t.Fatalf("mau 401, dapat %d", got)
+	if got := minta(t, base+"/debug/pprof/heap", "invalid"); got != http.StatusUnauthorized {
+		t.Fatalf("want 401, got %d", got)
 	}
 }
 
@@ -265,11 +265,11 @@ func TestJaga_PembatasanLaju(t *testing.T) {
 	base, stop := serverUji(t, time.Hour)
 	defer stop()
 
-	if got := minta(t, base+"/debug/pprof/heap", "rahasia-uji"); got != http.StatusOK {
-		t.Fatalf("permintaan pertama mau 200, dapat %d", got)
+	if got := minta(t, base+"/debug/pprof/heap", "test-secret"); got != http.StatusOK {
+		t.Fatalf("first request want 200, got %d", got)
 	}
-	if got := minta(t, base+"/debug/pprof/heap", "rahasia-uji"); got != http.StatusTooManyRequests {
-		t.Fatalf("permintaan kedua mau 429, dapat %d", got)
+	if got := minta(t, base+"/debug/pprof/heap", "test-secret"); got != http.StatusTooManyRequests {
+		t.Fatalf("second request want 429, got %d", got)
 	}
 }
 
@@ -277,7 +277,7 @@ func TestNew_TanpaTokenGagal(t *testing.T) {
 	t.Setenv("PPROF_TOKEN", "")
 	cfg := DefaultConfig()
 	if _, err := New(cfg); err == nil {
-		t.Fatal("mau error saat token kosong")
+		t.Fatal("want error on empty token")
 	}
 }
 ```

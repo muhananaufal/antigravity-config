@@ -198,7 +198,7 @@ func TestVectorClockCompare(t *testing.T) {
 	vcC := VectorClock{"N1": 2, "N2": 1} 
 	// vcB(N1:1, N2:2) vs vcC(N1:2, N2:1) = CONCURRENT!
 	if Compare(vcB, vcC) != Concurrent {
-		t.Errorf("vcB dan vcC terjadi secara paralel, harus menghasilkan Concurrent")
+		t.Errorf("vcB and vcC occurred concurrently, must yield Concurrent")
 	}
 }
 
