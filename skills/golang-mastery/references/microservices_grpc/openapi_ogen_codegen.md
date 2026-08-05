@@ -1,6 +1,8 @@
 # OpenAPI (Swagger) Generation untuk gRPC-Gateway
 
-> **Berlaku:** Go 1.21+ · `ogen` / `oapi-codegen` · OpenAPI 3.1 · **Lihat juga:** `microservices_grpc/rest_chi_middleware_stack.md` · `microservices_grpc/api_versioning_strategy.md` · `testing_quality/e2e_testing_patterns.md` · `cli_tooling/config_precedence_viper.md`
+> **Berlaku:** Go 1.21+ · `protoc-gen-openapiv2` (grpc-ecosystem) · menghasilkan **OpenAPI v2 / Swagger 2.0** · **Lihat juga:** `microservices_grpc/rest_chi_middleware_stack.md` · `microservices_grpc/api_versioning_strategy.md` · `microservices_grpc/grpc_protobuf_patterns.md` · `testing_quality/e2e_testing_patterns.md`
+
+> **Catatan versi spesifikasi.** `protoc-gen-openapiv2` menghasilkan **OpenAPI v2 (Swagger 2.0)**, bukan 3.x. Bila Anda membutuhkan OpenAPI 3.1 — misalnya untuk `oneOf`/`anyOf`, contoh per-media-type, atau webhook — jalurnya berbeda: tulis spesifikasi 3.1 sebagai sumber kebenaran lalu generate server dengan `ogen` atau `oapi-codegen`. Kedua pendekatan itu tidak bisa digabung tanpa satu sisi menjadi turunan yang harus disinkronkan manual.
 
 ## Konsep dan Internals
 Dalam lingkungan Microservices, dokumentasi API adalah kontrak suci. Menulis spesifikasi REST (Swagger / OpenAPI v2 atau v3) secara manual di ekosistem Go memakan waktu tinggi dan rentan *out-of-sync* antara dokumen dan *logic*. 
@@ -10,7 +12,20 @@ Ketika menggunakan *gRPC-Gateway*, kita mendapatkan anugerah luar biasa: **`prot
 Keunggulan metode *Source-of-Truth* tunggal (*Single Source of Truth*):
 - File Protobuf `.proto` mendefinisikan rute HTTP, Tipe Data JSON, Keterangan Field, dan Autentikasi.
 - Kompilasi `buf generate` atau `protoc` akan memuntahkan stub `.pb.go`, `.pb.gw.go` (HTTP router), dan sebuah `.swagger.json`.
-- Klien REST dan Partner bisnis dapat melihat halaman Swagger UI yang dirender dari JSON tersebut, dan dokumentasi ini **100% akurat** secara absolut, karena router HTTP (`grpc-gateway`) yang di-deploy juga dibangun menggunakan file proto yang sama.
+- Klien REST dan mitra bisnis melihat Swagger UI yang dirender dari JSON itu.
+
+**Batas jaminannya WAJIB dipahami — "100% akurat" adalah klaim yang terlalu jauh.** Yang dijamin konsisten adalah **bentuk**: rute, metode HTTP, nama dan tipe field. Itu memang berharga, karena di situlah dokumentasi manual paling sering menyimpang.
+
+Yang **tidak** tercermin di spesifikasi hasil generate:
+
+| Tidak tercakup | Akibatnya bagi pembaca dokumentasi |
+| :--- | :--- |
+| Aturan validasi di handler (`protovalidate`, cek kustom) | Permintaan yang "valid menurut Swagger" tetap ditolak `400` |
+| Respons galat selain yang dianotasi | Mitra tidak tahu bentuk galat yang akan mereka terima |
+| Autentikasi yang ditegakkan **interceptor** | Endpoint tampak publik padahal butuh token — kecuali `securityDefinitions` ditulis manual |
+| Rate limit dan semantik pagination | Klien membangun integrasi yang kena `429` di produksi |
+
+Jadi: bentuk dijamin, **perilaku tidak**. Perbedaan itulah yang membuat contract test tetap diperlukan meski spesifikasinya di-generate.
 
 Anotasi *grpc-gateway* memungkinkan manipulasi properti Swagger seperti: `summary`, `description`, `tags`, tipe respon default, dan *Security Schemes* (seperti `Bearer` atau `ApiKey`).
 

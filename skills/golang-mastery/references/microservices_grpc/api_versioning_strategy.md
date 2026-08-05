@@ -13,6 +13,25 @@ Prinsip Utama Evolusi gRPC API:
 
 Tooling modern seperti `buf breaking` wajib diintegrasikan pada tahap CI/CD untuk mencegah modifikasi (seperti penghapusan field, perubahan nama proto, dll) yang secara siluman melanggar kompatibilitas kontrak lama.
 
+### Bagian tersulit bukan membuat v2 — tapi mematikan v1
+
+Empat prinsip di atas menjelaskan cara **menghadirkan** versi baru. Yang menentukan apakah strategi versioning Anda berhasil adalah hal yang jarang ditulis: **kapan v1 benar-benar bisa dimatikan.** Tanpa tiga hal berikut, `v1` akan hidup selamanya dan setiap perubahan berikutnya membayar ongkosnya.
+
+1. **Metrik pemakaian per versi, sejak hari pertama v2 lahir.** Tanpa angka, "apakah masih ada yang pakai v1" hanya opini. Interceptor yang mencatat `FullMethod` sudah cukup:
+   ```go
+   // PromQL: sum by (versi) (rate(grpc_server_handled_total[24h]))
+   versi := "tak_dikenal"
+   if i := strings.Index(info.FullMethod, ".v"); i >= 0 {
+       if j := strings.Index(info.FullMethod[i+1:], "."); j > 0 {
+           versi = info.FullMethod[i+1 : i+1+j]  // "v1" / "v2"
+       }
+   }
+   ```
+2. **Identitas pemanggil, bukan hanya jumlahnya.** "Masih ada 400 rpm di v1" tidak bisa ditindaklanjuti; "400 rpm dari tiga mitra ini" bisa. Catat identitas klien bersama versinya.
+3. **Tanggal sunset yang diumumkan bersamaan dengan peluncuran v2** — bukan dipikirkan nanti. Versi tanpa tanggal akhir tidak pernah punya alasan untuk dimatikan, dan setiap kuartal akan ada prioritas yang lebih mendesak.
+
+Pola pematiannya bertahap dan bisa dibalik: umumkan → kirim header/metadata deprecation → *brownout* terjadwal (tolak v1 beberapa jam pada jam sepi, ulangi dengan durasi menaik) → matikan. Brownout adalah langkah yang paling sering dilewatkan dan paling banyak menyelamatkan: ia memunculkan pemakai yang tidak terdeteksi metrik **sebelum** pemadaman permanen.
+
 ## Diagram ASCII: Arsitektur Simultanous Versioning
 
 ```ascii

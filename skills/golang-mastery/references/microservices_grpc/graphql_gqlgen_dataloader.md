@@ -126,7 +126,26 @@ func (s *myUserServer) BatchGetUsers(ctx context.Context, req *BatchGetUsersRequ
 // ==============================================================================
 // 3. SIMULASI GRAPHQL DATALOADER
 // ==============================================================================
-// Di produksi, gunakan github.com/graph-gophers/dataloader atau vikstrous/dataloadgen
+//
+// ⚠ DUA HAL YANG WAJIB DIPEGANG SEBELUM MENYALIN POLA INI
+//
+// 1. DATALOADER BERSIFAT PER-PERMINTAAN, BUKAN GLOBAL.
+//    Ini bukan soal performa, ini soal kebocoran data. Dataloader
+//    menyimpan cache seumur hidupnya; satu instans yang dibagi lintas
+//    permintaan akan menyajikan hasil milik pengguna A kepada pengguna B,
+//    dan otorisasi per-permintaan tidak akan pernah dievaluasi ulang.
+//    Buat instans baru di middleware untuk setiap permintaan, simpan di
+//    context, ambil dari resolver.
+//
+// 2. MOCK DI BAWAH HANYA MELAKUKAN SATU BATCH -- itu batasnya sebagai
+//    ilustrasi. Flag `isFetched` bersifat sekali pakai: pemanggil yang
+//    tiba SETELAH batch pertama dikirim akan mencari ID-nya di hasil yang
+//    tidak pernah memuatnya, dan menerima "not found" alih-alih memicu
+//    batch baru. Dataloader sungguhan menyusun batch berulang dengan
+//    timer yang di-reset, bukan time.Sleep sekali jalan.
+//
+// Untuk produksi: github.com/graph-gophers/dataloader atau
+// github.com/vikstrous/dataloadgen. Jangan menulis sendiri.
 type MockDataloader struct {
 	client     func(context.Context, *BatchGetUsersRequest) (*BatchGetUsersResponse, error)
 	batchMutex sync.Mutex
@@ -200,18 +219,30 @@ func TestGraphQL_BFF_Dataloader_Batching(t *testing.T) {
 	// Simulasi GraphQL Resolver mengeksekusi fields secara Paralel
 	wg.Add(2)
 	
+	var errA, errB error
+
 	go func() { // Resolver 1 butuh data Penulis "A"
 		defer wg.Done()
-		userA, _ = loader.Load(context.Background(), "A")
+		userA, errA = loader.Load(context.Background(), "A")
 	}()
-	
+
 	go func() { // Resolver 2 butuh data Penulis "B"
 		defer wg.Done()
-		userB, _ = loader.Load(context.Background(), "B")
+		userB, errB = loader.Load(context.Background(), "B")
 	}()
 
 	wg.Wait()
 
+	// Galat WAJIB diperiksa lebih dulu. Membuang galat dengan `_` lalu
+	// langsung membaca userA.Name berarti kegagalan Load muncul sebagai
+	// PANIC nil pointer, bukan sebagai kegagalan uji yang bisa dibaca --
+	// dan panic di dalam uji menyembunyikan penyebab aslinya.
+	if errA != nil || errB != nil {
+		t.Fatalf("Load gagal: A=%v B=%v", errA, errB)
+	}
+	if userA == nil || userB == nil {
+		t.Fatalf("Load mengembalikan nil tanpa galat: A=%v B=%v", userA, userB)
+	}
 	if userA.Name != "Alice" || userB.Name != "Bob" {
 		t.Fatalf("Data mismatch: A=%v, B=%v", userA, userB)
 	}
