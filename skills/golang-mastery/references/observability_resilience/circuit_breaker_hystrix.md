@@ -1,6 +1,6 @@
 # Circuit Breaker Pattern untuk Network Resilience
 
-> **Berlaku:** Go 1.21+ · `sony/gobreaker` · **Lihat juga:** `distributed_patterns_resilience/circuit_breaker_gobreaker.md` · `distributed_patterns_resilience/retry_backoff_jitter.md` · `distributed_patterns_resilience/bulkhead_isolation.md` · `observability_resilience/rate_limiting_patterns.md`
+> **Berlaku:** Go 1.21+ · `sony/gobreaker` v1 (v2 menambah generic, sehingga `Execute` tidak lagi mengembalikan `interface{}`) · **Lihat juga:** `distributed_patterns_resilience/circuit_breaker_gobreaker.md` · `distributed_patterns_resilience/retry_backoff_jitter.md` · `distributed_patterns_resilience/bulkhead_isolation.md` · `observability_resilience/rate_limiting_patterns.md`
 
 ## Concept/Internals
 Dalam arsitektur *microservices*, kegagalan parsial (seperti *network timeout* atau matinya satu *downstream service*) adalah hal lazim. Tanpa mekanisme pertahanan, kegagalan di satu layanan dapat menyebar (cascading failure) dan meruntuhkan seluruh sistem karena *resource exhaustion* (seperti kehabisan *connection pool* atau antrean panjang goroutines).
@@ -53,14 +53,23 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
+	"math/rand"
 	"net/http"
-	"testing"
 	"time"
 
 	"github.com/sony/gobreaker"
 )
 
-var ErrServiceUnavailable = errors.New("service is unavailable due to circuit breaker")
+var (
+	ErrServiceUnavailable = errors.New("layanan tidak tersedia: circuit breaker terbuka")
+	// ErrPermintaanKlien menandai galat 4xx dan galat konstruksi request.
+	// Keduanya BUKAN bukti hilir bermasalah, jadi tidak boleh menghitung
+	// sebagai kegagalan — lihat IsSuccessful di bawah.
+	ErrPermintaanKlien = errors.New("permintaan klien ditolak hilir")
+)
+
+const batasBodyRespons = 4 << 20 // 4 MiB — hilir bermasalah bisa mengirim tanpa batas
 
 // PaymentClient membungkus HTTP client dengan Circuit Breaker.
 type PaymentClient struct {
@@ -69,130 +78,248 @@ type PaymentClient struct {
 }
 
 // NewPaymentClient membuat instance dengan konfigurasi CB production-ready.
+//
+// jitter WAJIB berbeda per instans. Tanpa itu seluruh pod masuk Half-Open pada
+// detik yang sama dan menghantam hilir yang baru pulih secara serentak.
 func NewPaymentClient(name string) *PaymentClient {
+	// #nosec G404 — jitter penjadwalan, bukan nilai kriptografis
+	jitter := time.Duration(rand.Int63n(int64(2 * time.Second)))
+
 	st := gobreaker.Settings{
 		Name: name,
-		// MaxRequests: Jumlah request saat Half-Open
+		// MaxRequests: jumlah request percobaan yang diizinkan saat Half-Open.
 		MaxRequests: 3,
-		// Interval: Periode untuk menghitung kegagalan (jika 0, dihitung saat closed secara terus-menerus)
-		Interval: 10 * time.Second,
-		// Timeout: Waktu istirahat (Open) sebelum masuk ke Half-Open
-		Timeout: 5 * time.Second,
-		// ReadyToTrip: Kondisi kapan CB harus Open. 
-		// Di sini kita gunakan: minimal 10 request dalam interval, dan failure rate >= 60%
+		// Interval: periode reset penghitung saat Closed.
+		//
+		// JEBAKAN: Interval dan ambang `Requests` di ReadyToTrip adalah SATU
+		// pasangan, dan pasangan yang salah membuat breaker mati fungsi tanpa
+		// gejala. `Requests >= 10` di dalam Interval 10 detik berarti breaker
+		// TIDAK PERNAH bisa terbuka bila trafik ke dependensi ini < 1 rps —
+		// penghitung ter-reset sebelum sempat mencapai 10, berapa pun matinya
+		// hilir. Untuk dependensi bertrafik rendah, perbesar Interval (atau
+		// set 0 = tidak pernah reset selama Closed).
+		Interval: 60 * time.Second,
+		// Timeout: lama state Open sebelum masuk Half-Open, diberi jitter.
+		Timeout: 5*time.Second + jitter,
 		ReadyToTrip: func(counts gobreaker.Counts) bool {
-			failureRatio := float64(counts.TotalFailures) / float64(counts.Requests)
-			return counts.Requests >= 10 && failureRatio >= 0.6
+			if counts.Requests < 10 { // ambang sampel minimum
+				return false
+			}
+			return float64(counts.TotalFailures)/float64(counts.Requests) >= 0.6
 		},
-		// OnStateChange: Hook untuk observability (Metrics/Logs)
-		OnStateChange: func(name string, from gobreaker.State, to gobreaker.State) {
-			fmt.Printf("[CB-EVENT] %s changed from %s to %s\n", name, from, to)
+		// IsSuccessful memutuskan apakah sebuah galat MENGHITUNG sebagai
+		// kegagalan hilir. Inilah tempat yang benar untuk menyaring galat yang
+		// bukan salah hilir — bukan dengan menelan galatnya (Anti-Pattern 2).
+		IsSuccessful: func(err error) bool {
+			switch {
+			case err == nil:
+				return true
+			case errors.Is(err, ErrPermintaanKlien):
+				// 4xx = salah pemanggil. Hilir sehat: ia menjawab dengan benar.
+				return true
+			case errors.Is(err, context.Canceled):
+				// Klien pergi (tab ditutup, refresh). Bukan bukti hilir rusak.
+				// context.DeadlineExceeded sengaja TIDAK ikut di sini: itu
+				// justru sinyal paling murni bahwa hilir melambat.
+				return true
+			default:
+				return false
+			}
+		},
+		OnStateChange: func(name string, from, to gobreaker.State) {
+			slog.Warn("circuit breaker berpindah state",
+				"breaker", name, "dari", from.String(), "ke", to.String())
 		},
 	}
 
 	return &PaymentClient{
 		cb: gobreaker.NewCircuitBreaker(st),
 		client: &http.Client{
-			Timeout: 2 * time.Second, // Timeout ketat untuk I/O
+			// WAJIB lebih pendek dari toleransi pemanggil. Lihat Anti-Pattern 1.
+			Timeout: 2 * time.Second,
 		},
 	}
 }
 
 // ProcessPayment mengeksekusi request melalui Circuit Breaker.
 func (p *PaymentClient) ProcessPayment(ctx context.Context, url string) (string, error) {
-	// Execute berjalan dalam scope CB
 	result, err := p.cb.Execute(func() (interface{}, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
 		if err != nil {
-			// Request creation error TIDAK boleh mentrip CB, karena ini bukan error dari downstream.
-			// Tapi gobreaker akan menganggap semua error dari func ini sbg failure jika di-return.
-			// Ini adalah tantangan umum. Kita tangani di Edge Case #3 (Ignore specific errors).
-			return nil, err
+			// URL cacat = salah kita, bukan salah hilir. Dibungkus supaya
+			// IsSuccessful tidak menghitungnya sebagai kegagalan hilir.
+			return nil, fmt.Errorf("%w: bangun request: %w", ErrPermintaanKlien, err)
 		}
 
 		resp, err := p.client.Do(req)
 		if err != nil {
-			return nil, fmt.Errorf("network error: %w", err)
+			return nil, fmt.Errorf("galat jaringan: %w", err)
 		}
 		defer resp.Body.Close()
 
-		// 5xx errors considered as failure that trips the breaker
-		if resp.StatusCode >= 500 {
-			return nil, fmt.Errorf("server error: %d", resp.StatusCode)
+		switch {
+		case resp.StatusCode >= 500:
+			// Body 5xx tetap dikuras (berbatas) agar koneksi bisa dipakai ulang.
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, batasBodyRespons))
+			return nil, fmt.Errorf("galat server: %d", resp.StatusCode)
+		case resp.StatusCode >= 400:
+			pesan, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+			return nil, fmt.Errorf("%w: %d: %s", ErrPermintaanKlien, resp.StatusCode, pesan)
 		}
 
-		// 4xx errors (client errors) SHOULD NOT trip the breaker.
-		// Sayangnya, gobreaker trip pada *semua* non-nil error.
-		// Workaround: return nil error, tapi return custom response object.
-		// Untuk simplicity kode ini, kita kembalikan error. Lihat Anti-Pattern #2.
-
-		body, _ := io.ReadAll(resp.Body)
+		body, err := io.ReadAll(io.LimitReader(resp.Body, batasBodyRespons))
+		if err != nil {
+			// Body putus di tengah adalah kegagalan hilir yang sah. JANGAN
+			// kembalikan potongan parsial sebagai sukses.
+			return nil, fmt.Errorf("baca body: %w", err)
+		}
 		return string(body), nil
 	})
 
 	if err != nil {
-		// Jika error berasal dari CB yang Open
 		if errors.Is(err, gobreaker.ErrOpenState) || errors.Is(err, gobreaker.ErrTooManyRequests) {
-			return "", ErrServiceUnavailable // Fast-fail atau memicu Fallback logic
+			return "", ErrServiceUnavailable // pemanggil beralih ke fallback
 		}
 		return "", err
 	}
 
-	return result.(string), nil
+	// gobreaker v1 mengembalikan interface{}. Bentuk comma-ok WAJIB: begitu ada
+	// satu cabang yang mengembalikan tipe lain, assertion telanjang PANIC dan
+	// mematikan proses. gobreaker/v2 yang generik menghapus kelas galat ini.
+	body, ok := result.(string)
+	if !ok {
+		return "", fmt.Errorf("tipe hasil tak terduga: %T", result)
+	}
+	return body, nil
 }
+```
 
-// --- Unit Tests ---
+Ujinya memakai `httptest`, bukan host yang tidak bisa di-resolve:
 
-func TestCircuitBreakerTrips(t *testing.T) {
-	client := NewPaymentClient("test-cb")
+```go
+package resilience
 
+import (
+	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/sony/gobreaker"
+)
+
+func TestBreakerTerbukaSetelahAmbang(t *testing.T) {
+	// httptest, BUKAN "http://invalid.local". Host yang tidak bisa di-resolve
+	// menggantungkan uji pada DNS mesin penguji: ISP yang membajak NXDOMAIN
+	// membuat request BERHASIL, dan sufiks .local memicu jalur mDNS yang lambat
+	// sehingga 10 iterasi bisa melampaui Interval dan me-reset penghitung.
+	// Uji jadi gagal karena lingkungan, bukan karena kode.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	c := NewPaymentClient("uji-cb")
 	ctx := context.Background()
-	// Simulasi 10 kegagalan beruntun agar menyentuh ambang batas (>=10 req, 100% fail)
+
 	for i := 0; i < 10; i++ {
-		_, err := client.ProcessPayment(ctx, "http://invalid.local") // Pasti gagal network
-		if err == nil {
-			t.Errorf("Expected network error on iteration %d", i)
+		if _, err := c.ProcessPayment(ctx, srv.URL); err == nil {
+			t.Fatalf("iterasi %d: mengharapkan galat 5xx", i)
 		}
 	}
 
-	// Request ke-11 harusnya langsung gagal oleh Circuit Breaker (ErrServiceUnavailable)
-	_, err := client.ProcessPayment(ctx, "http://invalid.local")
-	if !errors.Is(err, ErrServiceUnavailable) {
-		t.Errorf("Expected %v, got %v", ErrServiceUnavailable, err)
+	if _, err := c.ProcessPayment(ctx, srv.URL); !errors.Is(err, ErrServiceUnavailable) {
+		t.Fatalf("request ke-11 harus ditolak breaker, dapat: %v", err)
+	}
+	if got := c.cb.State(); got != gobreaker.StateOpen {
+		t.Fatalf("state = %v, mau Open", got)
+	}
+}
+
+// Uji yang justru paling sering hilang, dan satu-satunya yang membuktikan
+// klasifikasi galat bekerja: galat yang BUKAN salah hilir tidak boleh membuka
+// breaker. Tanpa uji ini, satu lonjakan 400 dari satu klien cacat memutus
+// akses SELURUH pengguna ke hilir yang sehat.
+func TestBreakerTidakTerbukaKarena4xx(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer srv.Close()
+
+	c := NewPaymentClient("uji-cb-4xx")
+	ctx := context.Background()
+
+	for i := 0; i < 50; i++ {
+		_, err := c.ProcessPayment(ctx, srv.URL)
+		if !errors.Is(err, ErrPermintaanKlien) {
+			t.Fatalf("iterasi %d: mau ErrPermintaanKlien, dapat %v", i, err)
+		}
+	}
+
+	if got := c.cb.State(); got != gobreaker.StateClosed {
+		t.Fatalf("state = %v, mau tetap Closed — 4xx bukan kegagalan hilir", got)
 	}
 }
 ```
 
 ## Anti-Patterns
 
-### ❌ Anti-Pattern 1: Timeout Request Lebih Lama dari Interval/Timeout CB
-**Mengapa berbahaya:** Jika CB memiliki `Timeout` (durasi state Open) 5 detik, tetapi `http.Client` memiliki timeout 30 detik, goroutines akan menggantung (hang) selama 30 detik pada state Closed/Half-Open. Ini membatalkan keuntungan utama CB (*fast-fail*), menyebabkan *thread exhaustion* pada sistem sebelum sekering sempat putus.
+### ❌ Anti-Pattern 1: Timeout HTTP Lebih Panjang dari yang Bisa Ditoleransi
+
+**Mengapa berbahaya:** Circuit breaker **menghitung** kegagalan; ia tidak memotong request yang sedang berjalan. Dengan `http.Client.Timeout` 30 detik, setiap request yang menggantung menahan satu goroutine dan satu koneksi selama 30 detik penuh — dan breaker baru melihat kegagalan pertamanya setelah 30 detik. Pada beban tinggi, pool koneksi habis jauh sebelum sekring sempat putus.
+
+Ada **dua** ketimpangan yang berbeda, dan keduanya sering tertukar:
+
+| Yang dibandingkan | Kalau timpang |
+| :--- | :--- |
+| `http.Client.Timeout` vs toleransi pemanggil | Pemanggil menyerah lebih dulu. Kerja Anda terbuang, dan breaker tidak pernah menerima sinyal yang seharusnya ia hitung |
+| `http.Client.Timeout` vs `Settings.Timeout` (durasi Open) | Probe Half-Open butuh 30 detik untuk menyimpulkan padahal Open hanya 5 detik. Breaker tertahan di Half-Open jauh lebih lama dari yang dirancang |
+
+> `Settings.Interval` **tidak ada hubungannya** dengan timeout HTTP. Ia adalah periode reset penghitung saat Closed; pasangannya adalah ambang `Requests` di `ReadyToTrip`, bukan durasi request. Menyamakan keduanya membuat orang menyetel `Interval` untuk alasan yang salah — dan melewatkan jebakan trafik-rendah di Edge Case 5.
 
 ```go
-// BAD: HTTP Timeout >> CB Interval/Timeout
+// BAD: HTTP timeout jauh melampaui durasi Open
 cb := gobreaker.NewCircuitBreaker(gobreaker.Settings{Timeout: 5 * time.Second})
-client := &http.Client{Timeout: 30 * time.Second} 
+client := &http.Client{Timeout: 30 * time.Second}
 ```
 ```go
-// GOOD: HTTP Timeout (1s) << CB Interval (10s)
+// GOOD: request selesai (atau menyerah) jauh di dalam durasi Open
+cb := gobreaker.NewCircuitBreaker(gobreaker.Settings{Timeout: 5 * time.Second})
 client := &http.Client{Timeout: 1 * time.Second}
 ```
 
-### ❌ Anti-Pattern 2: Mentrip CB untuk Kesalahan Klien (HTTP 4xx)
-**Mengapa berbahaya:** Kode 400 Bad Request atau 404 Not Found adalah kesalahan dari pihak pemanggil (client-side), bukan indikasi *downstream service* sedang down. Jika 4xx mereturn `error` ke fungsi CB, CB akan terbuka (Open), menolak akses bahkan untuk pengguna lain dengan *request* yang valid! Ini memicu *Denial of Service* secara tidak disengaja.
+### ❌ Anti-Pattern 2: Menelan Galat 4xx Supaya Breaker Tidak Terbuka
+
+Kode 400 atau 404 adalah kesalahan pemanggil, bukan indikasi hilir sedang mati. Bila 4xx ikut dihitung, breaker terbuka dan menolak akses **untuk seluruh pengguna** — satu klien cacat memadamkan layanan bagi semua orang. Sampai di sini benar. Yang salah adalah obatnya yang biasa disarankan:
+
+> **Klaim lama yang sudah tidak berlaku:** *"gobreaker menghitung semua galat non-nil sebagai kegagalan, jadi untuk 4xx kembalikan `nil` error dan bungkus statusnya di dalam objek respons."*
+
+`gobreaker.Settings` punya **`IsSuccessful func(err error) bool`**. Fungsi itu menerima galat yang Anda kembalikan dan memutuskan apakah ia menghitung sebagai kegagalan. Perilaku "semua galat non-nil = kegagalan" hanyalah **default saat field ini nil** — bukan batasan pustaka.
+
+Workaround "kembalikan `nil` error" merusak dua hal sekaligus:
+
+- **Tipe galat lenyap.** Pemanggil tidak bisa lagi `errors.Is`. Setiap lapisan di atasnya harus tahu cara membongkar objek respons hanya untuk tahu bahwa request-nya gagal.
+- **`Execute` mengembalikan `interface{}`.** Begitu satu cabang mengembalikan `*CustomResponse` dan cabang lain `string`, `result.(string)` di pemanggil **panic**. Obat yang disarankan justru menjatuhkan proses.
 
 ```go
-// BAD: Semua error mentrip CB
-if resp.StatusCode == 400 {
-    return nil, errors.New("bad request") // Ini akan menambah counter kegagalan CB!
+// BAD: galat ditelan supaya breaker tidak menghitungnya.
+// Tipe galat hilang, dan tipe kembalian jadi tidak konsisten antar-cabang.
+if resp.StatusCode == http.StatusBadRequest {
+    return &CustomResponse{Err: "bad request"}, nil
 }
 ```
-
 ```go
-// GOOD: Abaikan 4xx dari perhitungan CB (return nilai dan nil error, lalu olah di luar)
-if resp.StatusCode == 400 {
-    return &CustomResponse{Err: "bad request"}, nil 
-    // Tidak dihitung gagal oleh CB. Evaluasi error dilakukan caller.
+// GOOD: kembalikan galat SUNGGUHAN, lalu beri tahu breaker jangan menghitungnya.
+// Klasifikasi terjadi di satu tempat; pemanggil tetap punya errors.Is.
+if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+    return nil, fmt.Errorf("%w: %d", ErrPermintaanKlien, resp.StatusCode)
+}
+
+st := gobreaker.Settings{
+    IsSuccessful: func(err error) bool {
+        return err == nil || errors.Is(err, ErrPermintaanKlien)
+    },
 }
 ```
 
@@ -216,9 +343,11 @@ if errors.Is(err, ErrServiceUnavailable) {
 ## Edge Cases & Defensive Programming
 
 1. **Thundering Herd pada State Half-Open**: Ketika state berubah dari Open ke Half-Open, *semua* request yang tadinya tertahan akan serentak menyerang *downstream*. Hal ini bisa menumbangkan kembali layanan yang baru saja bangkit. `gobreaker` menangani ini dengan membatasi `MaxRequests`, sehingga hanya N request pertama yang diteruskan, sisanya langsung gagal (*fast-fail*). Pastikan `MaxRequests` tidak terlalu besar.
-2. **Context Cancellation saat Wait**: Jika *parent context* dari `r.Context()` (HTTP request yang masuk) dibatalkan (misal user me-*refresh* browser) tepat saat CB mengeksekusi request di Half-Open, proses HTTP Client akan gagal dengan `context.Canceled`. Kegagalan ini akan dianggap sebagai *service failure* dan men-trip ulang CB menjadi Open! Sebaiknya, deteksi `errors.Is(err, context.Canceled)` dan jangan hitung itu sebagai kegagalan *downstream*.
+2. **Context Cancellation — pembatalan oleh klien bisa memutus layanan Anda sendiri**: Bila *parent context* dari `r.Context()` dibatalkan (pengguna menutup tab atau me-*refresh*), `client.Do` gagal dengan `context.Canceled`. Secara default gobreaker menghitungnya sebagai kegagalan hilir. Konsekuensinya tidak sepele: satu halaman yang lambat memuat membuat banyak pengguna menekan refresh, breaker terbuka, dan **hilir yang sepenuhnya sehat jadi tidak bisa diakses siapa pun** — pemadaman yang seluruhnya Anda timbulkan sendiri. Ditangani di `IsSuccessful` pada kode di atas. Perhatikan pembedaannya: `context.Canceled` diabaikan, sedangkan **`context.DeadlineExceeded` tetap dihitung** — deadline terlampaui justru sinyal paling murni bahwa hilir melambat, dan menelannya membuat breaker buta terhadap satu-satunya kegagalan yang paling perlu ia lihat.
 3. **Flapping State di Arsitektur Load Balanced**: Jika downstream Anda berada di balik Load Balancer bundar (*round-robin*), dan hanya 1 dari 5 pod yang mati, *error rate* total mungkin hanya 20%. Jika ambang CB adalah 50%, sekring tidak akan pernah putus (Closed), namun 20% pengguna Anda menderita. Di sistem tingkat lanjut, CB harus dipasang *per-instance/pod* (Client-side Load Balancing CB), bukan *per-hostname*.
 4. **Data Race pada Custom Metrics**: Karena CB diakses oleh ribuan goroutines secara simultan, jika Anda menambahkan *counter* kustom (di luar fitur library) di fungsi pelaksana tanpa `sync.Mutex` atau `atomic`, Anda akan mengalami keparahan *Race Condition*. Selalu manfaatkan statistik atomik *internal* yang ditawarkan oleh pustaka.
+5. **Zona mati trafik rendah — breaker yang tidak pernah bisa terbuka**: `Interval` dan ambang `Requests` di `ReadyToTrip` adalah satu pasangan, dan pasangan yang salah mematikan breaker tanpa menimbulkan gejala apa pun. `Requests >= 10` di dalam `Interval` 10 detik menuntut **lebih dari 1 rps** ke dependensi itu; di bawah itu penghitung ter-reset sebelum sempat mencapai 10, dan breaker tetap Closed **berapa pun matinya hilir**. Yang berbahaya: konfigurasi ini terlihat wajar di code review, lulus semua uji beban (yang trafiknya tinggi), dan baru ketahuan saat insiden pada dependensi bertrafik rendah — persis saat ia paling dibutuhkan. Untuk dependensi jarang-pakai, perbesar `Interval` atau set `0` (tidak pernah reset selama Closed) dan turunkan ambang sampel.
+6. **`Execute` tidak membatalkan fungsi yang sedang berjalan**: Saat breaker berpindah ke Open, request yang sudah terlanjur masuk **tetap berjalan sampai selesai**. Breaker hanya menolak pemanggilan *baru*. Batas waktu sesungguhnya tetap datang dari `context` dan `http.Client.Timeout` — tanpa keduanya, breaker yang terbuka tidak menghentikan apa pun yang sudah menggantung.
 
 ## Kapan JANGAN Pakai Ini
 

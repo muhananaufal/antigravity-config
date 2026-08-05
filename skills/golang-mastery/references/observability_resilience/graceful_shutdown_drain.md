@@ -19,20 +19,23 @@ Kubernetes Rolling Update:
                                                           
 Timeline yang benar:                                      
                                                           
-  t=0s:  SIGTERM diterima                                 
-  t=0s:  Readiness → 503 (signal LB untuk stop send)     
-  t=2s:  sleep 2s (tunggu iptables K8s sinkron)          
-  t=2s:  srv.Shutdown(ctx) — stop accept baru            
-  t=2s–27s: drain in-flight requests (max 25s)           
-  t=~5s: semua request selesai → WaitGroup done          
-  t=5s:  close DB connections, flush metrics              
-  t=5s:  os.Exit(0)                                       
+  t=0s      SIGTERM diterima                              
+  t=0s      Readiness → 503 (sinyal LB berhenti mengirim) 
+  t=0–5s    JEDA — endpoint belum lepas dari Service,     
+            trafik baru MASIH datang                      
+  t=5s      srv.Shutdown(ctx) — berhenti menerima koneksi 
+  t=5–25s   drain permintaan aktif + tugas latar (20s)    
+  t≤28s     tutup konsumer, flush metrik, tutup pool DB (3s)
+  t≤28s     proses keluar                                 
                                                           
-  terminationGracePeriodSeconds K8s: 30s                 
-  Go shutdown timeout: 25s (< 30s, wajib!)              
+  terminationGracePeriodSeconds K8s : 30s                 
+  jeda 5 + drain 20 + penutupan 3   = 28s → margin 2s     
                                                           
-  Jika timeout: K8s kirim SIGKILL → paksa mati           
+  Bila total ≥ 30s: SIGKILL datang di tengah drain,       
+  dan seluruh urutan di atas tidak pernah selesai.        
 ```
+
+> Angka di diagram ini, di diagram berikutnya, di kode §2, dan di manifest Kubernetes pada Anti-Pattern 3 adalah **satu himpunan yang sama**. Mengubah salah satunya tanpa yang lain adalah cara paling umum bagaimana graceful shutdown berhenti bekerja tanpa ada yang menyadarinya.
 
 **Kenapa `http.Server.Shutdown()` bekerja:**
 - `Shutdown()` memanggil `Listener.Close()` — tidak ada koneksi baru masuk
@@ -61,14 +64,15 @@ Timeline yang benar:
              | permintaan yang sedang berjalan diselesaikan
              |
    t=5..25s | drain: tunggu permintaan aktif selesai (DENGAN batas waktu)
-             | tutup konsumer antrean, flush buffer, tutup pool DB
              |
-   t=25s    | proses keluar bersih
+   t=..28s  | tutup konsumer antrean, flush buffer, tutup pool DB
+             |
+   t=28s    | proses keluar bersih
              |
    t=30s    Kubernetes kirim SIGKILL  <-- terminationGracePeriodSeconds
 
    HUBUNGAN YANG WAJIB DIPEGANG:
-     jeda + timeout drain  <  terminationGracePeriodSeconds
+     jeda + timeout drain + waktu penutupan  <  terminationGracePeriodSeconds
      Bila lebih besar, SIGKILL datang di tengah drain dan seluruh
      kerapihan yang ditulis tidak pernah terpakai.
 
@@ -97,65 +101,83 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"os/signal"
 	"sync"
 	"sync/atomic"
 	"syscall"
-	"testing"
 	"time"
 )
 
+// Penutup adalah satu sumber daya yang harus ditutup saat shutdown.
+// Urutannya dalam slice menentukan urutan penutupan: dari luar ke dalam,
+// pool database TERAKHIR.
+type Penutup struct {
+	Nama  string
+	Tutup func(context.Context) error
+}
+
 // Server adalah wrapper http.Server dengan lifecycle management.
 type Server struct {
-	httpServer     *http.Server
-	bgTasks        sync.WaitGroup
-	isShuttingDown atomic.Bool
-	shutdownDelay  time.Duration // delay sebelum Shutdown() — untuk K8s iptables sync
-	drainTimeout   time.Duration // max waktu drain in-flight requests
+	httpServer *http.Server
+	bgTasks    sync.WaitGroup
+	sedangMati atomic.Bool
+	sekaliMati sync.Once
+
+	jedaTepi     time.Duration // jeda sebelum Shutdown — tunggu endpoint dilepas
+	batasDrain   time.Duration // anggaran drain HTTP + tugas latar
+	batasPenutup time.Duration // anggaran seluruh Penutup
+	penutup      []Penutup
 }
 
 // NewServer membuat server production-ready.
+//
+// Angka di bawah harus dibaca bersama manifest Kubernetes (Anti-Pattern 3):
+// jedaTepi 5 + batasDrain 20 + batasPenutup 3 = 28s, di bawah grace period 30s.
 func NewServer(addr string, handler http.Handler) *Server {
 	s := &Server{
-		shutdownDelay: 2 * time.Second,  // K8s iptables sync window
-		drainTimeout:  25 * time.Second, // harus < terminationGracePeriodSeconds
+		jedaTepi:     5 * time.Second,
+		batasDrain:   20 * time.Second,
+		batasPenutup: 3 * time.Second,
 	}
 	s.httpServer = &http.Server{
-		Addr:         addr,
-		Handler:      handler,
+		Addr:    addr,
+		Handler: handler,
+		// ReadTimeout memberi batas pada koneksi yang baru mengirim SEBAGIAN
+		// request. Koneksi seperti itu dihitung AKTIF oleh Shutdown, jadi tanpa
+		// batas ini satu klien lambat bisa menahan drain sampai habis.
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 20 * time.Second,
-		IdleTimeout:  120 * time.Second, // close Keep-Alive conn yang idle
+		IdleTimeout:  120 * time.Second,
 	}
 	return s
 }
 
-// IsShuttingDown digunakan oleh Readiness Probe.
-func (s *Server) IsShuttingDown() bool {
-	return s.isShuttingDown.Load()
+// DaftarkanPenutup menambah sumber daya ke urutan penutupan.
+// Panggil sesuai urutan luar-ke-dalam: konsumer antrean dulu, pool DB terakhir.
+func (s *Server) DaftarkanPenutup(nama string, tutup func(context.Context) error) {
+	s.penutup = append(s.penutup, Penutup{Nama: nama, Tutup: tutup})
 }
+
+// IsShuttingDown digunakan oleh Readiness Probe.
+func (s *Server) IsShuttingDown() bool { return s.sedangMati.Load() }
 
 // AddBackgroundTask mendaftarkan goroutine background (queue consumer, cron, dll).
 // Wajib dipasangkan dengan DoneBackgroundTask() via defer.
-func (s *Server) AddBackgroundTask() {
-	s.bgTasks.Add(1)
-}
+func (s *Server) AddBackgroundTask() { s.bgTasks.Add(1) }
 
 // DoneBackgroundTask dipanggil saat background goroutine selesai.
-func (s *Server) DoneBackgroundTask() {
-	s.bgTasks.Done()
-}
+func (s *Server) DoneBackgroundTask() { s.bgTasks.Done() }
 
 // Run menjalankan server dan memblok sampai signal diterima.
 func (s *Server) Run() error {
-	// Channel OS signal — buffered 1 agar signal tidak hilang
-	sigCh := make(chan os.Signal, 1)
+	// Buffer ≥2: satu untuk sinyal pertama, satu untuk katup darurat di bawah.
+	sigCh := make(chan os.Signal, 2)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sigCh)
 
-	// Start HTTP server di goroutine terpisah
 	serverErr := make(chan error, 1)
 	go func() {
 		if err := s.httpServer.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
@@ -163,186 +185,291 @@ func (s *Server) Run() error {
 		}
 	}()
 
-	// Block sampai signal atau error
 	select {
 	case err := <-serverErr:
-		return fmt.Errorf("server failed to start: %w", err)
+		return fmt.Errorf("server gagal start: %w", err)
 	case sig := <-sigCh:
-		fmt.Printf("\n[shutdown] signal %s received\n", sig)
+		slog.Info("shutdown: sinyal diterima", "sinyal", sig.String())
 	}
+
+	// Katup darurat. Begitu signal.Notify aktif, perilaku default sinyal sudah
+	// diambil alih — tanpa goroutine ini, Ctrl-C KEDUA tidak melakukan apa pun
+	// dan operator hanya bisa menunggu drain sampai habis.
+	go func() {
+		sig := <-sigCh
+		slog.Warn("shutdown: sinyal kedua, keluar paksa", "sinyal", sig.String())
+		os.Exit(1)
+	}()
 
 	return s.shutdown()
 }
 
-// shutdown mengeksekusi urutan shutdown yang benar.
+// shutdown idempoten: Kubernetes kadang mengirim SIGTERM lebih dari sekali.
 func (s *Server) shutdown() error {
-	// Step 1: Tandai sebagai shutting down → Readiness Probe returns 503
-	s.isShuttingDown.Store(true)
-	fmt.Println("[shutdown] marked as shutting down (readiness: 503)")
+	var err error
+	s.sekaliMati.Do(func() { err = s.jalankanShutdown() })
+	return err
+}
 
-	// Step 2: Delay iptables K8s sync (skip di test)
-	if s.shutdownDelay > 0 {
-		fmt.Printf("[shutdown] waiting %s for K8s iptables sync...\n", s.shutdownDelay)
-		time.Sleep(s.shutdownDelay)
+func (s *Server) jalankanShutdown() error {
+	// Tahap 0: tandai tidak siap. WAJIB sebelum jeda — kalau urutannya
+	// terbalik, load balancer masih mengirim trafik selama seluruh jeda dan
+	// jeda itu jadi tidak ada gunanya sama sekali.
+	s.sedangMati.Store(true)
+	slog.Info("shutdown: ditandai tidak siap", "readiness", http.StatusServiceUnavailable)
+
+	if s.jedaTepi > 0 {
+		slog.Info("shutdown: menunggu endpoint dilepas dari Service", "jeda", s.jedaTepi)
+		time.Sleep(s.jedaTepi)
 	}
 
-	// Step 3: Stop accepting new connections, drain in-flight
-	ctx, cancel := context.WithTimeout(context.Background(), s.drainTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), s.batasDrain)
 	defer cancel()
 
-	fmt.Println("[shutdown] draining HTTP connections...")
+	// Galat DIKUMPULKAN, bukan di-return di tempat. Tahap berikutnya justru
+	// paling penting dijalankan ketika tahap sebelumnya gagal — di situlah
+	// koneksi masih menggantung dan pool DB masih terbuka.
+	var galat []error
+
+	// Tahap 1: listener ditutup, permintaan aktif diselesaikan.
+	slog.Info("shutdown: mengalirkan koneksi HTTP", "batas", s.batasDrain)
 	if err := s.httpServer.Shutdown(ctx); err != nil {
-		return fmt.Errorf("HTTP drain forced by timeout: %w", err)
+		galat = append(galat, fmt.Errorf("drain HTTP: %w", err))
+		// Putuskan paksa sisa koneksi. Tanpa ini, handler yang menggantung
+		// tetap memegang koneksi DB dan menahan tahap 3.
+		if err := s.httpServer.Close(); err != nil {
+			galat = append(galat, fmt.Errorf("tutup paksa listener: %w", err))
+		}
 	}
-	fmt.Println("[shutdown] HTTP server drained cleanly")
 
-	// Step 4: Tunggu background tasks selesai (dengan timeout yang sama)
-	bgDone := make(chan struct{})
-	go func() {
-		s.bgTasks.Wait()
-		close(bgDone)
-	}()
-
+	// Tahap 2: konsumer antrean dan cron.
+	selesai := make(chan struct{})
+	go func() { s.bgTasks.Wait(); close(selesai) }()
 	select {
-	case <-bgDone:
-		fmt.Println("[shutdown] all background tasks completed")
+	case <-selesai:
+		slog.Info("shutdown: seluruh tugas latar selesai")
 	case <-ctx.Done():
-		return fmt.Errorf("timeout waiting for background tasks: %w", ctx.Err())
+		galat = append(galat, fmt.Errorf("tugas latar belum selesai: %w", ctx.Err()))
 	}
 
-	fmt.Println("[shutdown] graceful shutdown complete ✓")
+	// Tahap 3: sumber daya, dari luar ke dalam. Memakai context BARU dengan
+	// sengaja: pada titik ini ctx di atas kemungkinan besar sudah kedaluwarsa,
+	// dan menutup pool DB adalah hal terakhir yang boleh dilewatkan. Inilah
+	// alasan batasPenutup harus ikut dihitung dalam anggaran grace period.
+	tutupCtx, batalTutup := context.WithTimeout(context.Background(), s.batasPenutup)
+	defer batalTutup()
+	for _, p := range s.penutup {
+		if err := p.Tutup(tutupCtx); err != nil {
+			galat = append(galat, fmt.Errorf("tutup %s: %w", p.Nama, err))
+		}
+	}
+
+	if len(galat) > 0 {
+		return errors.Join(galat...)
+	}
+	slog.Info("shutdown: selesai bersih")
 	return nil
 }
 
-// --- Unit Tests ---
+```
 
-// TestShutdown_NormalFlow memverifikasi bahwa shutdown berjalan clean
-// saat tidak ada in-flight request.
-func TestShutdown_NormalFlow(t *testing.T) {
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+```go
+package lifecycle
+
+import (
+	"context"
+	"errors"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"runtime"
+	"testing"
+	"time"
+)
+
+// mulaiServer mengikat listener SEBELUM goroutine dijalankan, sehingga tidak
+// ada `time.Sleep` untuk "menunggu server start" — port sudah pasti terbuka
+// saat fungsi ini kembali.
+//
+// Galat Serve dikirim lewat channel, TIDAK dilaporkan langsung dari goroutine.
+// Memanggil t.Errorf/t.Fatalf dari goroutine yang masih hidup setelah fungsi
+// uji kembali membuat runtime panic ("Log in goroutine after test has
+// completed") dan menjatuhkan SELURUH binary uji — kegagalan yang muncul acak
+// dan hampir mustahil dilacak balik ke berkas asalnya.
+func mulaiServer(t *testing.T, s *Server) (alamat string, serveErr <-chan error) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "localhost:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	errCh := make(chan error, 1)
+	go func() { errCh <- s.httpServer.Serve(ln) }()
+	return ln.Addr().String(), errCh
+}
+
+func TestShutdown_AlurNormal(t *testing.T) {
+	srv := NewServer("localhost:0", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-	})
+	}))
+	srv.jedaTepi = 0
 
-	srv := NewServer("localhost:0", handler)
-	srv.shutdownDelay = 0 // skip K8s delay di test
-
-	// Jalankan server di goroutine
-	go func() {
-		if err := srv.httpServer.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
-			t.Errorf("unexpected server error: %v", err)
-		}
-	}()
-	time.Sleep(10 * time.Millisecond) // tunggu server start
+	_, serveErr := mulaiServer(t, srv)
 
 	if err := srv.shutdown(); err != nil {
-		t.Fatalf("shutdown failed: %v", err)
+		t.Fatalf("shutdown: %v", err)
+	}
+	if err := <-serveErr; !errors.Is(err, http.ErrServerClosed) {
+		t.Fatalf("Serve = %v, mau ErrServerClosed", err)
 	}
 }
 
-// TestShutdown_ReadinessToggle memverifikasi bahwa IsShuttingDown berubah
-// menjadi true segera setelah shutdown dipanggil.
-func TestShutdown_ReadinessToggle(t *testing.T) {
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
-	srv := NewServer("localhost:0", handler)
-	srv.shutdownDelay = 0
+// Properti yang diuji: penanda tidak-siap WAJIB menyala SEBELUM jeda tepi
+// dimulai. Bila urutannya terbalik, load balancer tetap mengirim trafik selama
+// seluruh jeda — dan jeda yang menjadi inti berkas ini kehilangan gunanya.
+func TestReadinessDitandaiSebelumJedaTepi(t *testing.T) {
+	srv := NewServer("localhost:0", http.NotFoundHandler())
+	srv.jedaTepi = 300 * time.Millisecond
 
 	if srv.IsShuttingDown() {
-		t.Fatal("server should not be shutting down initially")
+		t.Fatal("belum boleh ditandai mati sebelum shutdown")
 	}
 
-	go func() { srv.httpServer.ListenAndServe() }()
-	time.Sleep(10 * time.Millisecond)
+	_, serveErr := mulaiServer(t, srv)
+	shutdownErr := make(chan error, 1)
+	go func() { shutdownErr <- srv.shutdown() }()
 
-	// Jalankan shutdown di goroutine, cek flag segera setelah
-	errCh := make(chan error, 1)
-	go func() { errCh <- srv.shutdown() }()
-
-	// Beri waktu shutdown() untuk set flag
-	time.Sleep(5 * time.Millisecond)
-	if !srv.IsShuttingDown() {
-		t.Error("server should be marked as shutting down")
+	// Tenggat sengaja di DALAM jeda tepi: kalau penanda baru menyala setelah
+	// jeda selesai, uji ini gagal.
+	tenggat := time.After(200 * time.Millisecond)
+	for !srv.IsShuttingDown() {
+		select {
+		case <-tenggat:
+			t.Fatal("penanda tidak-siap belum menyala saat jeda tepi masih berjalan")
+		default:
+			runtime.Gosched()
+		}
 	}
 
-	if err := <-errCh; err != nil {
-		t.Fatalf("shutdown error: %v", err)
+	if err := <-shutdownErr; err != nil {
+		t.Fatalf("shutdown: %v", err)
 	}
+	<-serveErr
 }
 
-// TestShutdown_BackgroundTaskWait memverifikasi bahwa shutdown menunggu
-// background task selesai sebelum exit.
-func TestShutdown_BackgroundTaskWait(t *testing.T) {
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
-	srv := NewServer("localhost:0", handler)
-	srv.shutdownDelay = 0
+func TestShutdown_MenungguTugasLatar(t *testing.T) {
+	srv := NewServer("localhost:0", http.NotFoundHandler())
+	srv.jedaTepi = 0
 
-	// Register background task yang selesai setelah 50ms
 	srv.AddBackgroundTask()
-	taskDone := make(chan struct{})
+	tugasSelesai := make(chan struct{})
 	go func() {
 		defer srv.DoneBackgroundTask()
 		time.Sleep(50 * time.Millisecond)
-		close(taskDone)
+		close(tugasSelesai)
 	}()
 
-	go func() { srv.httpServer.ListenAndServe() }()
-	time.Sleep(10 * time.Millisecond)
+	_, serveErr := mulaiServer(t, srv)
 
-	start := time.Now()
 	if err := srv.shutdown(); err != nil {
-		t.Fatalf("shutdown error: %v", err)
-	}
-
-	// Shutdown harus menunggu minimal 50ms untuk task selesai
-	elapsed := time.Since(start)
-	if elapsed < 40*time.Millisecond {
-		t.Errorf("shutdown did not wait for background task: elapsed=%s", elapsed)
+		t.Fatalf("shutdown: %v", err)
 	}
 	select {
-	case <-taskDone:
-		// background task selesai — expected
+	case <-tugasSelesai:
 	default:
-		t.Error("background task did not complete before shutdown returned")
+		t.Error("shutdown kembali sebelum tugas latar selesai")
 	}
+	<-serveErr
 }
 
-// TestShutdown_InFlightRequests memverifikasi bahwa request yang sedang
-// berjalan diselesaikan sebelum server berhenti.
-func TestShutdown_InFlightRequests(t *testing.T) {
-	requestHandled := make(chan struct{})
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Simulasi request yang butuh waktu lama
-		time.Sleep(100 * time.Millisecond)
-		w.WriteHeader(http.StatusOK)
-		close(requestHandled)
+// Membuktikan urutan penutupan sumber daya dijalankan dari luar ke dalam,
+// dan — yang lebih penting — TETAP dijalankan meski drain HTTP gagal.
+func TestPenutupBerjalanMeskiDrainGagal(t *testing.T) {
+	blokir := make(chan struct{})
+	masuk := make(chan struct{})
+	srv := NewServer("localhost:0", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(masuk)
+		<-blokir // handler sengaja tidak pernah selesai dalam anggaran drain
+	}))
+	srv.jedaTepi = 0
+	srv.batasDrain = 100 * time.Millisecond
+
+	var urutan []string
+	srv.DaftarkanPenutup("konsumer", func(context.Context) error {
+		urutan = append(urutan, "konsumer")
+		return nil
+	})
+	srv.DaftarkanPenutup("pool-db", func(context.Context) error {
+		urutan = append(urutan, "pool-db")
+		return nil
 	})
 
-	// Gunakan httptest.Server untuk mendapat real port
-	ts := httptest.NewServer(handler)
+	alamat, serveErr := mulaiServer(t, srv)
+
+	go func() { _, _ = http.Get("http://" + alamat) }()
+	<-masuk // handler yang memblokir sudah benar-benar berjalan
+
+	err := srv.shutdown()
+	close(blokir)
+
+	// Drain WAJIB melaporkan galat, karena handler tidak akan pernah selesai
+	// di dalam batasDrain 100ms.
+	if err == nil {
+		t.Fatal("drain seharusnya gagal karena handler memblokir")
+	}
+	// Tetapi urutan penutupan HARUS tetap berjalan lengkap. Versi lama
+	// berkas ini `return` begitu drain gagal, sehingga pool DB TIDAK PERNAH
+	// ditutup persis pada jalur yang paling membutuhkannya.
+	if len(urutan) != 2 || urutan[0] != "konsumer" || urutan[1] != "pool-db" {
+		t.Fatalf("urutan penutup = %v, mau [konsumer pool-db]", urutan)
+	}
+	<-serveErr
+}
+
+func TestShutdown_PermintaanBerjalanDiselesaikan(t *testing.T) {
+	masuk := make(chan struct{})
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(masuk) // deterministik: handler benar-benar sudah berjalan
+		time.Sleep(100 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("selesai"))
+	}))
 	defer ts.Close()
 
-	// Kirim request (tidak tunggu)
+	type hasil struct {
+		kode int
+		body string
+		err  error
+	}
+	hasilCh := make(chan hasil, 1)
 	go func() {
-		http.Get(ts.URL + "/slow")
+		resp, err := ts.Client().Get(ts.URL + "/lambat")
+		if err != nil {
+			hasilCh <- hasil{err: err}
+			return
+		}
+		defer resp.Body.Close()
+		b, err := io.ReadAll(resp.Body)
+		hasilCh <- hasil{kode: resp.StatusCode, body: string(b), err: err}
 	}()
-	time.Sleep(10 * time.Millisecond) // pastikan request sudah mulai
 
-	// Shutdown server — harus menunggu request selesai
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	<-masuk // menggantikan time.Sleep(10ms) yang menebak-nebak
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-
-	if err := ts.Config.Shutdown(shutdownCtx); err != nil {
-		t.Fatalf("shutdown error: %v", err)
+	if err := ts.Config.Shutdown(ctx); err != nil {
+		t.Fatalf("Shutdown: %v", err)
 	}
 
-	select {
-	case <-requestHandled:
-		// request selesai sebelum shutdown — correct
-	default:
-		t.Error("in-flight request was not completed before shutdown")
+	// Yang diuji bukan "handler sempat selesai", melainkan KLIEN benar-benar
+	// menerima responsnya. Shutdown yang menjatuhkan respons setelah handler
+	// kembali tetap lolos versi lama uji ini.
+	h := <-hasilCh
+	if h.err != nil {
+		t.Fatalf("klien: %v", h.err)
+	}
+	if h.kode != http.StatusOK || h.body != "selesai" {
+		t.Fatalf("klien menerima %d %q, mau 200 %q", h.kode, h.body, "selesai")
 	}
 }
 ```
@@ -394,28 +521,66 @@ case <-ctx.Done():
 ```go
 // BAD: Langsung shutdown begitu SIGTERM diterima
 <-sigChan
-srv.Shutdown(ctx) // Traffic K8s masih masuk 1-3 detik! → HTTP 502
+srv.Shutdown(ctx) // endpoint belum lepas dari Service → HTTP 502
 
-// GOOD: Delay 1-2 detik untuk tunggu iptables K8s sinkron
+// GOOD: tandai tidak siap, beri jeda, baru tutup listener
 <-sigChan
-s.isShuttingDown.Store(true) // readiness probe → 503 segera
-time.Sleep(2 * time.Second)  // tunggu iptables
+s.sedangMati.Store(true)    // readiness probe → 503 segera
+time.Sleep(5 * time.Second) // tunggu endpoint dilepas
 srv.Shutdown(ctx)
 ```
 
-**Kenapa berbahaya:** Kubelet mengirim SIGTERM ke Pod bersamaan dengan menginstruksikan kube-proxy untuk update iptables rules. Update iptables membutuhkan 1-3 detik. Dalam jeda itu, traffic masih dikirim ke Pod yang sudah mulai shutdown → HTTP 502 bagi user. Delay 2 detik menghilangkan race condition ini.
+**Kenapa berbahaya:** kubelet mengirim SIGTERM **bersamaan** dengan endpoint controller melepas Pod dari `Endpoints`/`EndpointSlice`. Keduanya asinkron dan tidak ada jaminan mana lebih dulu; pelepasan itu sendiri masih harus menyebar ke setiap kube-proxy dan setiap ingress controller di klaster. Selama penyebaran itu, trafik baru terus datang ke Pod yang listener-nya sudah tertutup → `502` bagi pengguna.
+
+**Yang lebih sering luput: probe kesiapan Anda mungkin lebih lambat dari seluruh grace period.**
+
+```yaml
+# Bagian Kubernetes yang WAJIB cocok dengan angka di kode §2.
+apiVersion: apps/v1
+kind: Deployment
+spec:
+  template:
+    spec:
+      # Anggaran total. SELURUH urutan shutdown harus muat di sini.
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: api
+          lifecycle:
+            preStop:
+              exec:
+                # Alternatif yang lebih rapi dari jeda di dalam aplikasi:
+                # preStop berjalan SEBELUM SIGTERM dikirim, jadi aplikasi tidak
+                # perlu tahu apa-apa soal jeda.
+                #
+                # JEBAKAN: durasi preStop DIPOTONG dari terminationGracePeriod
+                # yang sama — 5 detik di sini menyisakan 25 detik, bukan 30.
+                # Kalau memakai ini, set jedaTepi=0 di aplikasi agar tidak
+                # terhitung dua kali.
+                command: ["sleep", "5"]
+          readinessProbe:
+            httpGet: { path: /readyz, port: 8080 }
+            periodSeconds: 2
+            # failureThreshold × periodSeconds = berapa lama sampai endpoint
+            # benar-benar dilepas. Default 3 × 10 = 30 detik — LEBIH LAMA dari
+            # seluruh grace period, sehingga Pod mati sebelum sempat ditandai
+            # tidak siap dan jeda di aplikasi jadi sia-sia.
+            failureThreshold: 2   # ~4 detik
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            periodSeconds: 10
+```
 
 ---
 
 ## 4. Edge Cases & Defensive Programming
 
-1. **Keep-Alive Connections Menahan Shutdown:** Client dengan persistent Keep-Alive connection (misalnya mobile SDK) bisa menahan `srv.Shutdown()` terus menunggu. Solusi: set `IdleTimeout` yang ketat di server config (misal 120s) dan pastikan `ReadTimeout`/`WriteTimeout` ada. Shutdown akan menutup idle Keep-Alive connections segera, hanya menunggu yang aktif saja.
+1. **Apa yang benar-benar menahan `Shutdown()` — dan apa yang tidak:** koneksi Keep-Alive yang **menganggur** TIDAK menahan shutdown. `Shutdown` menutupnya seketika, jadi `IdleTimeout` sama sekali tidak memengaruhi durasi shutdown; menyetelnya "lebih ketat" sebagai obat adalah salah sasaran. Yang benar-benar menahan hanya tiga hal: **(a)** handler yang masih berjalan, **(b)** koneksi yang sudah mengirim sebagian request dan dihitung aktif — inilah alasan `ReadTimeout` wajib ada, karena satu klien lambat bisa menahan drain sampai anggaran habis, dan **(c)** koneksi yang di-hijack (lihat butir 2). Batas atas sesungguhnya untuk satu request adalah `WriteTimeout`, bukan `IdleTimeout`.
 
 2. **WebSocket & Long-Polling Tidak Di-drain oleh `Shutdown()`:** `http.Server.Shutdown()` hanya menunggu standar HTTP requests. WebSocket connections yang sudah di-upgrade tidak dihitung. Solusi: track WebSocket connections manual dengan sync.Map, kirim close frame ke semua connection saat SIGTERM, tunggu semua close via WaitGroup.
 
 3. **`signal.Notify` Buffer Wajib ≥1:** `make(chan os.Signal, 0)` adalah unbuffered channel. Jika goroutine penerima belum siap tepat saat signal diterima, signal hilang diam-diam. Selalu gunakan buffered channel `make(chan os.Signal, 1)`.
 
-4. **Multiple SIGTERM:** Kubernetes kadang mengirim SIGTERM lebih dari sekali. Pastikan handler signal idempotent — gunakan `sync.Once` untuk memastikan shutdown sequence hanya berjalan satu kali meski signal diterima berkali-kali.
+4. **Sinyal kedua butuh DUA hal, bukan satu:** `sync.Once` membuat urutan shutdown tidak berjalan dua kali — itu perlu, tapi tidak cukup. Begitu `signal.Notify` dipasang, perilaku default sinyal **diambil alih Go**: `Ctrl-C` kedua tidak lagi mematikan proses, ia hanya masuk ke channel yang tidak ada yang membacanya. Operator yang sudah tidak mau menunggu drain 20 detik menekan `Ctrl-C` berkali-kali dan tidak terjadi apa-apa. Karena itu `Run()` di §2 memasang **katup darurat**: satu goroutine yang membaca sinyal berikutnya dan langsung `os.Exit(1)`. Idempotensi menjaga kebenaran; katup darurat menjaga kewarasan orang yang sedang menangani insiden.
 
 5. **Metrics Flush Sebelum Exit:** Exporter Prometheus/OpenTelemetry biasanya punya buffer internal. Saat shutdown, panggil `shutdown()` pada metrics provider SETELAH HTTP server selesai drain tapi SEBELUM `os.Exit()`. Tanpa ini, metrics dari menit terakhir sebelum deployment hilang — mengganggu alerting.
 

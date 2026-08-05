@@ -13,9 +13,10 @@ Jawabannya adalah **W3C Baggage** — propagasi metadata cross-service via HTTP 
 ```
 Request Flow:
                                                           
-  API Gateway                                             
-  │  ctx: TraceID=AAA                                     
-  │  Inject baggage: tenant_id=T1, user_tier=gold        
+  API Gateway  ── BUANG header `baggage` kiriman klien ──┐
+  │  Autentikasi sesi  → TenantID=T1, Tier=gold          │  (Anti-Pattern 4)
+  │  ctx: TraceID=AAA                                    │
+  │  Inject baggage DARI SESI: tenant_id=T1, user_tier=gold
   │  Inject traceparent: 00-AAA-BBB-01                   
   │                                                       
   ├──► Order Service (HTTP Header: baggage: tenant_id=T1...)
@@ -23,7 +24,7 @@ Request Flow:
   │    │  Baggage: tenant_id=T1          ← diteruskan ke hilir
   │    │                                                  
   │    └──► Payment Service              
-  │         │  Baca baggage: user_tier=gold → apply diskon 10%
+  │         │  Baca baggage: user_tier=gold → diskon 10%
   │         │  Tanpa call balik ke API Gateway!           
   │         └──► Tracing Backend (Jaeger)                 
   │              Semua span terhubung via TraceID=AAA     
@@ -32,11 +33,20 @@ Span Attributes → hanya visible di span itu sendiri
 Baggage        → propagasi ke SEMUA downstream services  
 ```
 
+> Perhatikan langkah pertama. Payment Service boleh memercayai `user_tier` **hanya karena** gateway sudah membuang kiriman klien dan menuliskannya ulang dari sesi terautentikasi. Hilangkan langkah itu, dan diagram yang sama berubah menjadi eskalasi tier satu baris `curl`.
+
 **Aturan main Baggage:**
-- Max size: ~8KB total (dibatasi HTTP header limit server — nginx default 4KB)
-- Value harus URL-encoded jika mengandung special chars
-- Immutable per request — layanan hilir TIDAK boleh mengubah nilai
-- Tidak dienkripsi — JANGAN simpan PII atau credentials
+
+| Batas | Angka | Ditegakkan oleh |
+| :--- | :--- | :--- |
+| Jumlah anggota | 180 | Spesifikasi W3C; `baggage.New()` menolak bila lewat |
+| Panjang satu anggota | 4096 byte | Spesifikasi W3C |
+| Total seluruh anggota | 8192 byte | Spesifikasi W3C |
+| Panjang satu header di nginx | `large_client_header_buffers` — default `4 8k`, jadi **8 KB per header**, bukan 4 KB | nginx, dengan `431` |
+
+- Value harus percent-encoded bila mengandung karakter di luar himpunan yang diizinkan.
+- **Nilainya sepenuhnya dikendalikan pengirim.** Tidak ada tanda tangan, tidak ada verifikasi, dan tidak ada yang mencegah hop mana pun mengubahnya. Konvensi "hilir tidak mengubah nilai" hanyalah konvensi — ia tidak ditegakkan siapa pun. Lihat Anti-Pattern 4.
+- Tidak dienkripsi — JANGAN simpan PII atau credential.
 
 ---
 
@@ -49,10 +59,8 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
-	"strings"
-	"testing"
 
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/baggage"
 	"go.opentelemetry.io/otel/propagation"
 )
@@ -63,177 +71,214 @@ type TenantInfo struct {
 	Tier string
 }
 
+// SetupPropagator dipanggil SEKALI di main, SEBELUM server start.
+//
+// Seluruh kode di bawah membaca propagator lewat otel.GetTextMapPropagator(),
+// bukan membangun sendiri, supaya hanya ada SATU tempat yang menentukan format
+// propagasi. Membangun propagator lokal di tiap middleware terlihat lebih
+// mandiri, tapi menciptakan dua sumber kebenaran yang bisa menyimpang diam-diam.
+func SetupPropagator() {
+	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
+		propagation.TraceContext{},
+		propagation.Baggage{},
+	))
+}
+
 // InjectTenantBaggage menyisipkan tenant info ke dalam context.
-// Dipanggil di API Gateway / entry point service.
+//
+// Dipanggil di edge service SETELAH autentikasi selesai. Nilainya WAJIB berasal
+// dari sesi yang sudah diverifikasi — bukan dari header masuk. Lihat Anti-Pattern 4.
 func InjectTenantBaggage(ctx context.Context, info TenantInfo) (context.Context, error) {
 	if info.ID == "" {
-		return ctx, fmt.Errorf("tenant ID cannot be empty")
+		return ctx, fmt.Errorf("tenant ID tidak boleh kosong")
 	}
 
 	mID, err := baggage.NewMember("tenant_id", info.ID)
 	if err != nil {
-		return ctx, fmt.Errorf("invalid tenant_id baggage member: %w", err)
+		return ctx, fmt.Errorf("anggota baggage tenant_id tidak valid: %w", err)
 	}
-
 	mTier, err := baggage.NewMember("user_tier", info.Tier)
 	if err != nil {
-		return ctx, fmt.Errorf("invalid user_tier baggage member: %w", err)
+		return ctx, fmt.Errorf("anggota baggage user_tier tidak valid: %w", err)
 	}
 
+	// baggage.New menegakkan batas W3C (180 anggota, 4096 byte per anggota,
+	// 8192 byte total). Galatnya WAJIB dicek: mengabaikannya membuat baggage
+	// diam-diam kosong alih-alih gagal keras.
 	b, err := baggage.New(mID, mTier)
 	if err != nil {
-		return ctx, fmt.Errorf("create baggage: %w", err)
+		return ctx, fmt.Errorf("bangun baggage: %w", err)
 	}
-
 	return baggage.ContextWithBaggage(ctx, b), nil
 }
 
-// ExtractTenantInfo mengekstrak tenant info dari context baggage.
-// Dipanggil di downstream services.
-func ExtractTenantInfo(ctx context.Context) TenantInfo {
+// ExtractTenantInfo mengembalikan ok=false bila tenant_id tidak ada.
+//
+// Bentuk (TenantInfo, bool) disengaja. Versi yang mengembalikan TenantInfo{}
+// begitu saja mengubah "propagasi putus di satu hop" menjadi tenant ID KOSONG
+// yang mengalir diam-diam ke query — dan di sistem multi-tenant, filter tenant
+// yang kosong biasanya berarti TANPA filter sama sekali.
+func ExtractTenantInfo(ctx context.Context) (TenantInfo, bool) {
 	b := baggage.FromContext(ctx)
-	return TenantInfo{
-		ID:   b.Member("tenant_id").Value(),
-		Tier: b.Member("user_tier").Value(),
+	id := b.Member("tenant_id").Value()
+	if id == "" {
+		return TenantInfo{}, false
 	}
+	return TenantInfo{ID: id, Tier: b.Member("user_tier").Value()}, true
 }
 
-// BaggagePropagatorMiddleware mengekstrak W3C baggage dari HTTP header
-// ke dalam request context menggunakan propagator global OTel.
-// Setup: otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
-//   propagation.TraceContext{}, propagation.Baggage{}))
-func BaggagePropagatorMiddleware(next http.Handler) http.Handler {
-	propagator := propagation.NewCompositeTextMapPropagator(
-		propagation.TraceContext{},
-		propagation.Baggage{},
-	)
-
+// PropagatorMiddleware mengekstrak traceparent + baggage dari header masuk.
+//
+// tepiPublik WAJIB true di layanan mana pun yang bisa dijangkau dari internet,
+// dan hanya boleh false di hop internal yang SELURUH pemanggilnya tepercaya.
+func PropagatorMiddleware(tepiPublik bool, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Extract baggage dari HTTP header ke context
-		ctx := propagator.Extract(r.Context(), propagation.HeaderCarrier(r.Header))
+		if tepiPublik {
+			// Buang apa pun yang dikirim klien. Baggage yang sah dibuat ULANG
+			// dari identitas yang sudah diautentikasi, bukan dari header.
+			r.Header.Del("baggage")
+		}
+		ctx := otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
-// InjectBaggageToOutgoing menyisipkan baggage dari context ke outgoing HTTP request.
-// Wajib dipanggil saat membuat request ke service lain agar baggage tidak hilang.
+// InjectBaggageToOutgoing menyisipkan traceparent + baggage ke request keluar.
+// Wajib dipanggil saat memanggil layanan lain, atau rantai propagasi putus.
 func InjectBaggageToOutgoing(ctx context.Context, req *http.Request) {
-	propagator := propagation.NewCompositeTextMapPropagator(
-		propagation.TraceContext{},
-		propagation.Baggage{},
-	)
-	propagator.Inject(ctx, propagation.HeaderCarrier(req.Header))
+	otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(req.Header))
 }
 
-// DiscountService contoh downstream service yang menggunakan baggage.
-func DiscountService(ctx context.Context, basePrice float64) float64 {
-	tenant := ExtractTenantInfo(ctx)
-	switch tenant.Tier {
+// HargaSetelahDiskon memakai satuan minor (sen) bertipe int64, bukan float64.
+//
+// tier datang sebagai ARGUMEN, bukan dibaca dari baggage di dalam fungsi ini.
+// Pemanggil yang bertanggung jawab membuktikan tier itu tepercaya — memindahkan
+// pembacaan baggage ke dalam fungsi ini menyembunyikan asal-usul nilainya dan
+// membuat eskalasi tier tidak terlihat saat code review.
+func HargaSetelahDiskon(hargaSen int64, tier string) int64 {
+	var potonganPersen int64
+	switch tier {
 	case "gold":
-		return basePrice * 0.90 // 10% diskon
+		potonganPersen = 10
 	case "platinum":
-		return basePrice * 0.80 // 20% diskon
+		potonganPersen = 20
 	default:
-		return basePrice
+		return hargaSen
+	}
+	// Pembulatan ke bawah yang eksplisit dan deterministik. float64 untuk uang
+	// menghasilkan selisih yang tidak bisa direkonsiliasi dengan pembukuan.
+	return hargaSen - (hargaSen*potonganPersen)/100
+}
+```
+
+```go
+package tracing
+
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
+
+func TestInjectTenantBaggage_Valid(t *testing.T) {
+	ctx, err := InjectTenantBaggage(context.Background(), TenantInfo{ID: "TENANT-999", Tier: "platinum"})
+	if err != nil {
+		t.Fatalf("InjectTenantBaggage: %v", err)
+	}
+	info, ok := ExtractTenantInfo(ctx)
+	if !ok {
+		t.Fatal("ok = false, mau true")
+	}
+	if info.ID != "TENANT-999" || info.Tier != "platinum" {
+		t.Errorf("info = %+v, mau {TENANT-999 platinum}", info)
 	}
 }
 
-// --- Unit Tests ---
+func TestInjectTenantBaggage_IDKosong(t *testing.T) {
+	if _, err := InjectTenantBaggage(context.Background(), TenantInfo{Tier: "gold"}); err == nil {
+		t.Error("mau galat untuk tenant ID kosong, dapat nil")
+	}
+}
 
-func TestInjectTenantBaggage_Valid(t *testing.T) {
-	ctx, err := InjectTenantBaggage(context.Background(), TenantInfo{
-		ID:   "TENANT-999",
-		Tier: "platinum",
-	})
+func TestExtractTenantInfo_ContextKosong(t *testing.T) {
+	if _, ok := ExtractTenantInfo(context.Background()); ok {
+		t.Error("ok = true untuk context tanpa baggage, mau false")
+	}
+}
+
+// Uji terpenting di berkas ini. Tanpa ia, satu baris curl sudah cukup untuk
+// menaikkan tier sendiri — dan tidak ada uji lain yang akan memberitahu Anda.
+func TestTepiPublikMembuangBaggageKiriman(t *testing.T) {
+	SetupPropagator()
+
+	var terlihat bool
+	h := PropagatorMiddleware(true, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, terlihat = ExtractTenantInfo(r.Context())
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("baggage", "tenant_id=KORBAN,user_tier=platinum")
+	h.ServeHTTP(httptest.NewRecorder(), req)
+
+	if terlihat {
+		t.Fatal("baggage kiriman klien lolos di tepi publik — eskalasi tier terbuka lebar")
+	}
+}
+
+func TestPropagasiInternalE2E(t *testing.T) {
+	SetupPropagator()
+
+	ctx, err := InjectTenantBaggage(context.Background(), TenantInfo{ID: "T-ACME", Tier: "gold"})
 	if err != nil {
 		t.Fatalf("InjectTenantBaggage: %v", err)
 	}
 
-	info := ExtractTenantInfo(ctx)
-	if info.ID != "TENANT-999" {
-		t.Errorf("tenant_id = %q, want TENANT-999", info.ID)
+	outReq, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://hilir.internal/", nil)
+	if err != nil {
+		t.Fatalf("NewRequestWithContext: %v", err)
 	}
-	if info.Tier != "platinum" {
-		t.Errorf("user_tier = %q, want platinum", info.Tier)
-	}
-}
+	InjectBaggageToOutgoing(ctx, outReq)
 
-func TestInjectTenantBaggage_EmptyID(t *testing.T) {
-	_, err := InjectTenantBaggage(context.Background(), TenantInfo{ID: "", Tier: "gold"})
-	if err == nil {
-		t.Error("expected error for empty tenant ID, got nil")
-	}
-}
-
-func TestExtractTenantInfo_EmptyContext(t *testing.T) {
-	// Context tanpa baggage harus return TenantInfo{} tanpa panic
-	info := ExtractTenantInfo(context.Background())
-	if info.ID != "" || info.Tier != "" {
-		t.Errorf("expected empty TenantInfo, got %+v", info)
-	}
-}
-
-func TestBaggagePropagation_E2E(t *testing.T) {
-	// Simulasi: inject di upstream, ekstrak di downstream via HTTP
-	propagator := propagation.NewCompositeTextMapPropagator(
-		propagation.TraceContext{},
-		propagation.Baggage{},
-	)
-
-	// Inject ke context dan kemudian ke header HTTP
-	ctx, _ := InjectTenantBaggage(context.Background(), TenantInfo{
-		ID: "T-ACME", Tier: "gold",
-	})
-	outReq, _ := http.NewRequest("GET", "/", nil)
-	propagator.Inject(ctx, propagation.HeaderCarrier(outReq.Header))
-
-	// Verifikasi header baggage ter-set
-	baggageHeader := outReq.Header.Get("baggage")
-	if !strings.Contains(baggageHeader, "tenant_id=T-ACME") {
-		t.Errorf("baggage header missing tenant_id: %q", baggageHeader)
+	if h := outReq.Header.Get("baggage"); !strings.Contains(h, "tenant_id=T-ACME") {
+		t.Fatalf("header baggage tanpa tenant_id: %q", h)
 	}
 
-	// Downstream: ekstrak dari header
-	var extractedTenant TenantInfo
-	handlerCalled := false
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		handlerCalled = true
-		extractedTenant = ExtractTenantInfo(r.Context())
-		w.WriteHeader(http.StatusOK)
-	})
-	wrapped := BaggagePropagatorMiddleware(handler)
+	var diterima TenantInfo
+	var ok bool
+	h := PropagatorMiddleware(false, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		diterima, ok = ExtractTenantInfo(r.Context())
+	}))
 
-	rec := httptest.NewRecorder()
-	wrapped.ServeHTTP(rec, outReq)
+	inReq := httptest.NewRequest(http.MethodGet, "/", nil)
+	inReq.Header = outReq.Header.Clone()
+	h.ServeHTTP(httptest.NewRecorder(), inReq)
 
-	if !handlerCalled {
-		t.Fatal("handler not called")
-	}
-	if extractedTenant.ID != "T-ACME" {
-		t.Errorf("downstream got tenant_id=%q, want T-ACME", extractedTenant.ID)
-	}
-	if extractedTenant.Tier != "gold" {
-		t.Errorf("downstream got user_tier=%q, want gold", extractedTenant.Tier)
+	if !ok || diterima.ID != "T-ACME" || diterima.Tier != "gold" {
+		t.Fatalf("hilir menerima %+v (ok=%v), mau {T-ACME gold}", diterima, ok)
 	}
 }
 
-func TestDiscountService_TierLogic(t *testing.T) {
+func TestHargaSetelahDiskon(t *testing.T) {
 	tests := []struct {
-		tier      string
-		basePrice float64
-		want      float64
+		tier string
+		sen  int64
+		mau  int64
 	}{
-		{"gold", 100.0, 90.0},
-		{"platinum", 100.0, 80.0},
-		{"standard", 100.0, 100.0},
-		{"", 100.0, 100.0}, // no tier → no discount
+		{"gold", 10000, 9000},
+		{"platinum", 10000, 8000},
+		{"standard", 10000, 10000},
+		{"", 10000, 10000},
+		// Nilai yang TIDAK habis dibagi. Dengan float64, 1015 × 0.90 menghasilkan
+		// 913.4999999999999 dan hasil akhirnya bergantung cara pembulatan.
+		// Dengan int64 hasilnya selalu 914. Uji lama memakai 100.0 saja —
+		// satu-satunya nilai yang membuat galat float64 tidak pernah terlihat.
+		{"gold", 1015, 914},
 	}
 	for _, tt := range tests {
-		ctx, _ := InjectTenantBaggage(context.Background(), TenantInfo{ID: "T1", Tier: tt.tier})
-		got := DiscountService(ctx, tt.basePrice)
-		if got != tt.want {
-			t.Errorf("DiscountService(tier=%q, price=%.1f) = %.1f, want %.1f",
-				tt.tier, tt.basePrice, got, tt.want)
+		if got := HargaSetelahDiskon(tt.sen, tt.tier); got != tt.mau {
+			t.Errorf("HargaSetelahDiskon(%d, %q) = %d, mau %d", tt.sen, tt.tier, got, tt.mau)
 		}
 	}
 }
@@ -249,14 +294,15 @@ func TestDiscountService_TierLogic(t *testing.T) {
 // BAD: Menyimpan JSON profile user (2KB+) di baggage
 profile, _ := json.Marshal(user) // 2KB JSON
 baggage.NewMember("user_profile", string(profile))
-// → HTTP 431 Request Header Fields Too Large di NGINX (default limit 4KB)
-// → Semua downstream service reject request
+// → melewati batas W3C per-anggota bila >4096 byte, dan total >8192 byte
+//   ditolak baggage.New()
+// → di sisi jaringan: HTTP 431 di gateway, request tidak pernah sampai handler
 
 // GOOD: Hanya ID ringan (5-30 bytes)
 baggage.NewMember("user_id", "usr-81a") // downstream fetch dari DB/cache
 ```
 
-**Kenapa berbahaya:** HTTP header size limit nginx default 4KB, Tomcat 8KB. Baggage besar menyebabkan 431 error di semua hop — request tidak pernah sampai ke handler. Satu baggage member yang terlalu besar merusak seluruh chain propagation.
+**Kenapa berbahaya:** ada **dua** batas berbeda, dan keduanya sering tertukar. Batas **protokol** datang dari spesifikasi W3C (4096 byte per anggota, 8192 byte total) dan ditegakkan `baggage.New()` sebagai galat Go. Batas **infrastruktur** datang dari gateway: nginx memakai `large_client_header_buffers` yang default-nya `4 8k` — artinya **8 KB per header**, bukan 4 KB; Tomcat `maxHttpHeaderSize` default 8192 untuk seluruh header. Melewati batas pertama gagal di proses Anda; melewati batas kedua menghasilkan `431` di hop mana pun sepanjang rantai, dan satu member kelebihan ukuran merusak propagasi untuk seluruh request.
 
 ### ❌ Anti-Pattern 2: PII/Secrets di Baggage
 
@@ -267,33 +313,80 @@ baggage.NewMember("jwt_token", user.AccessToken) // leaked ke semua service!
 // Jika service Anda call third-party API (payment processor, analytics)
 // dengan context yang sama, baggage ikut terkirim → data breach
 
-// GOOD: Hanya pass identifier, data sensitif fetch via internal API
-baggage.NewMember("session_id", "sess-abc123") // session data di Redis
+// MASIH BURUK: session ID adalah CREDENTIAL. Siapa pun yang menerimanya
+// bisa menyamar sebagai pengguna itu — termasuk pihak ketiga di ujung rantai.
+baggage.NewMember("session_id", "sess-abc123")
+
+// GOOD: identifier internal yang tidak memberi kuasa apa pun kepada pemegangnya.
+// Layanan hilir tetap harus melakukan otorisasinya sendiri.
+baggage.NewMember("user_id", "usr-81a")
 ```
 
-**Kenapa berbahaya:** Baggage TIDAK dienkripsi di wire. Setiap layanan dalam chain (termasuk third-party SDK yang membuat HTTP call dengan context yang sama) bisa membaca seluruh baggage. PII di baggage = pelanggaran GDPR/PCI-DSS otomatis.
+**Kenapa berbahaya:** Baggage TIDAK dienkripsi di wire. Setiap layanan dalam chain (termasuk SDK pihak ketiga yang membuat HTTP call dengan context yang sama) bisa membaca seluruh baggage. PII di baggage = pelanggaran GDPR/PCI-DSS otomatis.
+
+> Garis pemisahnya bukan "ID versus data", melainkan **apakah nilai itu memberi kuasa kepada pemegangnya**. Session ID, refresh token, dan API key semuanya "hanya ID" — dan ketiganya cukup untuk menyamar sebagai pengguna. Yang aman dibawa adalah pengenal yang tidak berguna tanpa otorisasi terpisah.
 
 ### ❌ Anti-Pattern 3: Lupa Setup `otel.SetTextMapPropagator` Global
 
 ```go
-// BAD: Tidak setup propagator → ExtractBaggageMiddleware tidak mengekstrak apapun
+// BAD: propagator global tidak pernah di-set
 func main() {
     // Lupa panggil otel.SetTextMapPropagator(...)
-    http.Handle("/", BaggagePropagatorMiddleware(handler))
+    http.Handle("/", PropagatorMiddleware(true, handler))
 }
-// baggage.FromContext(ctx) selalu return empty → DiscountService tidak apply diskon
+// otel.GetTextMapPropagator() mengembalikan composite KOSONG — Extract tidak
+// melakukan apa-apa, tidak mengembalikan galat, dan tidak mencatat apa pun.
 
-// GOOD: Setup propagator SEKALI di main/init, SEBELUM server start
+// GOOD: setup SEKALI di main, SEBELUM server start
 func main() {
-    otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
-        propagation.TraceContext{},
-        propagation.Baggage{},
-    ))
-    // ... setup server
+    SetupPropagator()
+    http.Handle("/", PropagatorMiddleware(true, handler))
 }
 ```
 
-**Kenapa berbahaya:** Tanpa propagator global, OTel middleware tidak mengekstrak baggage dari HTTP header ke context. Bug ini sangat sulit di-debug karena tidak ada error — baggage hanya diam-diam kosong di semua downstream service.
+**Kenapa berbahaya:** propagator global bawaan OTel-Go adalah **composite kosong** — bukan nil, bukan panic, melainkan objek yang sah dan tidak melakukan apa-apa. `Extract` mengembalikan context yang sama persis, `Inject` tidak menulis header. Tidak ada galat, tidak ada log. Yang Anda lihat hanyalah baggage yang kosong di semua layanan hilir, tanpa satu pun petunjuk ke penyebabnya.
+
+> Inilah alasan kode di §2 membaca `otel.GetTextMapPropagator()` alih-alih membangun propagator lokal per-middleware. Middleware yang membangun propagatornya sendiri memang kebal terhadap bug ini — tapi ia juga mengabaikan konfigurasi global, sehingga menambah `propagation.B3{}` untuk kompatibilitas dengan sistem lama tidak berpengaruh apa-apa pada middleware itu, dan Anda kehilangan berjam-jam mencari tahu kenapa.
+
+### ❌ Anti-Pattern 4: Memercayai Baggage yang Datang dari Luar
+
+Ini kesalahan paling mahal di berkas ini, dan yang paling sering lolos review karena kodenya terlihat wajar.
+
+```go
+// BAD: tier dibaca dari baggage, di layanan yang bisa dijangkau dari internet
+func HargaFinal(ctx context.Context, hargaSen int64) int64 {
+    tenant, _ := ExtractTenantInfo(ctx)
+    return HargaSetelahDiskon(hargaSen, tenant.Tier)
+}
+```
+
+`baggage` adalah **header HTTP biasa**. Tidak ditandatangani, tidak diverifikasi, sepenuhnya ditulis pengirim. Satu baris cukup untuk memberi diri sendiri diskon 20%:
+
+```bash
+curl -H 'baggage: tenant_id=T1,user_tier=platinum' https://api.contoh.com/checkout
+```
+
+Dan bila `tenant_id` juga diambil dari sana, yang Anda buka bukan lagi soal harga melainkan **akses lintas tenant** — pengirim memilih sendiri tenant mana yang ingin ia baca.
+
+```go
+// GOOD: tepi publik membuang baggage kiriman, lalu membangunnya ULANG dari
+// identitas yang sudah diautentikasi.
+func EdgeHandler(w http.ResponseWriter, r *http.Request) {
+    sesi, err := AutentikasiSesi(r) // sumber kebenaran satu-satunya
+    if err != nil {
+        http.Error(w, "unauthorized", http.StatusUnauthorized)
+        return
+    }
+    ctx, err := InjectTenantBaggage(r.Context(), TenantInfo{ID: sesi.TenantID, Tier: sesi.Tier})
+    if err != nil {
+        http.Error(w, "internal", http.StatusInternalServerError)
+        return
+    }
+    // ... teruskan ctx ke hilir
+}
+```
+
+Pembuangan header itu dilakukan `PropagatorMiddleware(true, …)` di §2. Aturannya sederhana: **baggage boleh dipercaya persis sejauh Anda memercayai pihak yang mengirimnya.** Di dalam mesh tertutup dengan mTLS, itu wajar. Di tepi yang menghadap internet, tidak pernah.
 
 ---
 
@@ -326,10 +419,15 @@ func main() {
 | Header terpotong tanpa galat | konfigurasi proxy | Pemotongan header bersifat senyap di banyak proxy |
 | PII muncul di log pihak ketiga | isi baggage | Data sensitif ikut merambat ke luar |
 | Logika gagal hanya pada jalur tertentu | apakah logika bergantung baggage | Baggage dipakai sebagai transport data wajib |
+| Diskon/tier tidak cocok dengan data pelanggan | apakah tepi membuang `baggage` masuk | Klien menulis sendiri tier-nya (Anti-Pattern 4) |
+| Satu akun membaca data tenant lain | asal `tenant_id` di layanan itu | `tenant_id` diambil dari header, bukan dari sesi |
 
 ```bash
 # Apa yang benar-benar dikirim di header
 curl -sv localhost:8080/api/v1/pesanan 2>&1 | grep -i '^> baggage'
+
+# Uji tepi publik: nilai ini TIDAK boleh muncul di trace atau log hilir mana pun
+curl -s -H 'baggage: tenant_id=UJI-SUNTIK,user_tier=platinum' localhost:8080/api/v1/checkout
 
 # Distribusi ukuran baggage dari log terstruktur
 kubectl logs -l app=api --since=1h | jq -r 'select(.baggage) | .baggage | length' | sort -n | tail -5
