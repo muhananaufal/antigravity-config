@@ -53,3 +53,10 @@ Pelajaran yang sudah dibayar mahal. WAJIB dibaca sebelum task teknis (§3.1 `AGE
 - **Rujukan valid ≠ terjangkau.** Semua rujukan di `SKILL.md` bisa resolve 100% sementara 19% direktori referensi tidak pernah disebut sama sekali — jadi tak punya jalan masuk. Audit yang benar: bandingkan direktori yang ADA di disk vs yang DIRUJUK, bukan sebaliknya.
 - Struktur antar-skill sejenis bisa diam-diam berbeda. `golang`/`nestjs` punya tabel Core References, `rust`/`laravel` hanya punya tabel Niche — 129 berkas jadi mati. Bandingkan kerangka antar-skill, jangan periksa satu per satu terpisah.
 - `nestjs` sempat tidak punya `_protocol/brownfield.md` padahal §2 memerintahkan membacanya. Aturan yang menunjuk berkas WAJIB diverifikasi berkasnya ada di SEMUA skill, bukan cuma di satu contoh.
+
+## Proses (retrofit korpus)
+
+- **Perkiraan cakupan WAJIB diukur, bukan ditaksir.** Saya menyusun "Prioritas 5: retrofit ~30 berkas" tanpa menghitung. Angka nyatanya 198 dari 215. Satu perintah pengukuran di awal akan mengubah seluruh rencana dan ekspektasi user. Ukur dulu, baru janjikan.
+- Retrofit format lintas ratusan berkas jauh lebih aman lewat **skrip idempoten + berkas bundle** daripada Edit satu per satu: bisa dry-run, bisa diulang tanpa efek ganda, dan encoding UTF-8-tanpa-BOM ditangani di satu tempat.
+- Verifikasi setiap batch WAJIB mencakup tiga hal sekaligus: cross-link resolve, nol BOM, dan nol U+FFFD. Yang ketiga sempat memberi alarm palsu — `security_fuzzing_go.md` memang sengaja mencetak karakter pengganti sebagai contoh. **Periksa riwayat git sebelum menyimpulkan kerusakan.**
+- `Get-Content` PS 5.1 menampilkan UTF-8 sebagai mojibake (`Â·`) walau berkasnya benar. Verifikasi encoding WAJIB lewat `[IO.File]::ReadAllBytes` + cek byte, bukan lewat mata di konsol.
