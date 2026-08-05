@@ -1,6 +1,6 @@
 # Prometheus RED Metrics & Instrumentation di Go
 
-> **Berlaku:** Go 1.21+ · `prometheus/client_golang` v1.19+ · **Lihat juga:** `engineering_practice/slo_error_budget.md` · `observability_resilience/opentelemetry_tracing.md` · `observability_resilience/health_check_readiness.md` · `observability_resilience/structured_logging_zerolog.md`
+> **Berlaku:** Go **1.22+** (`r.Pattern` di `net/http` baru ada sejak 1.22; pada 1.21 kode ini tidak kompilasi) · `prometheus/client_golang` v1.19+ · **Lihat juga:** `engineering_practice/slo_error_budget.md` · `observability_resilience/opentelemetry_tracing.md` · `observability_resilience/health_check_readiness.md` · `observability_resilience/structured_logging_zerolog.md`
 
 **RED Method** adalah framework observability standar untuk service HTTP/gRPC: Rate (QPS), Errors (error rate), Duration (latency). Prometheus client Go mengekspos metrics via pull-based model — Prometheus server scrape `/metrics` endpoint setiap 15 detik.
 
@@ -48,33 +48,49 @@ Pull-Based Architecture:
 package metrics
 
 import (
+	"bufio"
+	"fmt"
+	"net"
 	"net/http"
-	"net/http/httptest"
-	"net/url"
 	"strconv"
 	"strings"
-	"testing"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"github.com/prometheus/client_golang/prometheus/testutil"
+	"go.opentelemetry.io/otel/trace"
 )
 
-// Metrics mengenkapsulasi semua Prometheus metrics untuk satu service.
-// Menggunakan registry terpisah (non-global) agar test tidak collision.
+// Metrics mengenkapsulasi seluruh metrik Prometheus untuk satu service.
 type Metrics struct {
-	registry    *prometheus.Registry
 	reqTotal    *prometheus.CounterVec
 	reqDuration *prometheus.HistogramVec
 	reqInFlight prometheus.Gauge
 }
 
-// NewMetrics membuat instance Metrics baru dengan custom registry.
-// Gunakan non-global registry untuk test isolation.
-func NewMetrics(namespace string) *Metrics {
+// NewRegistry membuat registry non-global BESERTA kolektor bawaan.
+//
+// Inilah bagian yang paling sering hilang saat berpindah dari
+// DefaultRegisterer ke registry sendiri: registry kosong TIDAK memuat
+// go_goroutines, go_memstats_*, maupun process_resident_memory_bytes.
+// Anjuran "pakai registry sendiri" itu benar, tetapi tanpa dua baris di bawah
+// Anda kehilangan persis metrik yang dibutuhkan untuk mendiagnosis kebocoran
+// goroutine dan memori — dan biasanya baru menyadarinya saat sedang
+// menanganinya.
+func NewRegistry() *prometheus.Registry {
 	reg := prometheus.NewRegistry()
+	reg.MustRegister(
+		collectors.NewGoCollector(),
+		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
+	)
+	return reg
+}
 
+// NewMetrics menerima Registerer sebagai parameter — persis bentuk yang
+// diresepkan Anti-Pattern 3. Produksi memakai NewRegistry(); uji memakai
+// prometheus.NewRegistry() yang segar per kasus uji.
+func NewMetrics(namespace string, reg prometheus.Registerer) *Metrics {
 	reqTotal := prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: namespace,
@@ -89,8 +105,16 @@ func NewMetrics(namespace string) *Metrics {
 			Namespace: namespace,
 			Name:      "http_request_duration_seconds",
 			Help:      "HTTP request duration in seconds.",
-			// Buckets disesuaikan untuk fintech API (target p99 < 200ms)
-			Buckets: []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.2, 0.5, 1, 2},
+			// Bucket WAJIB mencakup rentang latensi NYATA, TERMASUK ekornya.
+			//
+			// Deretan yang berhenti di 2 detik terlihat masuk akal untuk API
+			// dengan target p99 < 200ms — dan justru itu jebakannya. Bila lebih
+			// dari 1% permintaan melampaui bucket berhingga tertinggi,
+			// histogram_quantile mengembalikan batas atas bucket tersebut: p99
+			// Anda TERKUNCI di angka 2 dan tidak bergerak lagi, seburuk apa pun
+			// keadaannya. Grafiknya tetap tampak wajar. Batas atas harus
+			// melampaui timeout klien, bukan target SLO.
+			Buckets: []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10},
 		},
 		[]string{"method", "path"},
 	)
@@ -103,175 +127,252 @@ func NewMetrics(namespace string) *Metrics {
 
 	reg.MustRegister(reqTotal, reqDuration, reqInFlight)
 
-	return &Metrics{
-		registry:    reg,
-		reqTotal:    reqTotal,
-		reqDuration: reqDuration,
-		reqInFlight: reqInFlight,
-	}
+	return &Metrics{reqTotal: reqTotal, reqDuration: reqDuration, reqInFlight: reqInFlight}
 }
 
-// Handler mengembalikan HTTP handler untuk /metrics endpoint.
-func (m *Metrics) Handler() http.Handler {
-	return promhttp.HandlerFor(m.registry, promhttp.HandlerOpts{
-		EnableOpenMetrics: true, // support OpenMetrics format
+// Handler menyajikan endpoint /metrics.
+func Handler(g prometheus.Gatherer) http.Handler {
+	return promhttp.HandlerFor(g, promhttp.HandlerOpts{
+		EnableOpenMetrics: true, // WAJIB agar exemplar ikut terekspos
 	})
 }
 
-// REDMiddleware wraps handler dengan RED metrics instrumentation.
+// REDMiddleware membungkus handler dengan instrumentasi RED.
 func (m *Metrics) REDMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
-
-		// Track in-flight requests
+		mulai := time.Now()
 		m.reqInFlight.Inc()
-		defer m.reqInFlight.Dec()
 
-		// Capture status code
-		rw := &captureWriter{ResponseWriter: w, statusCode: http.StatusOK}
-		next.ServeHTTP(rw, r)
+		pw := &penulisTerbungkus{ResponseWriter: w, kode: http.StatusOK}
 
-		duration := time.Since(start).Seconds()
+		catat := func() {
+			durasi := time.Since(mulai).Seconds()
+			m.reqInFlight.Dec()
 
-		// Normalize path — KRITIS: hindari cardinality explosion
-		// Gunakan route pattern dari router (chi, gin, echo), bukan r.URL.Path mentah!
-		path := normalizePathForMetrics(r)
+			// WAJIB dihitung SESUDAH next.ServeHTTP: ServeMux menuliskan
+			// r.Pattern saat merutekan, jadi sebelum itu nilainya masih kosong.
+			jalur := jalurUntukMetrik(r)
 
-		m.reqDuration.WithLabelValues(r.Method, path).Observe(duration)
-		m.reqTotal.WithLabelValues(r.Method, path, strconv.Itoa(rw.statusCode)).Inc()
+			m.amatiDurasi(r, jalur, durasi)
+			m.reqTotal.WithLabelValues(r.Method, jalur, strconv.Itoa(pw.kode)).Inc()
+		}
+
+		// Pencatatan WAJIB di dalam defer. Tanpa itu, handler yang panic
+		// melewatkan Observe DAN Inc sepenuhnya: permintaan yang paling perlu
+		// terlihat justru satu-satunya yang tidak tercatat, dan error rate
+		// tampak TURUN tepat saat insiden memburuk.
+		defer func() {
+			if p := recover(); p != nil {
+				pw.kode = http.StatusInternalServerError
+				catat()
+				panic(p) // diteruskan ke middleware recovery di lapisan luar
+			}
+			catat()
+		}()
+
+		next.ServeHTTP(pw, r)
 	})
 }
 
-// normalizePathForMetrics mengambil route pattern dari chi/gorilla context.
-// Fallback ke path statis jika tidak ada router context.
-func normalizePathForMetrics(r *http.Request) string {
-	// Coba ambil route pattern (Go 1.22+ net/http)
-	if pattern := r.Pattern; pattern != "" {
-		return pattern
+// amatiDurasi menautkan sampel ke TraceID lewat exemplar bila permintaan ini
+// ikut ter-sampling. Dari satu titik p99 di Grafana Anda bisa langsung membuka
+// trace permintaan yang menyebabkannya — jembatan yang membuat metrik dan
+// trace saling berguna alih-alih berdiri sendiri.
+func (m *Metrics) amatiDurasi(r *http.Request, jalur string, durasi float64) {
+	obs := m.reqDuration.WithLabelValues(r.Method, jalur)
+
+	sc := trace.SpanContextFromContext(r.Context())
+	if eo, ok := obs.(prometheus.ExemplarObserver); ok && sc.IsSampled() {
+		eo.ObserveWithExemplar(durasi, prometheus.Labels{"trace_id": sc.TraceID().String()})
+		return
 	}
-	// Untuk path dinamis seperti /users/123 → return /users/{id}
-	// Dalam produksi nyata, gunakan chi.RouteContext(r.Context()).RoutePattern()
-	return r.URL.Path
+	obs.Observe(durasi)
 }
 
-// captureWriter menangkap HTTP status code dari handler.
-type captureWriter struct {
+// jalurUntukMetrik mengembalikan POLA rute, bukan path mentah.
+//
+// Fallback-nya sengaja konstanta, BUKAN r.URL.Path. Mengembalikan path mentah
+// di sini persis merupakan Anti-Pattern 2 — dan ia gagal secara SENYAP:
+// seluruh uji lolos karena memakai path statis, lalu di produksi
+// /pesanan/{uuid} melahirkan satu deret waktu per pesanan sampai Prometheus
+// kehabisan memori. Kehilangan satu dimensi jauh lebih murah daripada
+// kehilangan seluruh sistem metrik.
+func jalurUntukMetrik(r *http.Request) string {
+	if r.Pattern == "" {
+		// Router pihak ketiga, ambil dari context-nya masing-masing:
+		//   chi  : chi.RouteContext(r.Context()).RoutePattern()
+		//   gin  : c.FullPath()
+		//   echo : c.Path()
+		return "lainnya"
+	}
+	// r.Pattern memuat metode ("GET /pesanan/{id}") sementara metode sudah
+	// menjadi label tersendiri. Diambil bagian polanya saja agar label tidak
+	// menduplikasi informasi yang sama.
+	if i := strings.LastIndex(r.Pattern, " "); i >= 0 {
+		return r.Pattern[i+1:]
+	}
+	return r.Pattern
+}
+
+// penulisTerbungkus menangkap kode status HTTP.
+//
+// Ia WAJIB meneruskan antarmuka opsional. http.ResponseWriter yang dibungkus
+// struct biasa kehilangan Flusher, Hijacker, dan ReaderFrom — akibatnya
+// handler SSE tidak pernah bisa flush (respons menggantung di buffer sampai
+// handler selesai), upgrade WebSocket gagal, dan io.Copy kehilangan jalur
+// cepatnya. Ketiganya terjadi DIAM-DIAM, dan hanya pada rute yang kebetulan
+// membutuhkannya — sementara middleware ini dipasang di SELURUH rute.
+type penulisTerbungkus struct {
 	http.ResponseWriter
-	statusCode int
-	written    bool
+	kode    int
+	ditulis bool
 }
 
-func (c *captureWriter) WriteHeader(code int) {
-	if !c.written {
-		c.statusCode = code
-		c.written = true
+func (p *penulisTerbungkus) WriteHeader(kode int) {
+	if !p.ditulis {
+		p.kode = kode
+		p.ditulis = true
 	}
-	c.ResponseWriter.WriteHeader(code)
+	p.ResponseWriter.WriteHeader(kode)
 }
 
-// --- Unit Tests ---
+func (p *penulisTerbungkus) Write(b []byte) (int, error) {
+	p.ditulis = true // Write tanpa WriteHeader mengirim 200 secara implisit
+	return p.ResponseWriter.Write(b)
+}
 
-func TestREDMiddleware_CountsRequests(t *testing.T) {
-	m := NewMetrics("test")
+// Unwrap dipakai http.NewResponseController (Go 1.20+) untuk menembus
+// pembungkus. Inilah jalur yang benar bagi handler modern.
+func (p *penulisTerbungkus) Unwrap() http.ResponseWriter { return p.ResponseWriter }
 
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+// Flush dan Hijack tetap diteruskan eksplisit untuk pustaka yang masih
+// melakukan type assertion langsung, mis. w.(http.Flusher).
+func (p *penulisTerbungkus) Flush() {
+	if f, ok := p.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+func (p *penulisTerbungkus) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	h, ok := p.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, fmt.Errorf("ResponseWriter di bawah tidak mendukung Hijack")
+	}
+	return h.Hijack()
+}
+```
+
+```go
+package metrics
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
+)
+
+func TestREDMiddlewareMenghitungPermintaan(t *testing.T) {
+	m := NewMetrics("uji", prometheus.NewRegistry())
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/pesanan/{id}", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	wrapped := m.REDMiddleware(handler)
+	wrapped := m.REDMiddleware(mux)
 
-	// Kirim 3 request
-	for i := 0; i < 3; i++ {
-		req := httptest.NewRequest("GET", "/api/orders", nil)
-		req.URL = &url.URL{Path: "/api/orders"}
-		wrapped.ServeHTTP(httptest.NewRecorder(), req)
+	// Tiga ID BERBEDA — inilah yang membedakan uji ini dari versi lama, yang
+	// hanya memakai satu path statis sehingga tidak pernah bisa membedakan
+	// normalisasi yang bekerja dari yang tidak.
+	for _, id := range []string{"1", "2", "3"} {
+		wrapped.ServeHTTP(httptest.NewRecorder(),
+			httptest.NewRequest(http.MethodGet, "/api/pesanan/"+id, nil))
 	}
 
-	// Verifikasi counter = 3
-	count, err := testutil.CollectAndCount(m.reqTotal)
-	if err != nil {
-		t.Fatalf("collect metrics: %v", err)
+	// testutil.ToFloat64 membaca NILAI counter.
+	//
+	// Versi lama memakai `count, err := testutil.CollectAndCount(...)` — yang
+	// bahkan tidak kompilasi, karena CollectAndCount mengembalikan satu nilai
+	// (int), bukan (int, error). Seandainya kompilasi pun, ia menghitung
+	// jumlah DERET WAKTU, bukan nilai counter, sehingga asersi "count != 0"
+	// tidak pernah bisa membuktikan tiga permintaan tercatat — meski nama dan
+	// komentar ujinya mengklaim persis itu.
+	if got := testutil.ToFloat64(m.reqTotal.WithLabelValues("GET", "/api/pesanan/{id}", "200")); got != 3 {
+		t.Fatalf("counter = %v, mau 3", got)
 	}
-	if count == 0 {
-		t.Error("expected some metric time series, got 0")
-	}
-}
-
-func TestREDMiddleware_Captures5xx(t *testing.T) {
-	m := NewMetrics("test2")
-
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-	})
-	wrapped := m.REDMiddleware(handler)
-
-	req := httptest.NewRequest("POST", "/api/pay", nil)
-	req.URL = &url.URL{Path: "/api/pay"}
-	wrapped.ServeHTTP(httptest.NewRecorder(), req)
-
-	// Verifikasi status=500 terekam
-	gathered, _ := m.registry.Gather()
-	found := false
-	for _, mf := range gathered {
-		if strings.Contains(mf.GetName(), "http_requests_total") {
-			for _, metric := range mf.GetMetric() {
-				for _, label := range metric.GetLabel() {
-					if label.GetName() == "status" && label.GetValue() == "500" {
-						found = true
-					}
-				}
-			}
-		}
-	}
-	if !found {
-		t.Error("expected status=500 label in metrics, not found")
+	if n := testutil.CollectAndCount(m.reqTotal); n != 1 {
+		t.Fatalf("deret waktu = %d, mau 1 — tiga ID berbeda harus teragregasi ke satu pola", n)
 	}
 }
 
-func TestREDMiddleware_InFlightGauge(t *testing.T) {
-	m := NewMetrics("test3")
+// Menjaga janji terpenting berkas ini: label jalur TIDAK PERNAH boleh berisi
+// path mentah, bahkan ketika pola rute tidak tersedia.
+func TestFallbackJalurTidakPernahMentah(t *testing.T) {
+	m := NewMetrics("uji2", prometheus.NewRegistry())
+	wrapped := m.REDMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 
-	// Handler yang delay — in-flight harus = 1 selama handler jalan
-	inFlightDuring := make(chan float64, 1)
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Read current in_flight value during request
-		gathered, _ := m.registry.Gather()
-		for _, mf := range gathered {
-			if strings.Contains(mf.GetName(), "in_flight") {
-				for _, metric := range mf.GetMetric() {
-					inFlightDuring <- metric.GetGauge().GetValue()
-				}
-			}
-		}
-		w.WriteHeader(http.StatusOK)
-	})
-	wrapped := m.REDMiddleware(handler)
+	for _, id := range []string{"a1b2", "c3d4", "e5f6"} {
+		wrapped.ServeHTTP(httptest.NewRecorder(),
+			httptest.NewRequest(http.MethodGet, "/pesanan/"+id, nil))
+	}
 
-	req := httptest.NewRequest("GET", "/", nil)
-	req.URL = &url.URL{Path: "/"}
-	wrapped.ServeHTTP(httptest.NewRecorder(), req)
-
-	select {
-	case val := <-inFlightDuring:
-		if val != 1.0 {
-			t.Errorf("in_flight during request = %.0f, want 1", val)
-		}
-	default:
-		t.Error("in_flight gauge not captured")
+	if n := testutil.CollectAndCount(m.reqTotal); n != 1 {
+		t.Fatalf("deret waktu = %d, mau 1 — fallback mengembalikan path mentah dan meledakkan kardinalitas", n)
 	}
 }
 
-func TestMetricsHandler_ServesMetrics(t *testing.T) {
-	m := NewMetrics("test4")
+func TestPanicTetapTercatat(t *testing.T) {
+	m := NewMetrics("uji3", prometheus.NewRegistry())
+	wrapped := m.REDMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		panic("handler meledak")
+	}))
 
-	req := httptest.NewRequest("GET", "/metrics", nil)
+	func() {
+		defer func() { _ = recover() }() // menirukan middleware recovery di lapisan luar
+		wrapped.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
+	}()
+
+	if got := testutil.ToFloat64(m.reqTotal.WithLabelValues("GET", "lainnya", "500")); got != 1 {
+		t.Fatalf("permintaan panic tercatat %v kali sebagai 500, mau 1", got)
+	}
+	if got := testutil.ToFloat64(m.reqInFlight); got != 0 {
+		t.Fatalf("in-flight = %v setelah panic, mau 0", got)
+	}
+}
+
+func TestPembungkusMempertahankanFlusher(t *testing.T) {
+	m := NewMetrics("uji4", prometheus.NewRegistry())
+	var bisaFlush bool
+	wrapped := m.REDMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, bisaFlush = w.(http.Flusher)
+	}))
+	wrapped.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
+
+	if !bisaFlush {
+		t.Fatal("pembungkus menghilangkan http.Flusher — handler SSE akan menggantung di buffer")
+	}
+}
+
+func TestHandlerMenyajikanKolektorBawaan(t *testing.T) {
+	reg := NewRegistry()
+	NewMetrics("uji5", reg)
+
 	rec := httptest.NewRecorder()
-	m.Handler().ServeHTTP(rec, req)
+	Handler(reg).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 
 	if rec.Code != http.StatusOK {
-		t.Errorf("metrics handler: got %d, want 200", rec.Code)
+		t.Fatalf("kode = %d, mau 200", rec.Code)
 	}
-	if !strings.Contains(rec.Body.String(), "# HELP") {
-		t.Error("metrics response missing HELP comment")
+	// Registry sendiri TIDAK memuat kolektor runtime secara otomatis. Tanpa
+	// NewRegistry(), asersi ini gagal — dan di produksi Anda kehilangan
+	// go_goroutines persis saat mencari kebocoran goroutine.
+	for _, wajib := range []string{"go_goroutines", "process_resident_memory_bytes"} {
+		if !strings.Contains(rec.Body.String(), wajib) {
+			t.Errorf("keluaran /metrics tidak memuat %q", wajib)
+		}
 	}
 }
 ```
@@ -309,19 +410,22 @@ reqTotal := prometheus.NewCounterVec(
 reqDuration.WithLabelValues(r.Method, r.URL.Path).Observe(duration)
 // /users/1, /users/2, /users/3 ... /users/1000000 → 1 juta time series!
 
-// GOOD: Gunakan route pattern dari router
-// Chi:
-pattern := chi.RouteContext(r.Context()).RoutePattern() // "/users/{id}"
-// Gin:
-pattern := c.FullPath() // "/users/:id"
-// Go 1.22 net/http:
-pattern := r.Pattern // "GET /users/{id}"
+// GOOD: pola rute dari router
+pattern := chi.RouteContext(r.Context()).RoutePattern() // chi  → "/users/{id}"
+pattern = c.FullPath()                                  // gin  → "/users/:id"
+pattern = r.Pattern                                     // Go 1.22+ → "GET /users/{id}"
 
 reqDuration.WithLabelValues(r.Method, pattern).Observe(duration)
 // Semua /users/* teragregasi ke 1 time series: "/users/{id}"
 ```
 
-**Kenapa berbahaya:** REST API dengan ID di path (UUID, integer) menghasilkan unique path per resource. 1M user records = 1M path time series → cardinality explosion yang sama seperti user_id label. Selalu normalize ke route pattern.
+**Kenapa berbahaya:** REST API dengan ID di path (UUID, integer) menghasilkan path unik per resource. 1 juta record = 1 juta deret path → ledakan kardinalitas yang sama seperti label `user_id`.
+
+Tiga detail yang menentukan apakah normalisasi ini benar-benar bekerja:
+
+- **Fallback-nya TIDAK boleh path mentah.** Menulis `return r.URL.Path` sebagai jalur cadangan berarti anti-pattern ini tetap hidup, hanya bersembunyi di cabang `else`. Ia lolos setiap uji (yang selalu memakai path statis) lalu meledak di produksi. Kembalikan konstanta seperti `"lainnya"`: kehilangan satu dimensi jauh lebih murah daripada kehilangan seluruh Prometheus.
+- **`r.Pattern` baru terisi SESUDAH routing.** `ServeMux` menuliskannya saat memilih handler, jadi middleware yang membacanya **sebelum** `next.ServeHTTP` selalu mendapat string kosong — dan diam-diam jatuh ke fallback untuk setiap permintaan.
+- **`r.Pattern` memuat metode** (`"GET /users/{id}"`). Bila `method` sudah menjadi label tersendiri, memakainya utuh menduplikasi dimensi yang sama dan melipatgandakan jumlah deret tanpa menambah informasi.
 
 ### ❌ Anti-Pattern 3: Global Registry di Tests
 
@@ -347,13 +451,19 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 
 ## 4. Edge Cases & Defensive Programming
 
-1. **Histogram Bucket Misconfiguration:** Default buckets (`0.005` to `10`) cocok untuk general web services. Untuk database query (microseconds) atau batch jobs (minutes), semua observasi menumpuk di bucket pertama atau terakhir — p99 tidak akurat. Selalu sesuaikan buckets dengan profil latensi aktual: jalankan `histogram_quantile(0.99, ...)` di Grafana dan perhatikan apakah hasilnya reasonable.
+1. **Bucket histogram yang salah membuat p99 BERBOHONG, bukan sekadar tidak akurat:** bucket bawaan (`0.005`–`10`) cocok untuk layanan web umum. Untuk query database (mikrodetik) atau batch job (menit), seluruh observasi menumpuk di bucket pertama atau terakhir. Yang membuatnya berbahaya adalah bentuk kegagalannya:
+   - Bila kuantil jatuh di bucket `+Inf`, `histogram_quantile` mengembalikan **batas atas bucket berhingga tertinggi**. Dengan bucket teratas 2 detik, p99 Anda akan menampilkan tepat `2` — selamanya, seburuk apa pun keadaannya. Grafiknya rata dan tampak sehat; tidak ada peringatan apa pun.
+   - Bila kuantil jatuh di bucket pertama, Prometheus mengasumsikan sebaran linier dari **nol** ke batas atas bucket itu — angka yang keluar mendekati tebakan.
+
+   Karena itu batas atas bucket harus ditentukan oleh **timeout klien**, bukan oleh target SLO. Sebagai alternatif, `client_golang` v1.19+ mendukung **native histogram** lewat `NativeHistogramBucketFactor` (mis. `1.1`), yang menyesuaikan bucket secara otomatis dan menghapus seluruh persoalan ini — dengan catatan Prometheus di sisi server harus dijalankan dengan `--enable-feature=native-histograms`, dan fitur ini masih berstatus eksperimental.
 
 2. **Counter Reset saat Restart:** Counter di-reset ke 0 setiap restart karena stored di RAM. Grafana `rate()` otomatis handle counter reset via deteksi penurunan nilai. Tapi jika pod restart sangat sering (crash loop), `rate()` bisa return 0 selama periode tanpa data. Gunakan alert `increase(http_requests_total[5m]) == 0` untuk deteksi service down.
 
 3. **Scrape Timeout Saat Metrics Berat:** Rendering teks `/metrics` untuk 100K+ time series bisa memakan 5+ detik CPU. Jika Prometheus `scrape_timeout` (default 10s) tercapai, scrape gagal dan Prometheus melaporkan target DOWN. Monitor durasi `promhttp_metric_handler_requests_in_flight` dan ukuran response bytes.
 
-4. **OpenMetrics vs Prometheus Text Format:** Prometheus client Go mendukung kedua format. `EnableOpenMetrics: true` mengaktifkan format OpenMetrics yang lebih ekspresif (unit, created timestamps). Beberapa scraper lama tidak support OpenMetrics — pastikan kompatibilitas dengan Prometheus version yang digunakan.
+4. **OpenMetrics bukan sekadar format yang lebih ekspresif — ia syarat untuk exemplar:** `EnableOpenMetrics: true` mengaktifkan unit dan created timestamp, tetapi manfaat terbesarnya adalah **exemplar**: menautkan satu sampel histogram ke `trace_id`-nya. Dengan itu, dari satu titik p99 yang mencurigakan di Grafana Anda bisa langsung membuka trace permintaan yang menyebabkannya — jembatan yang membuat metrik dan trace saling berguna alih-alih berdiri sendiri (lihat `amatiDurasi` di §2). Tanpa OpenMetrics, exemplar tidak pernah ikut ter-scrape meskipun sudah dicatat di sisi aplikasi. Scraper lama yang tidak mendukung OpenMetrics tetap bisa membaca format teks biasa — negosiasinya lewat header `Accept`, jadi mengaktifkannya aman.
+
+6. **Registry sendiri TIDAK memuat kolektor runtime:** `prometheus.NewRegistry()` menghasilkan registry benar-benar kosong. `go_goroutines`, `go_memstats_*`, dan `process_resident_memory_bytes` hanya ada di `DefaultRegisterer` karena kolektornya didaftarkan di sana lewat `init()`. Anjuran memakai registry sendiri (Anti-Pattern 3) tetap benar, tapi harus disertai `collectors.NewGoCollector()` dan `collectors.NewProcessCollector(...)` — kalau tidak, Anda kehilangan persis metrik yang dicari saat menelusuri kebocoran goroutine atau memori.
 
 5. **Rate vs Irate untuk Alert:** `rate()` menghitung rata-rata per detik selama window (smooth tapi lambat deteksi spike). `irate()` menghitung dari 2 sample terakhir (responsif tapi noisy). Untuk alert, gunakan `rate()` dengan window 1-5 menit. Untuk dashboard real-time, `irate()` memberikan respons lebih cepat.
 
@@ -374,6 +484,9 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 | Nilai p99 tampak mustahil | batas bucket histogram | Bucket tidak mencakup rentang latensi nyata |
 | Alert berbunyi terus dan diabaikan | apa yang dijadikan dasar alert | Alert pada metrik mentah, bukan pada dampak ke pengguna |
 | Grafik hilang setelah deploy | perubahan nama label | Nama metrik/label bukan hal yang bebas diubah |
+| p99 rata sempurna di satu angka | batas atas bucket tertinggi | Kuantil jatuh di `+Inf`; angkanya terkunci di sana |
+| Error rate TURUN saat insiden memburuk | apakah panic ikut tercatat | Handler panic melewati pencatatan metrik |
+| `go_goroutines` tidak ada di `/metrics` | kolektor pada registry | Registry sendiri tanpa `collectors.NewGoCollector()` |
 
 ```bash
 # Deret dengan kardinalitas terbesar -- penyebab OOM nomor satu
