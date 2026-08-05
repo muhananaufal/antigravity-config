@@ -1,5 +1,7 @@
 # Worker Pool & ErrGroup
 
+> **Berlaku:** Go 1.20+ (`errgroup.SetLimit`) · Go 1.22+ (variabel loop aman) · **Lihat juga:** `concurrency/channel_patterns_pipelines.md` · `background_jobs_worker/worker_pool_patterns.md` · `distributed_patterns_resilience/bulkhead_isolation.md` · `db_sqlc/connection_pool_tuning.md`
+
 ## Konsep Utama
 Me-spawn goroutine di Go memang amat sangat murah (overhead memori ~2KB saja per goroutine). Namun hal itu memicu sindrom ilusi aman. Jika layanan HTTP server Anda menerima lonjakan 100.000 trafik di detik yang sama, dan Anda menggunakan pola "Satu Request = Satu Goroutine + Akses Database", aplikasi Go Anda memang tetap hidup; Namun, Database RDBMS di backend Anda (PostgreSQL/MySQL), API pihak ke-3 eksternal, maupun router OS Anda akan tumbang binasa seketika karena kehabisan resource koneksi (Connection Exhaustion) atau terkena gempuran Rate Limiting brutal 429 Too Many Requests. 
 
@@ -260,3 +262,37 @@ for _, item := range dataset {
    - *Defensive*: Wajib implementasi bungkus lapis luar: pasang blok baris `defer func() { if p := recover(); p != nil { ... } }()` kustom dan jahit panic trace tersebut, *cast* menjadi objek error biasa (`fmt.Errorf()`), lalu biarkan `errgroup` menelannya secara wajar membatalkan sisanya elegan.
 3. **Ghost Worker Akibat Mengabaikan Peringatan Context**: Sifat `g, gCtx := errgroup.WithContext(ctx)` adalah menjanjikan sinyal penghentian paksa manakala ada 1 kecacatan. **TAPI HATI-HATI**: `gCtx` tidak bekerja magis menginterupsi *OS thread*. Jika rutinitas berat Anda (seperti pembacaan `IO Disk` loop) lalai menyelipkan kode kondisional pengecekan status rutin pembatalan: `if gCtx.Err() != nil { return nil }`, goroutine Anda seutuhnya Buta Nada. Ia takkan sudi mati / kembali dengan damai biarpun rekan sejawatnya sudah menyerah lama. Worker tersebut terperangkap jadi arwah (Zombie Phantom Worker) menyedot jatah DB connection, menunggu kiamat.
    - *Defensive*: Selalu selipkan parameter `ctx` ke layer/API terbawah (*Database Driver, HTTP Client*) dan rajin periksa `ctx.Done()` di setiap iterasi Loop (sebelum dan sesudahnya).
+
+## Kapan JANGAN Pakai Ini
+
+- **Ketika hilirnya sudah punya pool sendiri.** Membungkus query database dengan worker pool 50 sementara `SetMaxOpenConns(10)` hanya memindahkan antrean satu lapis ke atas. Batasi konkurensi di **satu** tempat, dan pilih tempat yang paling dekat dengan sumber daya langka.
+- **Untuk batch yang wajib diproses seluruhnya.** `errgroup.WithContext` bersifat fail-fast: satu baris rusak dari 10.000 membatalkan 9.999 yang sehat. Untuk impor data, pakai `errgroup` **tanpa** `WithContext`, kumpulkan galat per item, lalu gabungkan dengan `errors.Join`.
+- **Untuk proses jangka panjang** — konsumer Kafka, daemon, penjadwal. `Wait()` tidak pernah kembali, dan galat pertama mematikan seluruh armada. Pola yang tepat adalah supervisor dengan restart per komponen.
+- **Sebagai rate limiter.** `SetLimit` membatasi berapa yang berjalan **bersamaan**, bukan berapa per detik. Worker cepat dengan limit 10 tetap bisa mengirim 5.000 permintaan per detik dan kena `429`. Untuk kuota, pakai `golang.org/x/time/rate`.
+- **Menyetel ukuran pool dari `GOMAXPROCS`.** Itu benar untuk beban CPU. Untuk beban I/O, angkanya ditentukan kapasitas hilir — jumlah koneksi DB, kuota API, IOPS disk — dan tidak ada hubungannya dengan jumlah core.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| p99 naik, CPU rendah, antrean menumpuk | waktu tunggu slot vs waktu kerja | Pool terlalu kecil untuk beban masuk |
+| `429`, `connection refused`, atau pool DB habis | konkurensi efektif vs kapasitas hilir | Pool terlalu besar; batasnya salah tempat |
+| Batch selesai tapi jumlah hasil kurang | rasio task sukses vs total | Fail-fast membatalkan sisa pekerjaan yang sehat |
+| Sebagian task tidak pernah selesai | goroutine yang menggantung di `errgroup` | Worker tidak memeriksa `gCtx.Done()` |
+| Seluruh proses mati mendadak | `panic` di dalam `g.Go` | `errgroup` tidak menangkap panic; butuh `recover` lokal |
+
+```bash
+# Waktu tunggu slot. Aktifkan dulu di kode: runtime.SetBlockProfileRate(1)
+go tool pprof -top http://localhost:6060/debug/pprof/block
+
+# Worker yang mengantre slot errgroup muncul sebagai semacquire
+curl -s 'localhost:6060/debug/pprof/goroutine?debug=1' | grep -B3 -i errgroup
+```
+
+```sql
+-- Apakah pool DB yang jadi batas sebenarnya?
+SELECT state, count(*) FROM pg_stat_activity GROUP BY state;
+SELECT count(*) AS terpakai,
+       (SELECT setting::int FROM pg_settings WHERE name='max_connections') AS batas
+FROM pg_stat_activity;
+```

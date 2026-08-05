@@ -1,5 +1,7 @@
 # Goroutine Leak Detection & Prevention
 
+> **Berlaku:** Go 1.21+ · `go.uber.org/goleak` · **Lihat juga:** `concurrency/context_cancellation_timeout.md` · `concurrency/channel_patterns_pipelines.md` · `testing_quality/synctest_deterministic_concurrency.md` · `observability_resilience/graceful_shutdown_drain.md`
+
 ## Konsep Utama
 *Goroutine Leak* adalah bentuk yang paling mematikan dan diam-diam dari *memory leak* (kebocoran memori) spesifik di ekosistem Go. Ini terjadi ketika sebuah goroutine tetap berjalan atau (lebih sering) diblokir (stuck) hidup-hidup di background, meskipun tugas dan fungsionalitasnya sudah tidak lagi dibutuhkan atau API caller-nya sudah pergi. 
 
@@ -219,3 +221,38 @@ func GoodContext() {
 
 3. **HTTP Server Blocked on ResponseWriter**: Jika client (browser/aplikasi HP user) secara brutal memutuskan (drop/abort) koneksi HTTP saat server Go sedang sibuk mengompilasi dan mengunduhkan (streaming chunking) data ukuran besar lewat `http.ResponseWriter`, goroutine Writer berpotensi terblokir menunggu soket jaringan merespons kesiapan buffer TCP.
    - *Defensive*: Selalu sadari parameter *context* bawaan pada interface Request HTTP `req.Context()`. Patuhi sinyal `<-ctx.Done()` setiap selesai menulis sekumpulan blok data kecil (chunks) pada siklus loop panjang. Fungsi framework akan meng-cancel context ini seketika saat client terdeteksi memutuskan TCP koneksinya di layer bawah.
+
+## Kapan JANGAN Pakai Ini
+
+- **Mengejar angka goroutine nol.** Server sehat selalu punya goroutine tetap: listener, pool koneksi, ticker metrik, eksportir OTel. Yang menandakan kebocoran adalah **tren yang naik terus**, bukan nilai absolutnya.
+- **Mematikan `goleak` karena sering gagal.** Kegagalan palsu dari driver DB atau klien telemetri diatasi dengan `goleak.IgnoreTopFunction("...")` yang spesifik. Menghapus `goleak.VerifyNone` sama saja membuang satu-satunya alat yang menangkap kebocoran sebelum produksi.
+- **Menganggap buffer 1 sebagai obat universal.** Buffer 1 hanya aman bila worker mengirim **tepat satu kali**. Worker yang mengirim beberapa kali tetap terblokir pada pengiriman kedua — kebocorannya cuma tertunda.
+- **Mencari cara membunuh goroutine dari luar.** Go tidak menyediakannya, dan tidak akan. Setiap desain yang membutuhkan hal itu perlu diubah menjadi goroutine yang memeriksa sinyal berhenti sendiri.
+- **Membatalkan pekerjaan latar demi "mencegah kebocoran".** Goroutine yang sengaja hidup melampaui request bukan kebocoran — ia jadi kebocoran hanya bila tidak punya batas waktu. Beri `WithoutCancel` + deadline sendiri, bukan pembatalan.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| RSS naik bertahap, tidak pernah turun setelah GC | `NumGoroutine()` sebagai gauge | Setiap goroutine menahan stack minimal 2 KB plus objek yang dirujuknya |
+| OOMKilled berkala tiap beberapa hari | grafik goroutine sejak deploy terakhir | Laju kebocoran konstan per request |
+| Koneksi DB habis padahal trafik normal | goroutine yang berstatus `IO wait`/`select` | Zombie masih memegang koneksi |
+| Shutdown menggantung sampai batas `terminationGracePeriod` | goroutine yang tersisa saat drain | Ada yang tidak mendengarkan sinyal berhenti |
+
+```bash
+# Ringkasan per fungsi pembuat -- yang menumpuk langsung terlihat di puncak
+curl -s 'localhost:6060/debug/pprof/goroutine?debug=1' | head -40
+
+# Diff dua cuplikan: hanya pertumbuhannya yang tampil, bukan goroutine tetap
+curl -s 'localhost:6060/debug/pprof/goroutine' -o g1.pb.gz
+# ... tunggu 10 menit ...
+curl -s 'localhost:6060/debug/pprof/goroutine' -o g2.pb.gz
+go tool pprof -base g1.pb.gz g2.pb.gz
+
+# Status blokir setiap goroutine: 'chan send', 'chan receive', 'select', 'semacquire'
+curl -s 'localhost:6060/debug/pprof/goroutine?debug=2' \
+  | grep -oE '^goroutine [0-9]+ \[[^]]+\]' | sed 's/.*\[//' | sort | uniq -c | sort -rn
+
+# Goroutine yang menunggu lebih dari 10 menit -- hampir pasti bocor
+curl -s 'localhost:6060/debug/pprof/goroutine?debug=2' | grep -E 'minutes\]' | sort | uniq -c
+```

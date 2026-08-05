@@ -1,5 +1,7 @@
 # Singleflight & Cache Stampede Prevention
 
+> **Berlaku:** Go 1.21+ · `golang.org/x/sync/singleflight` · **Lihat juga:** `caching_strategy/cache_aside_singleflight.md` · `caching_strategy/multilevel_cache_l1l2.md` · `distributed_patterns_resilience/retry_backoff_jitter.md` · `observability_resilience/circuit_breaker_hystrix.md`
+
 ## Konsep Utama
 Paket `golang.org/x/sync/singleflight` digunakan untuk memecahkan sebuah masalah arsitektural klasik yang mematikan dalam sistem berskala terdistribusi (high concurrency): **Thundering Herd** (Kawanan Bergemuruh) atau sering juga dikenal dengan **Cache Stampede / Dogpile Effect**.
 
@@ -221,3 +223,34 @@ ch := sgGroup.DoChan(key, func() (interface{}, error) {
 
 3. **Integritas Parameter**: Singleflight melakukan de-duplikasi murni mengacu pada kesamaan variabel string `key`. Jika URL endpoint Anda adalah `/profile?id=5&lang=en` lalu pengguna kedua datang dengan `/profile?id=5&lang=id`, dan Anda hanya menggunakan `"user_5"` sebagai `key` Singleflight, pengguna kedua yang menanti akan dibanjiri profil berbahasa Inggris (EN) karena ia numpang di hasil pengguna pertama.
    - *Defensive*: Selalu pertimbangkan hash dari kombinasi seluruh variabel pengubah status (State-changing Params) sebagai parameter *key* di singleflight. (e.g. `user_5_lang_id`).
+
+## Kapan JANGAN Pakai Ini
+
+- **Sebagai perlindungan stampede lintas pod.** Singleflight menggabungkan permintaan **di dalam satu proses**. Dengan 50 pod, backend tetap menerima 50 permintaan serentak saat kunci cache kedaluwarsa. Untuk itu dibutuhkan kunci di Redis atau TTL berjitter.
+- **Pada operasi tulis.** Menggabungkan dua `POST` yang berbeda menjadi satu eksekusi berarti satu permintaan hilang tanpa jejak. Untuk tulis, alat yang benar adalah idempotency key.
+- **Untuk data yang berubah cepat.** Peserta yang bergabung di akhir eksekusi menerima hasil yang sudah beberapa ratus milidetik usang. Untuk harga atau stok yang bergerak, itu bisa berarti keputusan yang salah.
+- **Untuk panggilan yang murah.** Ongkos kunci peta dan alokasi pada singleflight bisa melebihi ongkos panggilan yang hendak dihemat.
+- **Sebagai pengganti cache.** Singleflight meredam ledakan serentak, tetapi tidak mengurangi permintaan yang tersebar merata sepanjang waktu. Bila beban hilir tinggi tapi tidak meledak, yang dibutuhkan cache — bukan penggabungan.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| QPS backend melonjak tajam pada kelipatan TTL | grafik QPS vs nilai TTL | Semua kunci kedaluwarsa bersamaan; butuh jitter pada TTL |
+| Singleflight terpasang tapi beban hilir tidak turun | rasio `shared=true` | Nyaris tidak ada penggabungan — kuncinya terlalu spesifik, atau beban memang merata |
+| Ratusan permintaan gagal serentak dengan galat sama | apakah galat ikut dibagikan | Satu galat transien didistribusikan ke semua peserta |
+| Seluruh handler HTTP panik bersamaan | `panic` di dalam fungsi singleflight | Panic di-*rethrow* ke semua pemanggil; butuh `recover` lokal |
+| Pengguna menerima data milik permintaan lain | komposisi kunci singleflight | Parameter pembeda (bahasa, tenant) tidak masuk ke dalam kunci |
+
+```bash
+# Rasio penggabungan. Catat nilai `shared` dari Do/DoChan sebagai field log.
+kubectl logs -l app=api --since=1h \
+  | jq -r 'select(.msg=="singleflight") | .shared' | sort | uniq -c
+
+# Ledakan berkala = TTL seragam. Bandingkan pola lonjakan dengan nilai TTL.
+redis-cli info stats | grep -E 'keyspace_hits|keyspace_misses|expired_keys'
+
+# Sebaran TTL sisa: kalau menumpuk di satu nilai, jitter belum dipasang
+for k in $(redis-cli --scan --pattern 'cache:*' | head -200); do redis-cli ttl "$k"; done \
+  | sort -n | uniq -c | tail -20
+```

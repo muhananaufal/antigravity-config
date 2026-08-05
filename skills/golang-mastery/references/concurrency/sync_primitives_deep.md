@@ -1,5 +1,7 @@
 # Sync Primitives Deep Dive
 
+> **Berlaku:** Go 1.21+ (`sync.OnceValue`, `sync.OnceFunc`) · **Lihat juga:** `concurrency/atomic_lockfree_patterns.md` · `concurrency/data_race_detection.md` · `runtime_internals/stdlib_modern_slices_maps_sync.md` · `hft_zero_alloc/memory_arena_batch_alloc.md`
+
 ## Konsep Utama
 Paket bawaan `sync` dalam Go mensuplai primitif sinkronisasi tingkat rendah (*low-level synchronization constructs*) yang bertindak sebagai pelengkap dari fasilitas channel (`chan`). Penggunaan primitif package `sync` jauh lebih diutamakan, memiliki throughput kinerja yang berkali lipat lebih gegas (fast), dan overhead yang sangat tipis bila tugas utama Anda hanyalah melindungi akses baca-tulis ke variabel internal dalam memori struct, alih-alih merutekan alur data di *event pipeline* (CSP).
 
@@ -250,3 +252,36 @@ func (rc *RegistryConfig) CorruptDeadlockMethod() {
 
 3. **Inisialisasi `sync.WaitGroup` ADD() di Tempat Tertinggal**: Seringkali programmer lupa diri dan memanggil `wg.Add(1)` *di dalam tubuh anonim goroutine* (`go func() { wg.Add(1); ... }()`). 
    - *Defensive*: Operasi instruksi peluncuran `go func()` sifatnya *Asinkron / Non-Blocking* (menyerahkan nasibnya kepada Scheduler Go-Runtime). Sangat jamak terjadi eksekutor goroutine utama keburu melesat maju mengeksekusi instruksi `wg.Wait()`, di saat goroutine kecil-kecil tersebut belum sempat dialokasikan mesinnya (jadi belum sempat `wg.Add(1)`). Program akan instan tamat *return* keluar secara prematur. Hukum besi: **Lakukan wg.Add(1) SELALU dan HARUS di luar/sebelum tubuh go func() dimulai.**
+
+## Kapan JANGAN Pakai Ini
+
+- **`sync.Map` sebagai pengganti umum `map`+mutex.** Ia hanya menang pada dua pola: kunci ditulis sekali lalu dibaca berkali-kali, atau tiap goroutine menyentuh kunci yang saling lepas. Di luar itu ia lebih lambat, dan kehilangan keamanan tipe.
+- **`sync.Pool` untuk objek yang mahal dibuat tapi jarang dipakai.** Isi pool dibuang pada setiap siklus GC. Objek yang butuh 200 ms untuk dibangun akan dibangun ulang terus-menerus. Pool dirancang untuk objek berumur pendek dan sangat sering, seperti buffer.
+- **`sync.Pool` untuk objek berukuran sangat beragam.** Satu buffer 10 MB yang pernah masuk pool akan tertahan di sana dan membuat RSS tinggi permanen. Buang objek yang melewati ambang ukuran, jangan kembalikan.
+- **`RWMutex` dengan asumsi selalu lebih cepat.** Pada critical section yang sangat pendek, pembukuan pembaca lebih mahal daripada keuntungan paralelismenya. `RWMutex` menang bila bagian baca benar-benar lama dan bacanya dominan. Ukur, jangan asumsikan.
+- **Mutex untuk koordinasi antar proses.** Mutex hanya berlaku dalam satu proses. Dua pod tidak saling melihat mutexnya, dan kebutuhan itu punya syarat yang sama sekali berbeda — lihat `concurrency/distributed_locks_redis.md`.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| p99 melar sementara CPU rendah | profil mutex | Kontensi: goroutine antre, bukan bekerja |
+| Throughput menempel di langit-langit | waktu tunggu lock vs waktu kerja | Critical section terlalu panjang |
+| `fatal error: all goroutines are asleep - deadlock!` | urutan pengambilan lock | Lock berurutan terbalik, atau lock upgrading pada `RWMutex` |
+| Data pengguna A muncul di respons pengguna B | apakah objek dari pool di-reset | Objek kotor dari `sync.Pool` |
+| Data race meski semua akses "sudah pakai mutex" | `go vet` copylocks | Struct pembawa mutex disalin by value |
+
+```bash
+# Aktifkan dulu di kode: runtime.SetMutexProfileFraction(5)
+go tool pprof -top http://localhost:6060/debug/pprof/mutex
+go tool pprof -list 'NamaFungsi' http://localhost:6060/debug/pprof/mutex
+
+# Aktifkan dulu di kode: runtime.SetBlockProfileRate(1)
+go tool pprof -top http://localhost:6060/debug/pprof/block
+
+# Menangkap penyalinan struct yang mengandung sync.Mutex / WaitGroup
+go vet ./...
+
+# Deadlock yang jarang muncul biasanya butuh pengulangan dan variasi paralelisme
+go test -race -count=50 -timeout=2m -cpu=1,4,8 ./...
+```

@@ -1,5 +1,7 @@
 # Atomic Operations & Lock-Free Patterns
 
+> **Berlaku:** Go 1.19+ (`atomic.Pointer[T]`, `atomic.Int64`) · **Lihat juga:** `concurrency/sync_primitives_deep.md` · `concurrency/data_race_detection.md` · `hft_zero_alloc/cpu_cache_optimization.md` · `runtime_internals/stdlib_modern_slices_maps_sync.md`
+
 ## Konsep Utama
 Paket `sync/atomic` menyediakan primitif operasi atomic pada level hardware. Operasi atomic memastikan akses ke memori dilakukan secara aman tanpa interupsi *concurrent*, dan menjadi fondasi utama untuk membangun *lock-free* dan *wait-free* data structures. Dibandingkan `sync.Mutex` yang memblokir goroutine dan melakukan *context-switching* pada level OS (mahal), operasi atomic diselesaikan dalam satu atau beberapa instruksi CPU saja (sangat cepat).
 
@@ -250,3 +252,34 @@ func (b *GoodStruct) Get() int64 {
 
 3. **Loop CAS Tak Berujung (Livelock)**: Dalam sistem dengan concurrency ekstrem (ribuan goroutine berebut meng-update satu atomic variable dengan CAS loop), beberapa goroutine mungkin terus-menerus kalah *balapan* (CAS return `false`) dan tidak bisa maju, sehingga terjebak loop membakar CPU selamanya (CPU bound spinning).
    - *Defensive*: Sisipkan backoff strategy seperti `runtime.Gosched()` untuk memberi kesempatan pada goroutine lain, atau batasi iterasi maksimal (maksimal `N` kali retries sebelum *fallback* ke `sync.Mutex` atau mengembalikan error).
+
+## Kapan JANGAN Pakai Ini
+
+- **Ketika yang dilindungi lebih dari satu variabel.** Dua operasi atomic yang masing-masing benar tidak menghasilkan satu operasi yang benar. Bila dua field harus berubah bersamaan, yang dibutuhkan mutex — atau satu `atomic.Pointer` ke struct yang diganti utuh.
+- **Ketika kontensinya rendah.** `sync.Mutex` yang tidak diperebutkan hanya beberapa nanodetik dan jauh lebih mudah dibaca. Mengganti mutex dengan atomic tanpa benchmark adalah menukar kejelasan dengan angka yang belum tentu ada.
+- **Untuk menyusun struktur data lock-free sendiri.** Stack dan queue lock-free buatan tangan hampir selalu salah pada percobaan pertama, dan bugnya muncul sekali dalam sejuta iterasi di mesin produksi saja. Pakai yang sudah teruji.
+- **Sebagai pengganti `sync.Map` atau `map`+mutex secara membabi buta.** Untuk peta yang sering ditulis, `map` biasa dengan mutex sering **lebih cepat** daripada `sync.Map`. Yang menentukan adalah pola akses, bukan nama paketnya.
+- **Ketika nilainya dibaca lalu dipakai untuk mengambil keputusan.** `if counter.Load() < batas { counter.Add(1) }` bukan operasi atomik — ada celah di antaranya. Yang benar `CompareAndSwap` dalam loop, atau mutex.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| CPU tinggi tanpa kemajuan pekerjaan | profil CPU pada `runtime/internal/atomic` | CAS loop kalah balapan terus-menerus (livelock) |
+| Throughput tidak naik saat core ditambah | rasio cache-miss | False sharing: variabel atomic berbagi cache line 64 byte |
+| `panic: sync/atomic: store of inconsistently typed value` | tipe yang di-`Store` | `atomic.Value` diisi dua tipe berbeda; ganti ke `atomic.Pointer[T]` |
+| Penghitung meleset sedikit dari yang seharusnya | pola baca-lalu-tulis | Ada celah antara `Load` dan `Add` |
+
+```bash
+# Ulangi banyak kali dengan paralelisme berbeda untuk memancing race yang langka
+go test -race -count=20 -cpu=1,2,4,8 ./...
+
+# CAS loop yang berputar tampak jelas di puncak profil CPU
+go tool pprof -top 'http://localhost:6060/debug/pprof/profile?seconds=30'
+
+# False sharing menaikkan rasio cache-miss secara mencolok (Linux)
+perf stat -e cache-misses,cache-references,LLC-load-misses ./app
+
+# Memetakan cache line yang benar-benar diperebutkan antar core (Linux, perlu izin)
+perf c2c record -- ./app && perf c2c report --stdio | head -40
+```

@@ -1,5 +1,7 @@
 # Distributed Locks & Redlock (Redis)
 
+> **Berlaku:** Go 1.21+ · Redis 7+ · `go-redsync` · **Lihat juga:** `distributed_patterns_resilience/idempotency_key_engine.md` · `db_sqlc/database_locking_strategies.md` · `background_jobs_worker/cron_scheduler_go.md` · `caching_strategy/redis_advanced_patterns.md`
+
 ## Konsep Utama
 Dalam transisi dari aplikasi *monolith* menuju arsitektur *microservices* terdistribusi yang masif, primitif sinkronisasi Go bawaan (seperti `sync.Mutex` atau `channels`) menjadi **tidak relevan** untuk menjaga konsistensi eksternal. `sync.Mutex` di Go secara ketat hanya mengunci goroutine *dalam satu mesin / alamat RAM (process space) yang sama*. Jika aplikasi penjadwal tagihan (Billing Job) Anda di-deploy di 5 Pod Kubernetes replika, kelimanya akan melakukan proses `cron` secara serentak, menembus `sync.Mutex` lokal mereka, dan merusak / menduplikasi tagihan user di Database (Data Corruption). 
 
@@ -227,3 +229,40 @@ func LockAndKeepAlive(ctx context.Context) {
 
 3. **Master-Slave Replication Lag**: Jika Anda menggunakan topologi redis standard Master-Replica. Ada jeda waktu asinkron saat Master menerima `SETNX` (mendapat Lock), lalu sinkronisasi data ke Replica memakan waktu milidetik. Apabila persis saat itu server Master *crash mati total*, Replica akan diangkat jadi Master baru lewat *Redis Sentinel*, TETAPI status Lock Anda tadi lenyap (karena belum tersalin)! Server Pod lain akan dengan mudah mengklaim lock di Master baru ini.
    - *Defensive*: Jika menjumpai kasus di mana 0.0001% data duplikat tidak bisa ditoleransi sama sekali (misal: Transfer Bank Rp100 Miliar), Anda TIDAK BOLEH memercayakan lock pada sistem eventually-consistent seperti Redis, apalagi arsitektur Master-Slave tunggal. Beralihlah pada algoritma mutlak *CP (Consistency/Partition-tolerance)* seperti *ZooKeeper*, *etcd*, atau penguncian level Database relasional langsung (`SELECT FOR UPDATE`). Redis Lock adalah trade-off agar sistem berjalan kencang (High Availability), bukan absolut.
+
+## Kapan JANGAN Pakai Ini
+
+- **Ketika kebenarannya wajib** — uang, stok, kuota. Lock Redis bersifat *advisory* dan bisa lenyap saat failover master-replica. Untuk jaminan mutlak, kunci di database yang memegang datanya (`SELECT ... FOR UPDATE`), atau pakai sistem CP seperti etcd.
+- **Ketika operasinya bisa dibuat idempoten.** Operasi yang aman dijalankan dua kali tidak membutuhkan lock sama sekali. Idempotency key lebih sederhana, lebih murah, dan tidak punya mode gagal yang halus seperti TTL kedaluwarsa di tengah jalan.
+- **Untuk memastikan satu cron berjalan di satu pod.** Yang tepat adalah *leader election* dengan sewa yang diperpanjang — `coordination.k8s.io/Lease` atau etcd — bukan lock TTL manual yang harus Anda perpanjang sendiri.
+- **Redlock multi-master demi "lebih aman".** Ia menambah kerumitan besar untuk jaminan yang masih diperdebatkan di literatur. Redis satu instans ditambah *fencing token* di database biasanya pilihan yang lebih jujur dan lebih mudah dinalar.
+- **Memegang lock selama panggilan jaringan tanpa batas waktu.** Bila panggilannya menggantung lebih lama dari TTL, lock hangus sementara pekerjaan masih berjalan — persis keadaan yang lock itu seharusnya cegah.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Job terjadwal berjalan dua kali | durasi job vs TTL lock | TTL hangus di tengah pekerjaan; butuh perpanjangan berkala |
+| Job berhenti total setelah satu crash | `TTL` kunci = `-1` | Lock dibuat tanpa kedaluwarsa; tidak akan pernah lepas sendiri |
+| Duplikasi tepat setelah failover Redis | waktu insiden vs `role` Redis | Lock belum tereplikasi saat master berganti |
+| Latensi melonjak pada operasi ber-lock | `--latency-history` Redis | Lock menunggu Redis yang sedang lambat |
+| Pod lambat menulis data usang | apakah ada fencing token | Lock sudah direbut pod lain; database tidak tahu apa-apa |
+
+```bash
+# Lock yang tertinggal dan TTL-nya. -1 berarti TANPA kedaluwarsa: bom waktu.
+redis-cli --scan --pattern 'lock:*' | head -20
+redis-cli ttl lock:migrasi-harian
+
+# Apakah lock hilang karena pergantian peran?
+redis-cli info replication | grep -E 'role|master_link_status|slave_repl_offset'
+
+# Redis yang lambat membuat semua pemegang lock ikut lambat
+redis-cli --latency-history -i 5
+redis-cli slowlog get 10
+```
+
+```bash
+# Job yang berjalan dua kali meninggalkan dua baris "mulai" untuk satu jadwal
+kubectl logs -l app=worker --since=24h \
+  | grep 'job_mulai' | jq -r '.jadwal_id' | sort | uniq -c | awk '$1 > 1'
+```

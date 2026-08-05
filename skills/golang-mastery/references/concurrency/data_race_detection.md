@@ -1,5 +1,7 @@
 # Data Race Detection & Mitigation
 
+> **Berlaku:** Go 1.21+ · ThreadSanitizer · **Lihat juga:** `concurrency/sync_primitives_deep.md` · `concurrency/atomic_lockfree_patterns.md` · `testing_quality/synctest_deterministic_concurrency.md` · `testing_quality/fuzz_testing_go.md`
+
 ## Konsep Utama
 Data Race (Balapan Data) adalah bug konkurensi terburuk, paling umum, sekaligus paling sulit direproduksi secara deterministik. Di ekosistem Go, sebuah *Data Race* secara definitif terjadi apabila:
 1. Dua goroutine atau lebih mengakses alamat memori yang **sama** secara **berbarengan** (concurrently).
@@ -264,3 +266,36 @@ func (c *CounterGood) Val() int {
 
 3. **OOM & CPU Thrashing Akibat -race di Production**: Banyak engineer mengira bahwa flag `-race` baik dinyalakan di production server untuk mengawasi bug. Ini adalah bunuh diri infrastruktur. Mengaktifkan *Race Detector* membuat binary membesar, dan saat runtime akan meningkatkan konsumsi Memory 5x - 10x lipat dan mencekik CPU karena setiap aktivitas RAM sekecil apapun dicatat oleh struktur *Vector Clock* TSan.
    - *Defensive*: **JANGAN PERNAH** me-release binary ke *Production Traffic* dengan `-race`. Gunakan build tags standar untuk rilis, dan batasi pemakaian binaries `-race` *hanya* untuk CI/CD pipeline, Integration Tests, atau maksimal di environment *Staging* internal dengan beban trafik replika yang kecil.
+
+## Kapan JANGAN Pakai Ini
+
+- **Sebagai satu-satunya gerbang mutu konkurensi.** `-race` hanya melihat jalur yang benar-benar dieksekusi. Cabang `if` yang tidak pernah tersentuh uji berarti detektornya buta total di sana. Cakupan uji adalah prasyarat, bukan pelengkap.
+- **Di produksi.** CPU naik 2–20×, memori 5–10×. Binary ber-`-race` layak untuk CI dan staging bertrafik kecil; melepasnya ke trafik nyata adalah menukar satu masalah dengan masalah yang lebih besar.
+- **Untuk mencari deadlock, kebocoran goroutine, atau logika yang salah.** TSan hanya menjawab satu pertanyaan: apakah ada dua akses tak tersinkronisasi ke alamat memori yang sama. Deadlock butuh profil mutex; kebocoran butuh `goleak`; logika salah butuh uji.
+- **Menambal laporan race dengan mutex tanpa memahami invariannya.** Menambahkan lock membuat laporannya hilang, tetapi bila urutan operasinya memang salah, yang tersisa adalah korupsi logis yang kini tidak terdeteksi alat apa pun.
+- **Mengandalkan satu platform CI.** Dukungan `-race` dan perilaku penjadwalan berbeda antar OS/arsitektur. Bila produksi berjalan di `linux/amd64`, uji race WAJIB juga berjalan di sana.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| `fatal error: concurrent map writes` | stack trace saat crash | Race pada `map`; `recover()` tidak bisa menolong — proses langsung mati |
+| Penghitung meleset kecil dan tidak konsisten | apakah semua akses tersinkronisasi | Pembacaan tanpa lock terhadap variabel yang sedang ditulis |
+| Field bernilai mustahil (mis. panjang slice negatif) | penyalinan struct antar goroutine | Torn read: struct disalin saat sedang diubah |
+| Bug hanya muncul di produksi, tidak di laptop | jumlah core produksi vs lokal | Paralelisme nyata membuka jalur yang tidak pernah terjadi di 1–2 core |
+| Konfigurasi kadang terbaca versi lama | mekanisme hot-reload | Penukaran konfigurasi tanpa `atomic.Pointer` |
+
+```bash
+# Ulangi dan variasikan paralelisme -- race langka jarang muncul pada percobaan pertama
+go test -race -count=20 -cpu=1,2,4,8 ./...
+
+# Hentikan pada laporan pertama dan simpan riwayat akses yang lebih panjang
+GORACE="halt_on_error=1 history_size=7 log_path=/tmp/race" go test -race ./...
+
+# Binary ber-race untuk staging -- JANGAN untuk trafik produksi
+go build -race -o app-race ./cmd/app
+
+# `concurrent map writes` mematikan proses; cari jejaknya di riwayat restart
+kubectl logs -l app=api --previous | grep -A20 'fatal error: concurrent map'
+kubectl get pods -l app=api -o jsonpath='{.items[*].status.containerStatuses[*].restartCount}'
+```

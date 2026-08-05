@@ -1,5 +1,7 @@
 # Channel Patterns & Pipelines
 
+> **Berlaku:** Go 1.21+ · **Lihat juga:** `concurrency/worker_pool_errgroup.md` · `concurrency/goroutine_leak_detection.md` · `runtime_internals/iterators_range_over_func.md` · `hft_zero_alloc/lock_free_ring_buffer.md`
+
 ## Konsep Utama
 Channels di Go adalah implementasi dari konsep **CSP (Communicating Sequential Processes)**. Di bawah kap mesin (runtime/chan.go), channel adalah struct `hchan` yang mengelola sebuah *circular buffer* (untuk buffered channel), antrean penunggu `recvq` dan `sendq` yang berisi linked-list dari struct `sudog` (merepresentasikan goroutine yang sedang park/terblokir), serta sebuah `mutex` untuk atomicity operasi sinkronisasi. State machine dari channel memastikan bahwa saat data dikirim/diterima, runtime akan melakukan memory copy langsung (memmove) dari stack *sender* ke stack *receiver* untuk mengoptimalkan performa. Dalam arsitektur concurrent modern, channels sangat krusial digunakan untuk membangun **pipelines** yang modular dan terisolasi.
 
@@ -302,3 +304,33 @@ func goodWorker(ctx context.Context, in <-chan int, out chan<- int) {
 
 3. **Overly Buffered Channels sebagai Silver Bullet**: Menggunakan buffered channel yang kapasitasnya diset sangat besar (misal `make(chan int, 100000)`) seringkali dilakukan untuk mengatasi "lag" pada sistem, padahal ini menyembunyikan arsitektur pipeline yang buruk. *Sender* akan melesat cepat mengisi memori sementara *receiver* lambat (bottleneck tidak terpecahkan), menyebabkan spike Memory OOM yang dahsyat.
    - *Defensive*: Mulai desain pipeline selalu dengan channel unbuffered (`size 0`) untuk memastikan aliran tersinkronisasi 1:1. Jika memang butuh buffer untuk menoleransi burst traffic, gunakan ukuran sekecil mungkin yang terukur (misal `size 5` atau `10`), dan tingkatkan perlahan jika terbukti melegakan bottleneck, bukan diset tinggi sejak awal.
+
+## Kapan JANGAN Pakai Ini
+
+- **Sebagai antrean pekerjaan.** Channel tidak bisa diperiksa panjangnya secara bermakna, tidak bisa diprioritaskan, tidak bisa di-retry, dan isinya lenyap saat proses mati. Bila pekerjaannya tidak boleh hilang, yang dibutuhkan antrean sungguhan — lihat `background_jobs_worker/`.
+- **Untuk melindungi satu variabel.** `mutex` atau `atomic` lebih murah, lebih pendek, dan lebih mudah dibaca daripada goroutine penjaga yang berkomunikasi lewat channel.
+- **Untuk melewatkan data yang tidak butuh konkurensi.** Pipeline tiga tahap dengan tiga goroutine hanya untuk mentransformasi slice adalah kerumitan tanpa imbalan. `iter.Seq` melakukan hal yang sama tanpa goroutine — lihat `runtime_internals/iterators_range_over_func.md`.
+- **Lintas proses atau lintas mesin.** Channel adalah konstruksi dalam-proses. Aliran yang harus bertahan melewati restart membutuhkan outbox atau message broker.
+- **Pada jalur latensi sangat rendah.** Setiap operasi channel melibatkan lock runtime dan kemungkinan penjadwalan ulang goroutine. Di jalur mikrodetik, ring buffer lock-free adalah alat yang benar — lihat `hft_zero_alloc/lock_free_ring_buffer.md`.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Satu core 100% tanpa kemajuan | profil CPU pada `select` | `default:` di dalam loop tanpa jeda (busy-wait) |
+| RSS melonjak saat trafik naik | kapasitas buffer channel | Buffer besar menyembunyikan hilir yang lambat |
+| p99 melompat berkala | tahap pipeline yang paling lambat | Backpressure mengunci hulu sampai hilir menyusul |
+| Goroutine menumpuk pada `chan send` | `pprof/goroutine?debug=2` | Consumer sudah pergi; pengirim tidak memeriksa `ctx.Done()` |
+| `panic: send on closed channel` | siapa yang memanggil `close` | Receiver menutup channel; hanya sender yang boleh |
+
+```bash
+# Busy-wait terlihat sebagai runtime.selectgo yang mendominasi profil CPU
+go tool pprof -top 'http://localhost:6060/debug/pprof/profile?seconds=30'
+
+# Distribusi status goroutine: banyak 'chan send' = hilir tidak mengonsumsi
+curl -s 'localhost:6060/debug/pprof/goroutine?debug=2' \
+  | grep -oE '\[chan (send|receive)[^]]*\]' | sort | uniq -c | sort -rn
+
+# Penjadwal kelebihan beban: runqueue panjang menandakan goroutine terlalu banyak
+GODEBUG=schedtrace=1000 ./app 2>&1 | head -20
+```

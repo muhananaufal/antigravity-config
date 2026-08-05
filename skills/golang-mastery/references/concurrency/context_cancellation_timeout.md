@@ -1,5 +1,7 @@
 # Context, Cancellation, & Timeouts
 
+> **Berlaku:** Go 1.21+ (`WithoutCancel`, `AfterFunc`) · **Lihat juga:** `concurrency/goroutine_leak_detection.md` · `concurrency/worker_pool_errgroup.md` · `observability_resilience/graceful_shutdown_drain.md` · `microservices_grpc/http_client_production.md`
+
 ## Konsep Utama
 Paket `context` adalah tulang punggung (backbone) fundamental untuk manajemen siklus hidup goroutine dan propagasi *request-scoped data* di seluruh batas-batas API (API boundaries) pada ekosistem Go. Pattern ini wajib (mandatory) digunakan terutama pada aplikasi berbasis jaringan/HTTP, database driver, dan Microservices.
 
@@ -215,3 +217,38 @@ func (repo *UserRepository) GetUser(ctx context.Context, id int) {
 
 3. **Goroutine Latar Belakang (Fire-and-Forget)**: Terkadang API endpoint perlu merespons ke HTTP Client (User) secepat mungkin, lalu men-spawn goroutine background (e.g. mengirim audit log atau notifikasi email). Jika Anda secara naif mem-passing *Original HTTP Request Context* ke goroutine background tersebut, *router framework* (seperti Gin/Echo) akan otomatis me-`cancel()` context saat response dikirimkan. Akibatnya background task gagal di-tengah jalan karena Context dibatalkan paksa.
    - *Defensive*: Gunakan fungsi khusus `context.WithoutCancel(parentCtx)` (tersedia di Go 1.21+) yang menciptakan context anak yang mewarisi *Values* dari parent (jadi TraceID tidak hilang), namun memutus rantai sinyal *Cancellation*, sehingga goroutine log Anda aman bekerja di background.
+
+## Kapan JANGAN Pakai Ini
+
+- **Untuk menghentikan komputasi CPU-bound.** Context hanya memberi *sinyal*; ia tidak menginterupsi apa pun. Loop yang tidak memeriksa `ctx.Err()` akan berjalan sampai selesai meski context sudah lama dibatalkan.
+- **Sebagai wadah dependensi wajib.** Bila fungsi tidak bisa bekerja tanpa sebuah nilai, nilai itu adalah parameter — bukan isi context. Aturannya sederhana: hilangnya nilai dari context tidak boleh menyebabkan `panic`.
+- **Menyalin timeout yang sama ke setiap lapisan.** Handler 5 detik → service 5 detik → repository 5 detik berarti lapisan terdalam tidak pernah punya sisa waktu untuk retry. Yang benar adalah **anggaran waktu yang menyusut**: tiap lapisan menyisakan sebagian untuk pemanggilnya.
+- **Untuk pekerjaan yang WAJIB selesai** — commit outbox, penulisan audit, pelepasan lock. Membatalkannya justru merusak keadaan. Pakai `context.WithoutCancel(ctx)` agar `Values` (TraceID) tetap terbawa, lalu beri batas waktu sendiri.
+- **Sebagai satu-satunya alat ketahanan.** Timeout tanpa retry dan circuit breaker hanya mengubah "lambat" menjadi "gagal cepat" — beban ke hilir tetap sama.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Lonjakan `context deadline exceeded` sementara DB sehat | p99 hilir vs nilai timeout | Anggaran waktu lebih ketat dari latensi normal hilir |
+| Banyak `context canceled` pada operasi tulis | rasio canceled vs deadline | Klien memutus di tengah tulis; butuh idempotency key |
+| Jumlah goroutine naik perlahan | `pprof/goroutine` | `cancel()` tidak dipanggil; timer tertahan sampai deadline |
+| Pekerjaan latar mati mendadak setelah respons dikirim | apakah context request diteruskan | Framework membatalkan context saat respons selesai; butuh `WithoutCancel` |
+| Retry hilir tidak pernah terjadi | sisa waktu saat masuk lapisan terdalam | Timeout disalin sama besar di tiap lapisan |
+
+```bash
+# Bedakan mati karena deadline sendiri vs klien yang pergi -- penanganannya berbeda
+kubectl logs -l app=api --since=1h | grep -c 'context deadline exceeded'
+kubectl logs -l app=api --since=1h | grep -c 'context canceled'
+
+# Tren goroutine: bandingkan dua cuplikan, bukan angka absolut
+curl -s 'localhost:6060/debug/pprof/goroutine' -o g1.pb.gz
+# ... tunggu 10 menit ...
+curl -s 'localhost:6060/debug/pprof/goroutine' -o g2.pb.gz
+go tool pprof -base g1.pb.gz g2.pb.gz
+
+# Sisa deadline yang benar-benar sampai ke lapisan terdalam.
+# Catat ini sebagai field log: time.Until(deadline) saat masuk repository.
+kubectl logs -l app=api --since=15m | jq -r 'select(.sisa_deadline_ms) | .sisa_deadline_ms' \
+  | sort -n | head -20
+```
