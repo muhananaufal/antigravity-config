@@ -72,6 +72,9 @@ Domain yang hampir selalu relevan untuk Go service manapun:
 | Insiden produksi, postmortem, severity, MTTD/MTTM, on-call | `references/engineering_practice/incident_postmortem.md` |
 | Melakukan code review, menyusun standar review, linter kustom tim | `references/engineering_practice/code_review_go.md` |
 | Menulis design doc / RFC fitur besar sebelum implementasi | `references/engineering_practice/technical_design_doc.md` |
+| Query lambat, membaca `EXPLAIN ANALYZE`, memilih index komposit, `Seq Scan` | `references/db_sqlc/index_design_explain_analyze.md` |
+| Read replica, replication lag, read-after-write, routing baca/tulis | `references/db_sqlc/read_replica_routing.md` |
+| Sharding, shard key, partisi tabel, fan-out query, rebalancing | `references/db_sqlc/sharding_partitioning.md` |
 | Test konkurensi rapuh, `time.Sleep` di test, deadlock menggantung di CI | `references/testing_quality/synctest_deterministic_concurrency.md` |
 | Streaming data besar tanpa materialisasi, iterator kustom, `iter.Seq` | `references/runtime_internals/iterators_range_over_func.md` |
 | Perbaikan performa dari profil produksi tanpa mengubah kode | `references/runtime_internals/pgo_profile_guided_optimization.md` |
