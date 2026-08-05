@@ -107,7 +107,11 @@ CI/CD Pipeline — Docker Build & Deploy Flow
 # ─────────────────────────────────────────────────
 # Stage 1: Builder
 # ─────────────────────────────────────────────────
-FROM golang:1.23-alpine AS builder
+# --platform=$BUILDPLATFORM: builder berjalan NATIF di arsitektur mesin build,
+# lalu cross-compile ke target. Tanpa ini, buildx menjalankan tahap builder
+# lewat emulasi QEMU untuk setiap platform target -- kompilasi Go bisa 5-10x
+# lebih lambat, tanpa manfaat apa pun karena Go memang bisa cross-compile.
+FROM --platform=$BUILDPLATFORM golang:1.23-alpine AS builder
 
 # Install build dependencies (hanya di builder stage)
 RUN apk add --no-cache git ca-certificates tzdata
@@ -129,7 +133,17 @@ ARG VERSION=dev
 ARG COMMIT=unknown
 ARG BUILD_TIME=unknown
 
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+# TARGETOS/TARGETARCH DIISI OTOMATIS OLEH BUILDKIT dari --platform.
+#
+# `GOARCH=amd64` yang dipatok mati -- bentuk yang paling sering tersalin --
+# membatalkan seluruh guna `docker buildx --platform linux/amd64,linux/arm64`
+# yang diperintahkan Edge Case 4 di bawah: manifest arm64-nya akan berisi
+# BINARY AMD64, dan pod di node Graviton mati dengan `exec format error`.
+# Gejalanya baru muncul di node ARM, jadi lolos di seluruh CI berbasis x86.
+ARG TARGETOS
+ARG TARGETARCH
+
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
     -trimpath \
     -ldflags="-s -w \
       -X main.Version=${VERSION} \
@@ -138,8 +152,21 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     -o /build/app \
     ./cmd/server
 
-# Verifikasi binary (optional tapi direkomendasikan di CI)
-RUN /build/app --version || true
+# CATATAN: TIDAK ADA `RUN /build/app --version || true` di sini.
+#
+# Tiga alasan, dan ketiganya menggigit di CI:
+#   1. `|| true` membuat langkah "verifikasi" TIDAK PERNAH BISA GAGAL.
+#      Ia memverifikasi nol hal.
+#   2. Bila binernya tidak mengenali --version, ia menjalankan apa yang memang
+#      dilakukannya: ListenAndServe. `|| true` hanya menangkap exit code
+#      bukan-nol; ia TIDAK menangkap proses yang menggantung. Build-nya
+#      berhenti di situ sampai timeout CI.
+#   3. Saat cross-compile (baris di atas), binernya memang tidak bisa
+#      dieksekusi oleh builder sama sekali.
+#
+# Verifikasi yang benar tidak menjalankan biner: periksa arsitekturnya.
+RUN go tool nm /build/app > /dev/null && \
+    echo "binary OK: $(ls -lh /build/app | awk '{print $5}')"
 
 # ─────────────────────────────────────────────────
 # Stage 2: Runtime (distroless — ~20MB final image)
@@ -181,8 +208,11 @@ mocks/
 # Documentation
 docs/
 *.md
-!go.mod
-!go.sum
+# CATATAN: `!go.mod` dan `!go.sum` sering ditambahkan di sini "untuk berjaga".
+# Keduanya TIDAK diperlukan: pola `*.md` mencocokkan nama yang berakhiran
+# `.md`, sedangkan `go.mod` berakhiran `.mod`. Pengecualian yang tidak
+# mengecualikan apa pun justru menyesatkan pembaca berikutnya bahwa ada
+# tabrakan pola di sini.
 
 # Build artifacts lokal (jangan COPY ke container)
 bin/
@@ -208,10 +238,19 @@ docker-compose*.yml
 secrets/
 ```
 
+**`vendor/` sengaja TIDAK ada di daftar ini** — dan Anti-Pattern 3 di bawah yang menyarankan mengecualikannya perlu diluruskan. Sejak Go 1.14, kehadiran `vendor/` yang konsisten dengan `go.mod` membuat `go build` otomatis memakai `-mod=vendor`. Konsekuensinya:
+
+- **Proyek yang memakai vendoring:** mengecualikan `vendor/` membuat build di dalam container diam-diam beralih ke unduhan modul dari jaringan — menghilangkan justru sifat yang membuat orang memilih vendoring (build hermetik, tanpa jaringan, tanpa bergantung pada proxy yang masih hidup). Jangan kecualikan.
+- **Proyek yang tidak memakai vendoring:** direktori itu memang tidak ada, jadi entri `.dockerignore`-nya tidak melakukan apa pun.
+
+Tidak ada kasus di mana mengecualikannya membantu. Yang benar-benar layak dikhawatirkan dari ukuran build context adalah `.git/`, `bin/`, dan `dist/` — ketiganya sudah ada di daftar.
+
 ### docker-compose.yml — Development & Staging
 
 ```yaml
-version: "3.9"
+# TIDAK ADA `version:` di sini. Kunci itu OBSOLETE pada Compose V2 dan hanya
+# menghasilkan peringatan "the attribute `version` is obsolete, it will be
+# ignored". Compose Spec menentukan versinya dari isi berkas.
 
 services:
   app:
@@ -237,8 +276,20 @@ services:
         reservations:
           memory: 64M
           cpus: "0.1"
+    # HEALTHCHECK PADA IMAGE DISTROLESS TIDAK BOLEH MEMANGGIL wget/curl/sh.
+    #
+    # `test: ["CMD", "wget", ...]` -- bentuk yang paling sering tersalin --
+    # DIJAMIN GAGAL di sini: image runtime-nya distroless/static, yang memang
+    # tidak punya shell, wget, maupun curl (lihat tabel base image di bagian 1
+    # berkas ini). Akibatnya container selamanya berstatus `unhealthy`, dan
+    # setiap service yang memakai `depends_on.condition: service_healthy`
+    # terhadapnya tidak akan pernah start.
+    #
+    # Solusinya: BINER ITU SENDIRI yang jadi health checker. Tambahkan flag
+    # `-healthcheck` di main() yang melakukan GET ke localhost lalu exit 0/1.
+    # Nol dependensi baru, dan tetap bekerja di scratch.
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      test: ["CMD", "/app", "-healthcheck"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -297,162 +348,317 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
 
-func main() {
-	srv := &http.Server{
-		Addr:    ":8080",
-		Handler: buildRouter(),
-	}
+// jedaPropagasi memberi kube-proxy / ingress controller waktu untuk mencabut
+// Pod ini dari daftar endpoint SEBELUM server berhenti menerima koneksi.
+// Lihat komentar panjang di main().
+const jedaPropagasi = 5 * time.Second
 
-	// Health check endpoint — wajib ada sebelum app terima traffic
-	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"ok"}`))
+// App menyatukan state kesiapan agar bisa dibaca handler DAN diubah oleh
+// penangan sinyal.
+type App struct {
+	siap atomic.Bool
+}
+
+// Router membangun SATU mux yang benar-benar dilayani server.
+//
+// Ini bagian yang paling mudah salah dan paling mahal: `http.HandleFunc(...)`
+// mendaftar ke http.DefaultServeMux, sementara server dijalankan dengan
+// `Handler: buildRouter()`. Keduanya mux yang BERBEDA. Akibatnya /health dan
+// /ready mengembalikan 404, livenessProbe gagal terus, dan Pod masuk
+// CrashLoopBackOff -- sementara aplikasinya sendiri sehat sempurna.
+//
+// Gejalanya menyesatkan: log aplikasi bersih, tidak ada panic, tidak ada
+// galat. Yang terlihat hanya Pod yang restart berulang.
+func (a *App) Router() http.Handler {
+	mux := http.NewServeMux()
+
+	// LIVENESS: "apakah proses ini masih waras?" JANGAN periksa dependensi
+	// di sini. Liveness yang memeriksa database berarti database yang lambat
+	// membuat K8s me-restart SELURUH pod aplikasi Anda -- menambah beban ke
+	// database yang sudah kesulitan. Itu cara memperpanjang insiden.
+	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
+		tulisJSON(w, http.StatusOK, `{"status":"ok"}`)
 	})
 
-	// Readiness probe — cek dependencies (DB, Redis) siap
-	http.HandleFunc("/ready", func(w http.ResponseWriter, r *http.Request) {
-		if err := checkDependencies(r.Context()); err != nil {
-			w.WriteHeader(http.StatusServiceUnavailable)
-			w.Write([]byte(`{"status":"not_ready"}`))
+	// READINESS: "apakah saya siap MENERIMA trafik?" Di sinilah dependensi
+	// diperiksa, dan di sinilah shutdown mulai bekerja.
+	mux.HandleFunc("GET /ready", func(w http.ResponseWriter, r *http.Request) {
+		if !a.siap.Load() {
+			tulisJSON(w, http.StatusServiceUnavailable, `{"status":"shutting_down"}`)
 			return
 		}
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"ready"}`))
+		if err := checkDependencies(r.Context()); err != nil {
+			slog.WarnContext(r.Context(), "readiness gagal", "galat", err)
+			tulisJSON(w, http.StatusServiceUnavailable, `{"status":"not_ready"}`)
+			return
+		}
+		tulisJSON(w, http.StatusOK, `{"status":"ready"}`)
 	})
 
-	// Channel untuk menerima OS signal
+	mux.Handle("/", rutBisnis())
+	return mux
+}
+
+func tulisJSON(w http.ResponseWriter, kode int, body string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(kode)
+	// Galat Write di sini berarti klien sudah memutus koneksi -- tidak ada
+	// yang bisa dilakukan, dan tidak layak jadi log. Dibuang SECARA SADAR.
+	_, _ = w.Write([]byte(body))
+}
+
+func main() {
+	app := &App{}
+	app.siap.Store(true)
+
+	srv := &http.Server{
+		Addr:              ":8080",
+		Handler:           app.Router(),
+		ReadHeaderTimeout: 10 * time.Second, // tanpa ini, Slowloris menahan koneksi tanpa batas
+	}
+
+	// SIGTERM: dikirim K8s saat pod dihentikan. SIGINT: Ctrl+C saat dev.
 	quit := make(chan os.Signal, 1)
-	// SIGTERM: dikirim oleh K8s saat pod dihentikan
-	// SIGINT: Ctrl+C saat development
 	signal.Notify(quit, syscall.SIGTERM, syscall.SIGINT)
 
-	// Start server di goroutine terpisah
+	galatServer := make(chan error, 1)
 	go func() {
-		slog.Info("server starting", "addr", srv.Addr)
+		slog.Info("server dimulai", "addr", srv.Addr)
 		if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
-			slog.Error("server error", "err", err)
-			os.Exit(1)
+			// Dikirim ke channel, BUKAN os.Exit(1) dari dalam goroutine.
+			// os.Exit melewati SELURUH defer dan mematikan proses di tengah --
+			// termasuk melewatkan penutupan pool DB dan flush log.
+			galatServer <- err
 		}
 	}()
 
-	// Block sampai signal diterima
-	sig := <-quit
-	slog.Info("shutdown signal received", "signal", sig)
-
-	// Context dengan deadline untuk drain in-flight requests
-	// K8s terminationGracePeriodSeconds default: 30s
-	// Set timeout lebih kecil agar ada buffer sebelum SIGKILL
-	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
-	defer cancel()
-
-	// Shutdown: tidak menerima request baru, tunggu request aktif selesai
-	if err := srv.Shutdown(ctx); err != nil {
-		slog.Error("graceful shutdown failed", "err", err)
+	select {
+	case err := <-galatServer:
+		slog.Error("server gagal dijalankan", "galat", err)
 		os.Exit(1)
+	case sig := <-quit:
+		slog.Info("sinyal shutdown diterima", "signal", sig)
 	}
 
-	// Drain dependencies (DB pool, Redis, message queue subscriber)
+	// ─────────────────────────────────────────────────────────────
+	// LANGKAH 1: NYATAKAN TIDAK SIAP, LALU TUNGGU.
+	//
+	// Ini langkah yang paling sering hilang, dan ketiadaannya membuat
+	// "graceful shutdown" tetap memutus permintaan pengguna.
+	//
+	// Saat SIGTERM tiba, Pod ini MASIH TERDAFTAR sebagai endpoint Service.
+	// Penghapusannya bersifat asinkron: kube-apiserver -> EndpointSlice ->
+	// setiap kube-proxy di setiap node -> aturan iptables/IPVS. Rantai itu
+	// makan ratusan milidetik sampai beberapa detik pada klaster besar, dan
+	// ingress controller punya cache-nya sendiri lagi.
+	//
+	// Bila kita langsung memanggil Shutdown, selama jendela itu kube-proxy
+	// MASIH mengarahkan koneksi BARU ke sini -- dan menemukan listener yang
+	// sudah tutup. Pengguna menerima connection refused / 502. Requests yang
+	// sudah masuk memang selesai dengan rapi; yang datang di detik-detik itu
+	// tidak.
+	//
+	// Urutan yang benar: not-ready dulu, beri jeda propagasi, BARU Shutdown.
+	// ─────────────────────────────────────────────────────────────
+	app.siap.Store(false)
+	slog.Info("readiness dimatikan, menunggu propagasi endpoint", "jeda", jedaPropagasi)
+	time.Sleep(jedaPropagasi)
+
+	// LANGKAH 2: berhenti menerima koneksi baru, tunggu yang aktif selesai.
+	//
+	// Anggaran waktu harus MUAT di terminationGracePeriodSeconds (default 30s),
+	// SUDAH TERMASUK jedaPropagasi di atas. 5s + 20s = 25s, menyisakan 5s
+	// sebagai margin sebelum SIGKILL.
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	errShutdown := srv.Shutdown(ctx)
+	if errShutdown != nil {
+		slog.Error("shutdown melewati batas waktu, koneksi tersisa diputus", "galat", errShutdown)
+	}
+
+	// LANGKAH 3: tutup dependensi -- SELALU, termasuk saat Shutdown gagal.
+	//
+	// Versi sebelumnya memanggil os.Exit(1) begitu Shutdown gagal, sehingga
+	// drain TIDAK PERNAH berjalan justru pada jalur kegagalan: koneksi DB
+	// tidak ditutup, transaksi menggantung sampai timeout sisi server, dan
+	// pesan yang belum di-ack tidak dikembalikan ke antrean.
 	drainDependencies()
 
-	slog.Info("server stopped gracefully")
+	if errShutdown != nil {
+		os.Exit(1)
+	}
+	slog.Info("server berhenti dengan rapi")
 }
 
+func rutBisnis() http.Handler { return http.NewServeMux() }
+
 func drainDependencies() {
-	// db.Close(), redisClient.Close(), natsConn.Drain(), etc.
+	// db.Close(), redisClient.Close(), natsConn.Drain(), dst.
 }
 
 func checkDependencies(ctx context.Context) error {
-	// db.PingContext(ctx), redisClient.Ping(ctx).Err(), etc.
+	// db.PingContext(ctx), redisClient.Ping(ctx).Err(), dst.
 	return nil
 }
 ```
 
 ### Unit Test — Verify Graceful Shutdown Behavior
 
+> **Ketiga uji versi sebelumnya tidak menyentuh kode aplikasi sama sekali.**
+>
+> `TestHealthEndpoint` dan `TestReadinessEndpoint_Unhealthy` mendefinisikan
+> `http.HandlerFunc` BARU di dalam ujinya, lalu memeriksa bahwa handler itu
+> mengembalikan apa yang baru saja ditulis di baris atasnya. Yang teruji adalah
+> `httptest`, bukan rute aplikasi.
+>
+> Itulah sebabnya cacat mux di atas — `/health` terdaftar di
+> `http.DefaultServeMux` sementara server melayani mux lain — bisa bertahan
+> di berkas yang punya "unit test untuk health endpoint". Uji yang tidak
+> memanggil `app.Router()` tidak akan pernah menemukannya.
+
 ```go
-package main_test
+package main
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
-	"syscall"
 	"testing"
 	"time"
 )
 
-func TestHealthEndpoint(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/health", nil)
-	w := httptest.NewRecorder()
+// Uji memanggil app.Router() -- ROUTER YANG SAMA yang dipakai server.
+// Ini satu-satunya bentuk yang bisa menangkap handler yang terdaftar di mux
+// yang salah.
+func TestRouter_HealthDanReady(t *testing.T) {
+	app := &App{}
+	app.siap.Store(true)
+	router := app.Router()
 
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"ok"}`))
-	})
-	handler.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Errorf("expected 200, got %d", w.Code)
+	kasus := []struct {
+		nama, jalur string
+		mauKode     int
+	}{
+		{"liveness selalu ok", "/health", http.StatusOK},
+		{"readiness saat siap", "/ready", http.StatusOK},
+	}
+	for _, k := range kasus {
+		t.Run(k.nama, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, k.jalur, nil))
+			if w.Code != k.mauKode {
+				t.Errorf("%s = %d, mau %d (body: %s)", k.jalur, w.Code, k.mauKode, w.Body)
+			}
+		})
 	}
 }
 
-func TestReadinessEndpoint_Unhealthy(t *testing.T) {
-	// Simulate DB tidak siap
-	req := httptest.NewRequest(http.MethodGet, "/ready", nil)
+// Readiness WAJIB berubah 503 begitu shutdown dimulai -- inilah sinyal yang
+// membuat kube-proxy mencabut Pod ini dari daftar endpoint. Liveness TIDAK
+// boleh ikut berubah: liveness 503 justru membuat K8s me-restart pod yang
+// sedang berusaha berhenti dengan rapi.
+func TestRouter_ReadinessMatiSaatShutdown_LivenessTetapHidup(t *testing.T) {
+	app := &App{}
+	app.siap.Store(true)
+	router := app.Router()
+
+	app.siap.Store(false) // SIGTERM diterima
+
 	w := httptest.NewRecorder()
-
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Simulasi dependency check gagal
-		w.WriteHeader(http.StatusServiceUnavailable)
-		w.Write([]byte(`{"status":"not_ready"}`))
-	})
-	handler.ServeHTTP(w, req)
-
+	router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/ready", nil))
 	if w.Code != http.StatusServiceUnavailable {
-		t.Errorf("expected 503, got %d", w.Code)
+		t.Errorf("/ready = %d saat shutdown, mau 503", w.Code)
+	}
+
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/health", nil))
+	if w.Code != http.StatusOK {
+		t.Errorf("/health = %d saat shutdown, mau 200; liveness 503 memicu restart paksa", w.Code)
 	}
 }
 
-func TestGracefulShutdown(t *testing.T) {
+// Uji lama `go srv.ListenAndServe()` MEMBUANG galatnya, sehingga Shutdown atas
+// server yang tidak pernah menyala tetap mengembalikan nil dan ujinya hijau --
+// termasuk bila port sudah terpakai. Di sini listener dibuat lebih dulu dan
+// galatnya diperiksa secara sinkron, lalu koneksi in-flight sungguhan
+// dibuktikan tetap selesai.
+func TestGracefulShutdown_RequestAktifTetapSelesai(t *testing.T) {
+	mulaiHandler := make(chan struct{})
+	lanjutHandler := make(chan struct{})
+
 	srv := &http.Server{
-		Addr:    ":0", // OS assign port random
-		Handler: http.DefaultServeMux,
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			close(mulaiHandler)
+			<-lanjutHandler
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("selesai"))
+		}),
+		ReadHeaderTimeout: time.Second,
 	}
 
-	go srv.ListenAndServe()
-	time.Sleep(50 * time.Millisecond)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	if err := srv.Shutdown(ctx); err != nil {
-		t.Errorf("shutdown failed: %v", err)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err) // sinkron: kegagalan bind menggagalkan uji
 	}
-}
+	go func() { _ = srv.Serve(ln) }()
 
-func TestSIGTERMReceived(t *testing.T) {
-	// Verifikasi proses sendiri bisa menerima SIGTERM tanpa crash
-	// (hanya test bahwa signal channel setup benar)
-	quit := make(chan struct{}, 1)
-
+	hasil := make(chan int, 1)
 	go func() {
-		// Simulasi SIGTERM handler
-		_ = syscall.SIGTERM
-		quit <- struct{}{}
+		resp, err := http.Get("http://" + ln.Addr().String() + "/lambat")
+		if err != nil {
+			hasil <- 0
+			return
+		}
+		defer resp.Body.Close()
+		hasil <- resp.StatusCode
 	}()
 
+	<-mulaiHandler // permintaan sudah masuk handler
+
+	selesaiShutdown := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		selesaiShutdown <- srv.Shutdown(ctx)
+	}()
+
+	// Shutdown TIDAK boleh selesai selama masih ada request aktif.
 	select {
-	case <-quit:
-		// OK
-	case <-time.After(1 * time.Second):
-		t.Error("SIGTERM handler not triggered")
+	case <-selesaiShutdown:
+		t.Fatal("Shutdown kembali sebelum request aktif selesai")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(lanjutHandler)
+
+	if kode := <-hasil; kode != http.StatusOK {
+		t.Errorf("request in-flight berakhir dengan %d, mau 200", kode)
+	}
+	if err := <-selesaiShutdown; err != nil {
+		t.Errorf("Shutdown: %v", err)
 	}
 }
 ```
+
+> **Yang sengaja TIDAK ditulis di sini: uji SIGTERM.**
+>
+> Versi sebelumnya memuat `TestSIGTERMReceived` yang isinya `_ = syscall.SIGTERM`
+> (pernyataan tanpa efek) lalu mengirim ke channel dan membacanya kembali. Ia
+> menguji channel Go, bukan penanganan sinyal, dan tidak bisa gagal.
+>
+> Menguji sinyal sungguhan berarti `syscall.Kill(os.Getpid(), syscall.SIGTERM)`
+> — yang **mengirim sinyal ke proses uji itu sendiri**, tidak tersedia di
+> Windows, dan mengganggu uji lain di paket yang sama. Cara yang benar adalah
+> mengekstrak orkestrasi shutdown menjadi fungsi yang menerima
+> `<-chan os.Signal`, lalu menyuntikkan channel palsu di uji. Yang salah adalah
+> menuliskan uji yang tidak menguji apa pun demi angka cakupan.
 
 ## 4. Anti-Patterns
 
@@ -521,10 +727,10 @@ ENTRYPOINT ["/app"]
 .git/              (history commit dengan potential secrets)
 *_test.go          (test code tidak perlu di production)
 .env               (credentials! — fatal security breach)
-vendor/            (bisa ratusan MB jika tidak dipakai)
 *.md               (docs tidak perlu)
 Makefile
 ```
+*(`vendor/` sengaja tidak disebut di sini — lihat catatan pada `.dockerignore` di bagian 3: mengecualikannya justru mematikan build hermetik pada proyek yang memang memakai vendoring.)*
 
 ```dockerignore
 # GOOD: .dockerignore eksplisit
@@ -568,6 +774,9 @@ Makefile
 | Gejala | Yang dilihat | Artinya |
 | :--- | :--- | :--- |
 | Pod selalu berakhir dengan exit code 137 | bentuk `ENTRYPOINT` | SIGTERM tidak sampai; shell form menahannya |
+| CrashLoopBackOff tapi log aplikasi bersih | probe menembak mux mana | Handler probe terdaftar di mux yang tidak dilayani |
+| 502/connection refused saat setiap deploy | apakah readiness dimatikan sebelum Shutdown | Endpoint belum dicabut saat listener sudah tutup |
+| `exec format error` hanya di node ARM | `GOARCH` di Dockerfile | Arsitektur dipatok mati, manifest multi-arch berisi biner yang salah |
 | `x509: certificate signed by unknown authority` | apakah CA bundle ada di image | `scratch` tanpa `ca-certificates` |
 | `time.LoadLocation` gagal di produksi | basis data zona waktu di image | `scratch` tanpa `tzdata` |
 | Image besar tanpa alasan | `docker history` | Stage build ikut terbawa |
@@ -587,4 +796,14 @@ kubectl get pod <pod> -o jsonpath='{.status.containerStatuses[0].lastState.termi
 
 # Konteks keamanan yang benar-benar berlaku
 kubectl get pod <pod> -o jsonpath='{.spec.securityContext}{.spec.containers[0].securityContext}' | jq
+
+# Apakah rute probe BENAR-BENAR terdaftar? 404 di sini = handler di mux yang
+# salah, dan Pod akan restart terus dengan log aplikasi yang bersih.
+kubectl port-forward <pod> 8080:8080 &
+curl -si localhost:8080/health | head -1
+curl -si localhost:8080/ready  | head -1
+
+# Arsitektur yang benar-benar ada di dalam manifest multi-arch
+docker buildx imagetools inspect registri/api:1.4.2 --format '{{json .Manifest}}' \
+  | jq -r '.manifests[]? | "\(.platform.os)/\(.platform.architecture)"'
 ```
