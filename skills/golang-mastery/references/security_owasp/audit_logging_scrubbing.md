@@ -1,5 +1,7 @@
 # Panduan Definitif: Audit Logging, PII Scrubbing & Tamper Detection
 
+> **Berlaku:** Go 1.21+ · **Lihat juga:** `observability_resilience/structured_logging_zerolog.md` · `security_owasp/secret_management_vault.md` · `distributed_patterns_resilience/multi_tenancy_isolation.md` · `engineering_practice/incident_postmortem.md`
+
 ## 1. Konsep dan Internals (Technical Depth)
 
 Data *Audit Log* sangat penting untuk keamanan sistem, memfasilitasi forensik saat terjadi peretasan, dan wajib bagi standar kepatuhan operasional seperti PCI-DSS, SOC2, dan HIPAA. Namun, seringkali *log system* yang dibuat justru menjadi kelemahan terbesar (titik kebocoran data / *Data Bleed*).
@@ -280,4 +282,37 @@ func TestAuditLogSecurityBoundaries(t *testing.T) {
 		t.Fatalf("Tampering protection failed, hash matches despite changes")
 	}
 }
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **Audit log di tempat yang sama dengan log aplikasi.** Audit harus tahan terhadap penghapusan oleh orang yang sedang diaudit. Simpan terpisah, append-only, dengan retensi dan kontrol akses sendiri.
+- **Menyaring hanya berdasarkan nama field.** Rahasia berpindah field, dan field baru muncul tanpa yang menyaring tahu. Saring juga berdasarkan **bentuk nilai** — pola token, kunci, dan nomor kartu.
+- **Mencatat seluruh permintaan "untuk berjaga-jaga".** Itu cara paling umum data pribadi masuk ke sistem yang tidak dirancang menyimpannya, dengan retensi lebih panjang dan akses lebih luas daripada database.
+- **Audit log tanpa jaminan integritas.** Log yang bisa disunting bukan bukti. Untuk kebutuhan kepatuhan, dibutuhkan penyimpanan WORM atau rantai hash yang bisa diverifikasi.
+- **Audit yang mencatat keberhasilan saja.** Percobaan yang **gagal** justru sinyal paling berharga saat investigasi — ia menunjukkan apa yang sedang dicoba seseorang.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Rahasia ditemukan di sistem log | pola nilai di log | Penyaringan berbasis nama field saja |
+| Tidak bisa menjawab "siapa mengubah ini" | cakupan peristiwa yang diaudit | Audit hanya mencatat sebagian aksi |
+| Audit log bisa dihapus operator | kontrol akses penyimpanan audit | Tidak ada pemisahan kewenangan |
+| Investigasi buntu di percobaan gagal | apakah kegagalan dicatat | Hanya keberhasilan yang diaudit |
+| Biaya penyimpanan log melonjak | apa yang dicatat per permintaan | Seluruh badan permintaan ikut tersimpan |
+
+```bash
+# Deteksi rahasia berdasarkan BENTUK NILAI -- bukan nama field
+kubectl logs -l app=api --since=1h \
+  | grep -EC1 'sk_live_|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|eyJ[A-Za-z0-9_-]{10,}\.eyJ|-----BEGIN' | head
+
+# Nomor kartu yang lolos ke log (pola Luhn kasar)
+kubectl logs -l app=api --since=1h | grep -oE '\b[45][0-9]{15}\b' | head
+
+# Apakah kegagalan ikut diaudit?
+kubectl logs -l app=audit --since=24h | jq -r '.hasil' | sort | uniq -c
+
+# Retensi audit vs retensi log aplikasi -- keduanya harus berbeda
+kubectl get pvc -l app=audit -o custom-columns='NAMA:.metadata.name,UKURAN:.spec.resources.requests.storage'
 ```

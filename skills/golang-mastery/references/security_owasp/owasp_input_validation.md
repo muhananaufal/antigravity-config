@@ -1,5 +1,7 @@
 # Panduan Definitif: OWASP Input Validation & Sanitization di Go
 
+> **Berlaku:** Go 1.21+ · OWASP Top 10 · **Lihat juga:** `security_owasp/casbin_rbac_abac.md` · `db_sqlc/sqlc_pgx_driver.md` · `testing_quality/fuzz_testing_go.md` · `microservices_grpc/rest_chi_middleware_stack.md`
+
 ## 1. Konsep dan Internals (Technical Depth)
 
 Validasi dan sanitasi input adalah lapis pertahanan utama (*first line of defense*) melawan berbagai vektor serangan OWASP Top 10, termasuk Injection (SQLi, Command), Cross-Site Scripting (XSS), Path Traversal, dan Malicious File Execution. Dalam ekosistem Go, kita mengandalkan pendekatan multi-lapis (Defense-in-Depth):
@@ -364,4 +366,37 @@ func TestParseAndValidateProfile_SecurityBoundaries(t *testing.T) {
 		})
 	}
 }
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **Validasi hanya di sisi klien.** Itu untuk pengalaman pengguna, bukan keamanan. Setiap permintaan bisa dibuat tanpa melewati klien Anda sama sekali.
+- **Blacklist karakter.** Selalu ada pengodean yang terlewat — Unicode, URL-encoding ganda, homoglif. Whitelist bentuk yang diizinkan; itu daftar yang bisa Anda buktikan lengkap.
+- **Sanitasi sebagai pengganti pengodean kontekstual.** Nilai yang aman di badan HTML belum tentu aman di dalam atribut, URL, atau JavaScript. Yang benar adalah mengodekan **di titik penggunaan**, bukan membersihkan di titik masuk.
+- **`fmt.Sprintf` untuk menyusun SQL, perintah shell, atau path berkas.** Jawabannya masing-masing: parameterisasi query, `exec.Command` dengan argumen terpisah, dan `filepath.Clean` diikuti pemeriksaan awalan direktori.
+- **Validasi yang menerima lalu "memperbaiki".** Perbaikan otomatis bisa menghasilkan nilai yang lolos pemeriksaan tetapi tidak diinginkan — dan penyerang akan mencari bentuk yang berubah menjadi sesuatu yang berguna baginya. Tolak yang tidak valid.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Query dengan bentuk aneh di `pg_stat_statements` | SQL yang tidak berparameter | Query disusun dengan penggabungan string |
+| Berkas terbaca dari luar direktori yang dimaksud | penanganan path dari input | Path traversal |
+| Proses anak dijalankan dengan argumen tak terduga | `exec.Command` dengan shell | Command injection |
+| Lonjakan `400` dari satu sumber | payload yang ditolak | Ada yang sedang menguji batas validasi |
+| Panic pada input tertentu | apakah jalur itu di-fuzz | Ada bentuk input yang belum pernah dicoba |
+
+```bash
+# gosec: G201/G202 SQL string, G204 subprocess, G304 path dari variabel
+gosec -include=G201,G202,G204,G304 ./...
+
+grep -rn 'fmt.Sprintf' --include='*.go' . | grep -iE 'select |insert |update |delete |where '
+grep -rn 'exec.Command' --include='*.go' . | grep -v '_test.go'
+
+# Fuzzing adalah cara paling efektif menemukan input yang belum terpikirkan
+go test -fuzz=FuzzHandler -fuzztime=120s ./...
+
+# Siapa yang sedang menguji batas validasi Anda
+kubectl logs -l app=api --since=1h \
+  | jq -r 'select(.status==400) | "\(.ip) \(.path)"' | sort | uniq -c | sort -rn | head
 ```

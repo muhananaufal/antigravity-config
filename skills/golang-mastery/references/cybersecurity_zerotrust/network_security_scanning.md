@@ -1,5 +1,7 @@
 # Network Security Scanning (Port & Vulnerability) di Go
 
+> **Berlaku:** Go 1.21+ · nmap / trivy / kube-bench · **Lihat juga:** `testing_quality/govulncheck_security_scan.md` · `cybersecurity_zerotrust/zero_trust_policy_engine.md` · `security_owasp/mtls_certificate_rotation.md` · `devops_control_planes/docker_container_go.md`
+
 Security scanner internal di Zero Trust architecture bertugas memeriksa anomali konfigurasi jaringan dari *dalam* cluster — port terbuka yang tidak diharapkan, layanan usang yang terekspos, atau certificate TLS yang akan kadaluarsa.
 
 ---
@@ -326,3 +328,37 @@ if err == nil {
 1. **Firewall Drop vs Reject (Timeout Ambiguity)**: Saat memindai TCP, sebuah OS yang mematikan layanannya (atau IP tables di-set ke `REJECT`) akan langsung membalas TCP `RST`, mereturn error `connection refused` (kurang dari 1 ms). Namun, jika infrastruktur berada di balik Firewall *stealth* (*DROP* rules), server diam, dan request `net.Dial` akan tertahan (hang). *Defensive:* Jangan gunakan fungsi `net.Dial()` polos. Selalu gunakan `net.DialTimeout()` atau `net.Dialer{Timeout: x}`. Atur timeout sebisa mungkin agresif (misal 500ms di jaringan internal LAN) agar tidak menunda sisa scan ke IP berikutnya selama berpuluh-puluh detik.
 2. **TLS Tarpitting (Slowloris Defenses)**: Setelah deteksi Port terbuka, agen mungkin mencoba "TLS Handshake" untuk menarik metadata (banner grab). Server mematikan nakal (*tarpit*) sengaja merespons *Hello* lambat per byte. *Defensive:* Panggilan TLS Handshake TIDAK mematuhi timeout TCP *Dialer*. Pastikan Anda memanggil `conn.SetDeadline(time.Now().Add(x))` tepat sebelum beralih ke `tls.Client(conn, ...)` untuk mengamankan proses negosiasi kunci enkripsinya (seperti dalam contoh kode di atas).
 3. **UDP Stateless Illusion**: Berbeda dengan *3-way handshake* TCP, `Dial("udp",...)` hampir SELALU sukses instan di Go sekalipun port tujuan sebenarnya mati. Ini karena UDP *connectionless*—fungsi `Dial` UDP di Go cuma mengatur alamat *default* pada kernel OS. *Defensive:* Jika mendeteksi layanan UDP (misal Port 53 DNS), Anda HARUS menyuntikkan (write) data payload (*magic packet*) yang sah, memanggil *Read*, lalu memeriksa apakah OS membalasnya dengan error data/ICMP Destination Unreachable. UDP *scanning* tidak bisa pasif (blind dial).
+
+## Kapan JANGAN Pakai Ini
+
+- **Memindai sistem yang bukan milik Anda, atau tanpa izin tertulis.** Itu persoalan hukum, bukan persoalan teknis, dan tidak ada argumen teknis yang menyelesaikannya.
+- **Pemindaian agresif terhadap produksi tanpa jendela yang disepakati.** Sebagian pemindaian membuka ribuan koneksi atau memicu jalur kode yang jarang dipakai; layanan bisa menjadi tidak stabil karena pemeriksaan keamanan itu sendiri.
+- **Pemindaian sebagai pengganti hardening.** Menemukan port terbuka tidak menutupnya. Laporan tanpa perubahan konfigurasi hanya mendokumentasikan masalah yang sama setiap bulan.
+- **Hasil pemindaian tanpa pemilik dan tenggat.** Laporan yang tidak ditindaklanjuti melatih seluruh tim mengabaikan laporan — termasuk yang benar-benar penting nanti.
+- **Memindai hanya dari luar.** Sebagian besar pergerakan lateral terjadi **dari dalam**. Pemindaian internal antar namespace dan antar layanan sering jauh lebih informatif daripada pemindaian perimeter.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Port terbuka yang tidak diketahui siapa pun | inventaris layanan vs hasil pindai | Ada beban kerja tanpa pemilik |
+| Semua pod bisa saling menghubungi | NetworkPolicy yang terpasang | Tidak ada segmentasi internal |
+| Temuan yang sama muncul tiap bulan | pemilik dan tenggat temuan | Pemindaian berjalan, perbaikan tidak |
+| Layanan tidak stabil saat jadwal pemindaian | intensitas pemindaian | Pemindaian agresif terhadap produksi |
+| Image dengan CVE tinggi berjalan | pemindaian di registry vs di runtime | Yang dipindai bukan yang berjalan |
+
+```bash
+# Segmentasi internal: tanpa NetworkPolicy, semua pod bisa saling menghubungi
+kubectl get networkpolicies -A
+kubectl get pods -A -o wide | wc -l
+
+# Kerentanan pada image yang BENAR-BENAR berjalan, bukan yang di repo
+kubectl get pods -A -o jsonpath='{range .items[*].spec.containers[*]}{.image}{"\n"}{end}' \
+  | sort -u | while read -r i; do echo "== $i"; trivy image --severity HIGH,CRITICAL -q "$i" | tail -5; done
+
+# Konfigurasi cluster terhadap tolok ukur CIS
+kube-bench run --targets master,node | grep -E '^\[FAIL\]' | head -20
+
+# Port yang benar-benar terbuka dari dalam cluster
+kubectl run pemindai --rm -it --image=nicolaka/netshoot -- nmap -sT -Pn layanan.namespace.svc.cluster.local
+```

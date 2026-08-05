@@ -1,5 +1,7 @@
 # Panduan Definitif: Kriptografi AES-256-GCM (AEAD) di Go
 
+> **Berlaku:** Go 1.21+ · `crypto/aes`, `crypto/cipher` · **Lihat juga:** `security_owasp/secret_management_vault.md` · `security_owasp/argon2_password_security.md` · `cybersecurity_zerotrust/secrets_rotation_automated.md` · `security_owasp/audit_logging_scrubbing.md`
+
 ## 1. Konsep dan Internals (Technical Depth)
 
 Advanced Encryption Standard (AES) adalah cipher blok yang banyak digunakan. Namun, blok cipher mentah seperti AES-ECB dan AES-CBC rentan terhadap memanipulasi integritas data (*malleability attacks* atau *Padding Oracle Attack*). Di dalam standar kriptografi modern, Anda diwajibkan menggunakan **AEAD (Authenticated Encryption with Associated Data)**. Algoritme andalannya adalah **AES-256-GCM**.
@@ -283,4 +285,35 @@ func TestAESGCMCryptography_SecurityBoundaries(t *testing.T) {
 		t.Errorf("Expected ErrInvalidCiphertextLength, got: %v", err)
 	}
 }
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **Menulis primitif kriptografi sendiri.** Bahkan **penggunaan** yang salah dari primitif yang benar sudah cukup untuk membuka sistem. Menulis primitifnya sendiri praktis selalu menghasilkan sesuatu yang lebih lemah, dan kelemahannya tidak akan terlihat dari uji mana pun.
+- **Nonce dari penghitung atau waktu tanpa jaminan keunikan mutlak.** GCM **runtuh total** bila satu nonce dipakai ulang dengan kunci yang sama — bukan melemah: penyerang dapat memulihkan kunci otentikasi dan memalsukan pesan. Nonce WAJIB dari `crypto/rand`, atau dari penghitung yang dijamin tidak pernah berulang.
+- **Satu operasi GCM untuk data yang sangat besar.** Ada batas aman jumlah data per kunci. Untuk berkas besar, enkripsi per potongan dengan nonce berbeda dan pengikat urutan.
+- **Enkripsi tanpa rencana rotasi kunci.** Data yang dienkripsi hari ini akan hidup lebih lama daripada kunci yang aman hari ini. Simpan pengenal versi kunci bersama ciphertext sejak awal — menambahkannya belakangan berarti mendekripsi ulang semuanya.
+- **Enkripsi sebagai pengganti kontrol akses.** Data yang bisa didekripsi oleh layanan yang bisa dijangkau penyerang tidak terlindungi oleh enkripsi itu.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Nonce dihasilkan dari waktu atau penghitung | sumber nonce di kode | Risiko pemakaian ulang nonce — kegagalan total GCM |
+| `math/rand` muncul di jalur kripto | import paket | Sumber acak tidak aman secara kriptografis |
+| Ciphertext lama tidak bisa didekripsi | apakah versi kunci disimpan | Rotasi kunci tanpa penanda versi |
+| Dekripsi gagal setelah rotasi | periode tumpang tindih kunci | Kunci lama dicabut sebelum semua data dimigrasi |
+| Kunci sama dipakai lintas lingkungan | asal kunci per lingkungan | Bocornya staging berarti bocornya produksi |
+
+```bash
+# Penggunaan primitif kripto dan sumber acaknya
+grep -rn 'cipher.NewGCM\|\.Seal(\|\.Open(' --include='*.go' .
+grep -rn '"math/rand"' --include='*.go' . | grep -v '_test.go'
+
+# gosec: G401 kripto lemah, G404 acak lemah, G407 nonce/IV hardcode
+gosec -include=G401,G402,G404,G407 ./...
+govulncheck ./...
+
+# Versi kunci WAJIB tersimpan bersama ciphertext -- periksa formatnya
+grep -rn 'versi_kunci\|key_version\|kid' --include='*.go' . | head
 ```

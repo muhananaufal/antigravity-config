@@ -1,5 +1,7 @@
 # Panduan Definitif: Manajemen Rahasia Dinamis dengan Vault & Viper
 
+> **Berlaku:** Go 1.21+ · HashiCorp Vault · **Lihat juga:** `cybersecurity_zerotrust/secrets_rotation_automated.md` · `arch_patterns/config_management.md` · `cybersecurity_zerotrust/spiffe_spire_workload.md` · `security_owasp/aes_gcm_cryptography.md`
+
 ## 1. Konsep dan Internals (Technical Depth)
 
 Penyimpanan *secret* (DB password, API Keys AWS) di *source code*, dalam Git (`.env` yang terbawa *commit*), atau secara statis di Kubernetes Secrets tanpa masa kadaluarsa, adalah risiko utama (*OWASP A02: Cryptographic Failures*). Modern cloud-native pattern menyelesaikan masalah ini secara mendasar dengan konsep **Dynamic Secrets**.
@@ -252,4 +254,36 @@ func TestConfigManager_ContextCancellation(t *testing.T) {
 		t.Fatal("Expected error due to cancelled context, got nil")
 	}
 }
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **Vault tanpa identitas beban kerja yang bisa dibuktikan.** Tanpa cara memverifikasi siapa yang meminta, Anda hanya memindahkan rahasia ke tempat lain — dan menambahkan satu token statis yang membuka semuanya.
+- **Mengambil rahasia sekali saat start lalu menyimpannya selamanya.** Rotasi menjadi tidak berarti: proses lama tetap memakai kredensial lama sampai di-restart, dan tidak ada yang tahu proses mana yang masih memegang apa.
+- **Vault sebagai dependensi keras di jalur panas.** Vault yang tidak terjangkau tidak boleh langsung mematikan layanan yang sudah berjalan. Cache dengan masa berlaku, dan perbarui di latar.
+- **Rahasia di variabel lingkungan pod.** Ia terlihat di `kubectl describe`, di dump proses, dan sering ikut terkirim ke sistem pelaporan galat pihak ketiga tanpa disadari.
+- **Rotasi tanpa periode tumpang tindih.** Kredensial lama WAJIB tetap berlaku sampai semua konsumen mengambil yang baru. Tanpa itu, rotasi adalah pemadaman terjadwal.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Rahasia terlihat di `kubectl describe pod` | sumber variabel lingkungan | Rahasia disuntikkan sebagai env biasa |
+| Layanan mati saat Vault bermasalah | penanganan galat pengambilan rahasia | Vault jadi dependensi keras |
+| Rotasi tidak berefek sampai restart | apakah rahasia diperbarui berkala | Diambil sekali saat start |
+| Token Vault tidak pernah kedaluwarsa | TTL token | Token statis; kompromi berarti akses permanen |
+| Rahasia ditemukan di riwayat git | `git log` pada berkas konfigurasi | Menghapus berkasnya tidak menghapus riwayatnya |
+
+```bash
+# Rahasia yang terlihat sebagai env -- setiap baris di sini adalah temuan
+kubectl describe pod <pod> | grep -A25 'Environment:'
+kubectl get secrets -o json | jq -r '.items[] | "\(.metadata.name) \(.type)"'
+
+# TTL token dan kapan rahasia terakhir dirotasi
+vault token lookup
+vault kv metadata get secret/app/database
+
+# Riwayat git menyimpan rahasia meski berkasnya sudah dihapus
+git log --all -p | grep -EC1 'sk_live_|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}' | head
+git ls-files | grep -E '\.env$|credentials|\.pem$'
 ```

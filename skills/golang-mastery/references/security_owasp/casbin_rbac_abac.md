@@ -1,5 +1,7 @@
 # Panduan Definitif: Otorisasi RBAC & ABAC dengan Casbin
 
+> **Berlaku:** Go 1.21+ · `casbin/casbin/v2` · **Lihat juga:** `security_owasp/jwt_dual_token_auth.md` · `distributed_patterns_resilience/multi_tenancy_isolation.md` · `security_owasp/audit_logging_scrubbing.md` · `security_owasp/owasp_input_validation.md`
+
 ## 1. Konsep dan Internals (Technical Depth)
 
 Otorisasi (*Authorization*) adalah gerbang kedua setelah Autentikasi. Jika Otentikasi bertanya "Siapakah Anda?", Otorisasi bertanya "Apakah Anda diizinkan membaca dokumen #42?". Ketiadaan atau kecacatan Otorisasi adalah penyebab utama vulnerability **Broken Access Control** (Peringkat #1 di OWASP Top 10).
@@ -258,4 +260,33 @@ func TestCasbinRBACBoundaries_RootBypass(t *testing.T) {
 		t.Errorf("Expected root to bypass all rules")
 	}
 }
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **Mesin kebijakan untuk aturan otorisasi yang sederhana dan stabil.** Tiga peran dengan izin tetap lebih jelas ditulis sebagai kode Go yang bisa dibaca, diuji, dan di-review. Mesin kebijakan mulai membayar dirinya ketika aturan berubah tanpa deploy.
+- **Evaluasi kebijakan tanpa cache di jalur panas.** Memuat kebijakan dari database pada setiap permintaan menambah latensi dan satu dependensi baru di jalur yang paling tidak boleh gagal.
+- **Otorisasi hanya di lapisan API.** Job terjadwal, konsumer antrean, dan skrip admin melewatinya sepenuhnya. Penegakan harus berada di tempat yang dilewati **semua** jalur.
+- **Kebijakan yang tidak diuji.** Aturan otorisasi adalah kode yang menentukan siapa melihat apa. Ia layak mendapat cakupan uji setara logika bisnis — dan kesalahannya jauh lebih mahal.
+- **Menambah ABAC sebelum RBAC-nya benar.** Atribut menambah dimensi yang membuat kebijakan sulit dinalar dan sulit diaudit. Mulai dari peran; tambahkan atribut hanya bila terbukti tidak cukup.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Data diakses lewat jalur yang tidak dicek | rasio endpoint vs pemanggilan `Enforce` | Ada jalur tanpa penegakan |
+| Latensi naik sejak kebijakan diperbanyak | waktu evaluasi kebijakan | Evaluasi tanpa cache di jalur panas |
+| Tidak bisa menjawab "siapa mengakses apa" | log keputusan otorisasi | Keputusan tidak dicatat |
+| Kebijakan berubah tanpa jejak | audit perubahan kebijakan | Kebijakan diubah langsung di database |
+| Aturan saling bertumpuk dan sulit dinalar | jumlah dimensi atribut | ABAC ditambahkan sebelum RBAC stabil |
+
+```bash
+# Rasio kasar endpoint terhadap pemanggilan penegakan: selisih besar layak dicurigai
+grep -rncE 'r\.(Get|Post|Put|Patch|Delete)\(' --include='*.go' internal/ | awk -F: '{s+=$2} END{print "rute:",s}'
+grep -rnc 'Enforce(' --include='*.go' internal/ | awk -F: '{s+=$2} END{print "enforce:",s}'
+
+# Keputusan otorisasi -- tanpa log ini tidak ada audit trail sama sekali
+kubectl logs -l app=api --since=24h \
+  | jq -r 'select(.event=="otorisasi") | "\(.hasil) \(.subjek) \(.aksi) \(.objek)"' \
+  | sort | uniq -c | sort -rn | head -20
 ```

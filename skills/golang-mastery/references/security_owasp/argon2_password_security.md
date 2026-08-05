@@ -1,5 +1,7 @@
 # Panduan Definitif: Password Security dengan Argon2id
 
+> **Berlaku:** Go 1.21+ · `golang.org/x/crypto/argon2` · **Lihat juga:** `security_owasp/jwt_dual_token_auth.md` · `security_owasp/aes_gcm_cryptography.md` · `observability_resilience/rate_limiting_patterns.md` · `security_owasp/audit_logging_scrubbing.md`
+
 ## 1. Konsep dan Internals (Technical Depth)
 
 Standar pengamanan kata sandi berevolusi dengan pesat, menanggapi melimpahnya komputasi GPU dan ASIC murah di tangan *hacker*. Menggunakan SHA256 atau MD5 saat ini disamakan dengan menyimpan password dalam plain-text. Pemenang dari komite *Password Hashing Competition (PHC)* internasional adalah algoritme **Argon2**, yang hadir dalam varian **Argon2id**.
@@ -263,4 +265,38 @@ func TestArgon2idSecurityBoundaries(t *testing.T) {
 		t.Errorf("Expected error when verifying malformed hash string format")
 	}
 }
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **Parameter yang disalin dari tutorial tanpa diukur di mesin produksi.** Parameter terlalu ringan tidak melindungi apa pun; terlalu berat mengubah endpoint login menjadi vektor DoS terhadap diri sendiri. Ukur, targetkan sekitar 100–500 ms per verifikasi di perangkat keras produksi.
+- **Argon2id di endpoint yang tidak dibatasi laju.** Setiap percobaan memakan memori dan CPU yang signifikan — itulah gunanya, dan itu pula yang bisa dipakai penyerang untuk menjatuhkan Anda dengan seratus permintaan.
+- **Menyimpan parameter terpisah dari hash.** Format hash Argon2 sudah memuat parameternya. Menyimpannya terpisah membuat rotasi parameter mustahil dilakukan bertahap.
+- **MD5, SHA-1, atau SHA-256 polos untuk kata sandi.** Cepat adalah **kelemahan** di sini. GPU modern membuat "cepat" berarti miliaran percobaan per detik terhadap dump yang bocor.
+- **Membandingkan hash dengan `==`.** Perbandingan yang tidak konstan waktu membocorkan informasi lewat waktu respons. `subtle.ConstantTimeCompare` yang benar.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Endpoint login lambat lalu seluruh layanan lambat | memori dan CPU saat login | Parameter Argon2 berat tanpa rate limiting |
+| Waktu respons login berbeda untuk pengguna ada/tidak ada | perbandingan konstan waktu | Enumerasi pengguna lewat timing |
+| Verifikasi kata sandi < 10 ms | parameter yang dipakai | Terlalu ringan untuk melindungi |
+| Hash lama tidak bisa diverifikasi | apakah parameter ada di hash | Parameter disimpan terpisah dan berubah |
+| Ribuan login gagal dari satu sumber | sebaran IP/akun | Serangan credential stuffing sedang berlangsung |
+
+```bash
+# Algoritma cepat yang tidak boleh dipakai untuk kata sandi
+grep -rniE 'md5\.|sha1\.|sha256\.Sum' --include='*.go' . | grep -iE 'pass|sandi|kredensial'
+gosec -include=G401,G505 ./...
+
+# Waktu verifikasi: konsisten dan berada di rentang 50-500 ms
+for i in 1 2 3; do
+  curl -sw '%{time_total}\n' -o /dev/null -X POST localhost:8080/login \
+    -d '{"email":"ada@contoh.id","sandi":"salah"}'
+done
+
+# Credential stuffing terlihat sebagai banyak akun dari sedikit sumber
+kubectl logs -l app=api --since=1h \
+  | jq -r 'select(.event=="login_gagal") | .ip' | sort | uniq -c | sort -rn | head
 ```

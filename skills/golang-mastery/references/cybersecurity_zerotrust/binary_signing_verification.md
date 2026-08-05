@@ -1,5 +1,7 @@
 # Penandatanganan & Verifikasi Binary (Ed25519) Zero Trust
 
+> **Berlaku:** Go 1.21+ · Sigstore `cosign` · SLSA · **Lihat juga:** `cli_tooling/binary_distribution_release.md` · `runtime_internals/build_system_linker.md` · `testing_quality/govulncheck_security_scan.md` · `security_owasp/mtls_certificate_rotation.md`
+
 ## 1. Konsep Utama & Internals
 Dalam lingkungan *Zero Trust*, tidak peduli jika sebuah artefak biner (aplikasi Go yang dikompilasi atau image Docker) dikirim dari server CI/CD internal; kita tidak boleh mempercayainya jika artefak itu bisa dimodifikasi selama transit atau *at rest*. Kita memvalidasi asal-usul (provenance) menggunakan penandatanganan kriptografis (*Cryptographic Signatures*).
 
@@ -178,3 +180,37 @@ cat signature.bin >> myapp_linux_amd64
 1. **Rollback Attacks (Downgrade Attack)**: Hacker mengganti file produksi aplikasi Anda dengan file versi lama yang legal (signed) tapi memiliki kerentanan CVE yang belum ditambal (Zero-day exploit). *Defensive:* Penandatanganan biner konvensional tidak mencegah *rollback*. Anda harus selalu memvalidasi *Metadata Versi/Timestamp* (seperti manifest JSON yang ditandatangani di samping biner, contoh di TUF framework / Sigstore). Tolak instalasi jika nomor seri/waktu rilis lebih rendah dari biner saat ini.
 2. **Kelemahan Public Key Rotation**: Jika Public Key (yang di-hardcode ke agen produksi) bocor atau Anda kehilangan *Private Key*-nya, Anda tidak bisa mem-push *update* biner sama sekali. *Defensive:* Jangan hardcode satu *root public key* secara buta di kode Go. Manfaatkan hierarki (PKI / Root Key -> Intermediate Signing Key) seperti arsitektur The Update Framework (TUF), atau integrasikan sistem rotasi *KMS (Key Management Service)* berbasis OIDC + Sigstore (*Keyless Signing*).
 3. **Time-Of-Check to Time-Of-Use (TOCTOU) Race Condition**: Updater memverifikasi signature biner di lokasi `/tmp/myapp`, menyatakannya *Valid*. Tepat setelah itu sebelum mengeksekusi `exec.Command("/tmp/myapp")`, penyerang (*malware*) lokal dengan cepat menimpa file tersebut. *Defensive:* Gunakan izin *File Descriptor Lock* (`syscall.Flock`) atau pindahkan (atomic `os.Rename`) file segera ke path read-only `/opt/bin/myapp` *sebelum* memverifikasi dan mengeksekusinya, memastikan tiada yang memanipulasi rentang jeda verifikasi-eksekusi.
+
+## Kapan JANGAN Pakai Ini
+
+- **Menandatangani tanpa memverifikasi.** Tanda tangan yang tidak pernah diperiksa di titik deploy tidak memberi jaminan apa pun — ia hanya menambah langkah di pipeline dan rasa aman yang tidak berdasar.
+- **Kunci penandatangan disimpan di CI sebagai secret biasa.** Siapa pun yang bisa mengubah pipeline bisa menandatangani apa saja. Penandatanganan keyless berbasis OIDC atau HSM menghapus kelas masalah ini.
+- **Memverifikasi hanya di CI.** Jalur langsung ke registry tetap terbuka. Verifikasi harus terjadi di admission controller cluster — di titik yang tidak bisa dilewati.
+- **SBOM yang dihasilkan tapi tidak pernah dibaca.** Ia menjadi ritual kepatuhan, bukan kontrol. SBOM berguna ketika ada proses yang membandingkannya dengan basis data kerentanan secara berkala.
+- **Menandatangani tag yang bisa dipindahkan.** Tanda tangan WAJIB mengikat **digest**. Tag bisa dipindahkan ke image lain, dan tanda tangannya tetap tampak valid untuk nama yang sama.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Image tak bertanda tangan berjalan di produksi | kebijakan admission | Verifikasi hanya di CI |
+| Tanda tangan valid untuk image yang berbeda | apakah mengikat digest atau tag | Tag dipindahkan setelah penandatanganan |
+| Kunci penandatangan dipakai di luar pipeline | log penggunaan kunci | Kunci bocor atau dipakai manual |
+| SBOM ada tapi kerentanan tetap lolos | proses yang membaca SBOM | SBOM tidak dibandingkan dengan basis data apa pun |
+| Deploy gagal setelah rotasi identitas OIDC | konfigurasi verifikasi | Identitas penandatangan berubah tanpa pembaruan kebijakan |
+
+```bash
+# Verifikasi harus mengikat DIGEST, bukan tag
+cosign verify --certificate-identity-regexp '.*' --certificate-oidc-issuer-regexp '.*' \
+  registri.contoh.id/api@sha256:<digest>
+
+cosign tree registri.contoh.id/api@sha256:<digest>
+cosign download sbom registri.contoh.id/api@sha256:<digest> | head
+
+# Apakah cluster benar-benar menolak image tak bertanda tangan?
+kubectl get validatingwebhookconfigurations | grep -iE 'policy|sigstore|kyverno'
+kubectl run uji --image=nginx:latest --dry-run=server 2>&1 | head -5
+
+# Image yang benar-benar berjalan, beserta digest-nya
+kubectl get pods -A -o jsonpath='{range .items[*].status.containerStatuses[*]}{.imageID}{"\n"}{end}' | sort -u | head
+```

@@ -1,5 +1,7 @@
 # SPIFFE / SPIRE: Workload Identity untuk Zero Trust Go
 
+> **Berlaku:** Go 1.21+ · SPIFFE/SPIRE · **Lihat juga:** `security_owasp/mtls_certificate_rotation.md` · `cybersecurity_zerotrust/zero_trust_policy_engine.md` · `security_owasp/secret_management_vault.md` · `microservices_grpc/service_mesh_grpc_lb.md`
+
 SPIFFE (Secure Production Identity Framework for Everyone) menggantikan static TLS certificates dan API keys dengan identitas kriptografis ephemeral yang di-rotate otomatis. Setiap workload (pod, container, process) mendapatkan SVID (SPIFFE Verifiable Identity Document) — X.509 certificate dengan URI SAN `spiffe://trust-domain/path`.
 
 ---
@@ -443,3 +445,34 @@ func (s *Service) Shutdown() {
 4. **High Connection Rate dan Handshake Cost:** mTLS handshake lebih mahal dari TLS biasa karena kedua pihak harus saling verifikasi certificate. Pada 10,000 req/s dengan connection reuse rendah, handshake bisa menjadi bottleneck CPU. Solusi: tune `MaxIdleConnsPerHost` dan `IdleConnTimeout` agresif untuk maximize connection reuse, sehingga handshake hanya terjadi saat connection baru dibuat.
 
 5. **Logging SPIFFE ID tanpa PII Exposure:** SVID berisi SPIFFE URI yang mengidentifikasi workload (`spiffe://acme.com/ns/prod/sa/api-service`). Log SPIFFE ID untuk audit trail, tapi pastikan tidak meng-log private key atau full certificate PEM (yang bisa digunakan untuk impersonasi selama sisa TTL). Log hanya `spiffeid.String()` — URI saja.
+
+## Kapan JANGAN Pakai Ini
+
+- **Untuk armada kecil dengan batas kepercayaan sederhana.** SPIRE membawa server, agent di setiap node, registrasi beban kerja, dan operasi harian yang tidak sebanding untuk beberapa layanan di satu cluster.
+- **Sebagai pengganti otorisasi.** SPIFFE ID membuktikan **siapa** sebuah beban kerja. Keputusan **boleh apa** tetap milik kebijakan — dan menyamakan keduanya adalah cara paling halus memberi akses berlebih.
+- **Attestation berbasis atribut yang bisa dipalsukan.** Registrasi berdasarkan label pod yang bisa diubah siapa saja menghapus seluruh jaminan attestation. Pakai selector yang benar-benar terikat pada identitas node atau runtime.
+- **SPIRE server tanpa HA dan tanpa rencana pemulihan.** Ia menjadi akar kepercayaan seluruh armada; hilangnya berarti setiap beban kerja kehilangan identitas sekaligus.
+- **Menyimpan SVID ke disk.** Sertifikat berumur pendek dirancang tinggal di memori. Menuliskannya ke disk mengembalikan persis risiko yang ingin dihilangkan.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Beban kerja kehilangan identitas serempak | kesehatan SPIRE server | Akar kepercayaan tidak tersedia |
+| Beban kerja mendapat SVID milik layanan lain | selector registrasi | Attestation berbasis atribut yang bisa dipalsukan |
+| SVID tidak diperbarui | umur SVID vs TTL | Agent tidak bisa menghubungi server |
+| Layanan terautentikasi bisa mengakses apa saja | kebijakan otorisasi | Identitas disamakan dengan izin |
+| SVID ditemukan di volume | mount yang dipakai workload API | SVID ditulis ke disk |
+
+```bash
+# Identitas yang benar-benar diberikan ke beban kerja
+spire-server entry show
+spire-agent api fetch x509 -socketPath /run/spire/sockets/agent.sock
+
+# Selector yang dipakai untuk attestation -- ini titik lemah paling umum
+spire-server entry show -selector k8s:pod-label:app:api
+
+# Kesehatan akar kepercayaan
+kubectl get pods -n spire -l app=spire-server
+kubectl logs -n spire -l app=spire-agent --since=1h | grep -ci 'failed to fetch'
+```

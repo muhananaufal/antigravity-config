@@ -1,5 +1,7 @@
 # Panduan Definitif: mTLS & Zero-Downtime Certificate Rotation
 
+> **Berlaku:** Go 1.21+ · `crypto/tls` · cert-manager · **Lihat juga:** `cybersecurity_zerotrust/spiffe_spire_workload.md` · `microservices_grpc/service_mesh_grpc_lb.md` · `security_owasp/secret_management_vault.md` · `cybersecurity_zerotrust/binary_signing_verification.md`
+
 ## 1. Konsep dan Internals (Technical Depth)
 
 Dalam arsitektur *Zero-Trust* seperti ekosistem Kubernetes, jaringan privat (`VPC`) tidak pernah diasumsikan "aman". Layanan A (`Service-A`) dan Layanan B (`Service-B`) yang mengobrol di dalam jaringan tersebut rawan terhadap *Man-in-the-Middle (MitM)* jika jaringan disusupi. Standar solusinya adalah **Mutual TLS (mTLS)**.
@@ -223,4 +225,38 @@ func TestMTLSCertificateRotation_InvalidCA(t *testing.T) {
 		t.Fatalf("Expected failure on invalid CA format, got: %v", err)
 	}
 }
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **`InsecureSkipVerify: true` di luar uji lokal.** Ia mematikan verifikasi rantai **dan** nama sekaligus. Dengan satu baris itu, mTLS berubah menjadi enkripsi terhadap siapa pun yang bisa menyisipkan diri di jalur.
+- **Sertifikat berumur panjang untuk beban kerja.** Sertifikat setahun berarti kunci yang bocor berlaku setahun. Sertifikat berumur jam dengan rotasi otomatis lebih aman **dan** memaksa otomasinya benar-benar bekerja — kegagalan rotasi ketahuan hari itu juga, bukan setahun kemudian.
+- **Memuat sertifikat sekali saat start.** Rotasi tidak akan pernah berlaku sampai restart. `GetCertificate`/`GetClientCertificate` membaca ulang tanpa mengganggu koneksi berjalan.
+- **CA sendiri tanpa rencana rotasi CA.** Mengganti CA yang tertanam di semua klien adalah operasi yang harus direncanakan **sebelum** dibutuhkan. Saat CA-nya bermasalah, sudah terlambat menyusun rencananya.
+- **mTLS sebagai pengganti otorisasi.** Ia membuktikan identitas, bukan izin. Layanan yang terautentikasi tetap harus dibatasi apa yang boleh dilakukannya.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Koneksi tiba-tiba gagal serempak | tanggal kedaluwarsa sertifikat | Rotasi gagal dan tidak ada yang memantau |
+| Rotasi tidak berlaku sampai pod di-restart | apakah `GetCertificate` dipakai | Sertifikat dimuat sekali saat start |
+| `InsecureSkipVerify` ditemukan di kode produksi | konfigurasi TLS | Verifikasi dimatikan; mTLS jadi teater |
+| Layanan bisa memanggil apa saja setelah autentikasi | kebijakan otorisasi | Identitas disamakan dengan izin |
+| Klien lama gagal setelah CA berganti | rantai kepercayaan yang dipasang | Rotasi CA tanpa periode tumpang tindih |
+
+```bash
+# Kedaluwarsa dan penerbit sertifikat yang benar-benar disajikan
+openssl s_client -connect layanan:8443 -showcerts </dev/null 2>/dev/null \
+  | openssl x509 -noout -dates -subject -issuer
+
+# Verifikasi yang dimatikan -- setiap kemunculan di luar uji adalah temuan
+grep -rn 'InsecureSkipVerify' --include='*.go' . | grep -v '_test.go'
+gosec -include=G402 ./...
+
+# Sertifikat yang dikelola cert-manager dan status pembaruannya
+kubectl get certificates -A \
+  -o custom-columns='NS:.metadata.namespace,NAMA:.metadata.name,SIAP:.status.conditions[0].status,KEDALUWARSA:.status.notAfter'
+
+kubectl logs -l app=api --since=1h | grep -ciE 'x509|certificate has expired|bad certificate'
 ```

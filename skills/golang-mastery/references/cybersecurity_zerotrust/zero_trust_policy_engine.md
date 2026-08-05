@@ -1,5 +1,7 @@
 # OPA Zero Trust Policy Engine di Go
 
+> **Berlaku:** Go 1.21+ · OPA / Rego · **Lihat juga:** `security_owasp/casbin_rbac_abac.md` · `cybersecurity_zerotrust/spiffe_spire_workload.md` · `distributed_patterns_resilience/multi_tenancy_isolation.md` · `security_owasp/audit_logging_scrubbing.md`
+
 ## 1. Konsep Utama & Internals
 Open Policy Agent (OPA) mendelegasikan dan mengamankan logika otorisasi (Policy) dari aplikasi kode keras ke bahasa deklaratif `Rego`. Ini adalah fondasi dari *Zero Trust Architecture*, yang memisahkan "Siapa kamu" (Authentication via Identity/JWT) dengan "Apa yang boleh kamu lakukan" (Authorization/Policy).
 
@@ -225,3 +227,37 @@ func buildInput(r *http.Request, claims map[string]interface{}) map[string]inter
 1. **Context Cancellation & Infinite Recursion di Rego**: Rego bersifat *Turing-complete* dalam batasan tertentu; seorang engineer sekuriti dapat tanpa sengaja menulis policy Rego yang sangat kompleks atau memiliki evaluasi lambat (seperti cross-referencing array bersarang). Jika tidak dibatasi, ini akan mencekik goroutine backend Anda. *Defensive:* Selalu terapkan `context.WithTimeout` seketat 50-100ms saat memanggil `.Eval(ctx, ...)` sehingga goroutine HTTP dapat menghentikan evaluasi OPA yang *runaway* dan me-return HTTP 503/403.
 2. **Data Type Mismatch saat Resolusi Nilai Evaluasi**: Hasil evaluasi dari Rego tidak selalu berupa primitif Boolean jika query yang dijalankan mengembalikan Object atau Set. Evaluasi *Partial* atau salah sasaran query bisa mengembalikan Map. *Defensive:* Gunakan Type Assertion yang aman `allow, ok := results[0].Expressions[0].Value.(bool)`. Jika `ok` bernilai false, itu adalah cacat sistemik (systemic flaw), default-kan policy otorisasi ke `Deny` (Zero Trust default-deny) dan rekam alert *Critical*.
 3. **Hot-Reloading Policy (Concurrency Issues)**: Mengganti policy OPA tanpa me-restart Go service (misalnya, via `fsnotify` Kubernetes ConfigMap) sangat disarankan. Namun, menimpa struct/variabel `PreparedEvalQuery` secara langsung tanpa locking menyebabkan Data Race yang serius saat HTTP request sedang berjalan. *Defensive:* Gunakan `sync.RWMutex` (seperti pada kode di atas) atau `atomic.Value` untuk menyimpan instance `PreparedEvalQuery`. Lakukan lock write (`mu.Lock()`) HANYA saat menukar instance hasil kompilasi baru, sehingga thread pembaca tidak bentrok.
+
+## Kapan JANGAN Pakai Ini
+
+- **OPA di jalur panas tanpa evaluasi lokal.** Panggilan jaringan per permintaan untuk keputusan izin menambah latensi **dan** satu titik kegagalan di jalur yang paling tidak boleh gagal. Sematkan pustaka OPA atau jalankan sidecar dengan kebijakan yang di-push.
+- **Kebijakan tanpa uji.** Rego yang salah bisa membuka akses secara diam-diam, dan tidak ada kompilator yang memperingatkan. Setiap aturan izin layak punya kasus positif **dan** negatif.
+- **Default allow.** Kebijakan harus menolak apa pun yang tidak secara eksplisit diizinkan. Dengan default allow, satu aturan yang lupa ditulis berarti akses terbuka — dan tidak ada yang akan melaporkannya.
+- **Kebijakan yang mengambil data eksternal saat evaluasi.** Keputusan izin harus deterministik dan cepat. Muat datanya lebih dulu lewat bundle; jangan panggil API di tengah evaluasi.
+- **Zero trust sebagai proyek infrastruktur murni.** Tanpa inventaris siapa boleh mengakses apa, alatnya hanya menegakkan aturan yang belum pernah dipikirkan siapa pun.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Latensi naik sejak kebijakan dipasang | waktu evaluasi kebijakan | Evaluasi jarak jauh di jalur panas |
+| Akses lolos yang seharusnya ditolak | apakah default deny | Kebijakan default allow |
+| Kebijakan berubah tanpa review | jalur distribusi bundle | Kebijakan bisa diubah di luar git |
+| Keputusan tidak bisa dijelaskan | log keputusan + input | Keputusan tidak dicatat beserta konteksnya |
+| Kebijakan gagal saat sumber data lambat | dependensi eksternal di Rego | Evaluasi tidak deterministik |
+
+```bash
+# Uji kebijakan -- ini WAJIB ada di CI, sama seperti uji kode
+opa test policy/ -v
+opa eval -d policy/ -i input.json 'data.authz.allow'
+
+# Kebijakan yang benar-benar dimuat di produksi
+curl -s localhost:8181/v1/policies | jq -r '.result[].id'
+curl -s localhost:8181/v1/data/system/bundles | jq
+
+# Waktu evaluasi -- di jalur panas ini harus mikrodetik, bukan milidetik
+curl -s localhost:8181/metrics | grep -E 'http_request_duration|rego_eval'
+
+# Keputusan tolak beserta alasannya
+kubectl logs -l app=opa --since=1h | jq -r 'select(.decision_id) | "\(.result) \(.path)"' | sort | uniq -c
+```

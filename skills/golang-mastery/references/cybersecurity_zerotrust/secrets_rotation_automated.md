@@ -1,5 +1,7 @@
 # Secrets Rotation & Management via HashiCorp Vault di Go
 
+> **Berlaku:** Go 1.21+ · HashiCorp Vault / cloud KMS · **Lihat juga:** `security_owasp/secret_management_vault.md` · `security_owasp/mtls_certificate_rotation.md` · `arch_patterns/config_management.md` · `security_owasp/aes_gcm_cryptography.md`
+
 Dalam Zero Trust, static long-lived credentials (DB password permanen, API key hardcoded) adalah *original sin* keamanan. Vault menyediakan Dynamic Secrets — credential yang dibuat saat dibutuhkan, dengan TTL terbatas, dan di-revoke otomatis. Aplikasi Go tidak menyimpan password sama sekali; ia minta ke Vault dan Vault memberikan credential ephemeral.
 
 ---
@@ -417,3 +419,34 @@ if !ok || user == "" {
 4. **Vault Token Renewal Terpisah dari Secret Renewal:** Vault Token (untuk autentikasi ke Vault itu sendiri) juga punya TTL terpisah dari Dynamic Secret TTL. Jika Vault Token expired, semua operasi ke Vault (termasuk renew) akan gagal dengan 403. Gunakan K8s Auth Method (Service Account Token) yang auto-renews, atau Vault Agent Injector yang mengelola token lifecycle secara transparan.
 
 5. **Multiple Instances / Race pada Initial Fetch:** Di Kubernetes dengan multiple replicas, semua pod fetch credential baru secara bersamaan saat start. Masing-masing mendapat credential yang berbeda (Vault membuat user unik per request). Ini benar dan expected — tidak ada race condition karena setiap pod punya credential-nya sendiri. Total koneksi ke DB = jumlah pods × max_open_conns — monitor ini di Grafana untuk capacity planning.
+
+## Kapan JANGAN Pakai Ini
+
+- **Rotasi tanpa periode tumpang tindih.** Kredensial lama WAJIB tetap berlaku sampai setiap konsumen mengambil yang baru. Tanpa itu, "rotasi" adalah nama lain untuk pemadaman terjadwal.
+- **Otomasi rotasi yang belum pernah dijalankan sungguhan.** Rotasi yang hanya diuji di atas kertas akan gagal pada saat pertama kali benar-benar dibutuhkan — yaitu ketika ada kebocoran dan waktunya paling sempit.
+- **Rotasi manual dengan pengingat di kalender.** Ia akan terlewat, dan pertama kali terlewat biasanya saat orang yang mengingatnya sedang cuti.
+- **Merotasi tanpa mencabut yang lama.** Kredensial lama yang tetap berlaku selamanya membuat rotasi menjadi penambahan, bukan penggantian — dan permukaan serangannya justru bertambah tiap siklus.
+- **Mencabut tanpa memantau siapa yang masih memakai kredensial lama.** Anda perlu tahu konsumen mana yang tertinggal **sebelum** mencabut, bukan setelah teleponnya berdering.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Pemadaman tepat saat jadwal rotasi | periode tumpang tindih | Kredensial lama dicabut terlalu cepat |
+| Kredensial berumur bertahun-tahun | metadata rotasi terakhir | Rotasi tidak pernah benar-benar berjalan |
+| Kredensial lama masih dipakai setelah rotasi | log pemakaian per versi | Ada konsumen yang tidak memperbarui |
+| Rotasi berhasil tapi layanan tetap pakai yang lama | apakah rahasia dimuat ulang | Rahasia diambil sekali saat start |
+| Jumlah kredensial aktif terus bertambah | daftar kredensial | Rotasi menambah, bukan mengganti |
+
+```bash
+# Kapan tiap rahasia terakhir dirotasi -- angka bertahun berarti otomasinya mati
+vault kv metadata get -format=json secret/app/database | jq '.data.updated_time, .data.current_version'
+vault list -format=json sys/leases/lookup/database/creds | jq length
+
+# Kredensial lama yang masih dipakai: cabut hanya setelah angka ini nol
+kubectl logs -l app=api --since=24h \
+  | jq -r 'select(.kredensial_versi) | .kredensial_versi' | sort | uniq -c
+
+# Rotasi yang gagal
+kubectl logs -l app=rotator --since=7d | grep -ci 'rotasi gagal\|rotation failed'
+```

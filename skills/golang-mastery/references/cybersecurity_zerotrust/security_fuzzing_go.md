@@ -1,5 +1,7 @@
 # Fuzzing Keamanan di Go (Native 1.18+)
 
+> **Berlaku:** Go 1.21+ · **Lihat juga:** `testing_quality/fuzz_testing_go.md` · `security_owasp/owasp_input_validation.md` · `runtime_internals/reflection_unsafe_pointer.md` · `testing_quality/govulncheck_security_scan.md`
+
 ## 1. Konsep Utama & Internals
 
 Fuzzing adalah teknik *automated security testing* yang terus-menerus memborbardir fungsi target dengan data acak untuk menemukan *panics*, *memory corruption*, *hangs*, dan *logical vulnerabilities*.
@@ -251,3 +253,38 @@ f.Add([]byte{0xAA, 0xBB, 0x00, 0x04, 'T','E','S','T'})
 3. **Dirty File System / Side Effects**: `f.Fuzz()` dipanggil ratusan ribu kali per detik secara paralel. Jika ada `os.WriteFile` atau `db.Exec` di dalamnya, disk/DB akan hancur. *Defensive:* Fuzz target HARUS pure function — hanya memori CPU, tanpa I/O, tanpa state global, tanpa DB calls.
 4. **Unicode dan Encoding Boundaries**: Fuzzer sering menghasilkan input dengan byte yang tampak valid tapi bukan UTF-8 valid. Jika `string(payload)` di-convert tanpa validasi, karakter replacement (`�`) bisa masuk ke downstream storage dan merusak data. *Defensive:* Gunakan `utf8.ValidString(s)` atau `utf8.Valid(b)` sebelum konversi string jika sistem downstream sensitif terhadap encoding.
 5. **Integer Overflow di Length Calculation:** `uint16(0xFF) + 4 = 259` tapi jika dihitung sebagai `int8`, hasilnya overflow ke nilai negatif. Go tidak memiliki implicit integer overflow untuk slice index, tapi arithmetic murni bisa overflow. *Defensive:* Saat mengkalkulasi `length + headerSize`, lakukan dalam tipe integer yang lebih besar (int64) dan validasi hasil akhir sebelum cast ke ukuran lebih kecil.
+
+## Kapan JANGAN Pakai Ini
+
+- **Fuzzing tanpa detektor tambahan.** Fuzz yang hanya mencari panic akan melewatkan kerusakan memori di jalur `unsafe` dan cgo. Jalankan dengan `-race`; untuk kode cgo, pertimbangkan build dengan sanitizer.
+- **Fuzzing sebagai bukti keamanan.** Ia menemukan crash dan kondisi tak tertangani. Ia tidak menemukan otorisasi yang salah, IDOR, atau alur bisnis yang bisa disalahgunakan — dan justru itu yang paling sering dieksploitasi.
+- **Corpus yang berisi data produksi nyata.** Corpus masuk repo dan tersebar ke setiap klon. Gunakan data sintetis yang bentuknya realistis, bukan isinya.
+- **Fuzz target yang menyentuh jaringan atau berkas.** Fuzzer akan memicunya jutaan kali; targetnya harus murni fungsi terhadap byte masukan.
+- **Menunda triase temuan.** Temuan yang menumpuk kehilangan konteks, dan kemampuan mereproduksinya menurun seiring kode berubah. Satu temuan yang ditriase hari ini lebih berharga daripada sepuluh yang menunggu sebulan.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Panic dari input pengguna di parser | apakah jalur itu punya fuzz target | Ada bentuk input yang tidak pernah dicoba |
+| Crash acak di jalur `unsafe`/cgo | apakah fuzz dijalankan dengan `-race` | Kerusakan memori lolos dari fuzz biasa |
+| Fuzzer selalu menemukan OOM | batas ukuran di target | Ketiadaan batas masukan, bukan bug |
+| Temuan lama tidak bisa direproduksi | isi `testdata/fuzz/` | Corpus tidak di-commit |
+| Kerentanan logika lolos audit | kelas kerentanan yang dicakup | Fuzzing buta terhadap kesalahan otorisasi |
+
+```bash
+# Fuzzing dengan detektor race -- wajib untuk kode yang menyentuh unsafe/cgo
+go test -fuzz=FuzzParse -fuzztime=10m -race ./...
+
+# CI memutar ulang corpus tersimpan, TANPA -fuzz
+go test ./...
+ls testdata/fuzz/*/
+
+# Reproduksi dan perkecil satu temuan
+go test -run='FuzzParse/582528ddfad69eb5' ./...
+go test -fuzz=FuzzParse -fuzzminimizetime=60s ./...
+
+# Ciri khas kerusakan memori di log produksi
+kubectl logs -l app=api --previous \
+  | grep -E 'found bad pointer|unexpected fault address|unallocated span'
+```

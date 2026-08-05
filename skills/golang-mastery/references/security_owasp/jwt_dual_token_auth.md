@@ -1,5 +1,7 @@
 # Panduan Definitif: Arsitektur JWT Dual Token Auth (Access + Refresh)
 
+> **Berlaku:** Go 1.21+ · `golang-jwt/jwt/v5` · **Lihat juga:** `security_owasp/casbin_rbac_abac.md` · `security_owasp/argon2_password_security.md` · `security_owasp/mtls_certificate_rotation.md` · `observability_resilience/rate_limiting_patterns.md`
+
 ## 1. Konsep dan Internals (Technical Depth)
 
 JSON Web Token (JWT) di Go sering kali diimplementasikan dengan keliru sebagai token sesi permanen. Karena JWT berprinsip *stateless*, token yang sudah diterbitkan tidak bisa di-*revoke* (dicabut) tanpa membuat server menyimpan *state* (blacklist/whitelist) di cache, yang mengalahkan tujuan *statelessness* JWT itu sendiri.
@@ -309,4 +311,38 @@ func TestJWTAuthenticationFlow_SecurityBoundaries(t *testing.T) {
 		t.Errorf("Expected unexpected algorithm error, got: %v", err)
 	}
 }
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **Untuk sesi yang harus bisa dicabut seketika.** Token yang sudah diterbitkan berlaku sampai kedaluwarsa. Pencabutan membutuhkan daftar cabut yang diperiksa setiap permintaan — dan begitu daftar itu ada, keuntungan "tanpa state" sudah hilang. Untuk kasus ini, sesi berbasis server lebih jujur.
+- **Menerima algoritma dari header token.** `alg: none` dan pertukaran RS256→HS256 adalah kerentanan klasik yang masih ditemukan sampai sekarang. Algoritma WAJIB ditentukan server dan diverifikasi eksplisit di callback.
+- **Menyimpan data yang bisa berubah di dalam klaim.** Peran yang dicabut tetap berlaku sampai token kedaluwarsa. Untuk otorisasi yang berubah, ambil dari sumbernya.
+- **Access token berumur panjang.** Pola dua token ada persis agar access token pendek dan refresh token bisa dicabut. Access token 30 hari membuang seluruh manfaatnya dan menyisakan kerumitannya.
+- **Menyimpan JWT di `localStorage` untuk aplikasi web.** Satu XSS menjadi pengambilalihan akun penuh. Cookie `HttpOnly` + `Secure` + `SameSite` memberi perlindungan yang tidak bisa diberikan `localStorage`.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Pengguna yang dinonaktifkan masih bisa mengakses | umur access token | Tidak ada pencabutan; token berlaku sampai kedaluwarsa |
+| Token dengan `alg` tak terduga diterima | validasi metode penandatanganan | Algoritma diambil dari token, bukan ditetapkan server |
+| Peran yang dicabut masih berlaku | apa yang disimpan di klaim | Data berubah disimpan di token |
+| Refresh token dipakai berkali-kali dari IP berbeda | rotasi refresh token | Token dicuri; butuh deteksi pemakaian ulang |
+| Lonjakan `401` setelah rotasi kunci | periode tumpang tindih kunci | Kunci lama dicabut sebelum semua token kedaluwarsa |
+
+```bash
+# Validasi metode penandatanganan WAJIB eksplisit -- ini baris paling penting
+grep -rn -A5 'jwt.Parse\|ParseWithClaims' --include='*.go' . | grep -i 'SigningMethod'
+
+# Umur token yang benar-benar diterbitkan
+kubectl logs -l app=api --since=1h \
+  | jq -r 'select(.event=="token_terbit") | .ttl_detik' | sort -n | uniq -c
+
+# Alasan token ditolak -- pola tak terduga di sini layak diselidiki
+kubectl logs -l app=api --since=1h \
+  | jq -r 'select(.event=="token_ditolak") | .alasan' | sort | uniq -c | sort -rn
+
+# Refresh token yang dipakai ulang = indikasi pencurian
+kubectl logs -l app=api --since=24h | grep -c 'refresh_dipakai_ulang'
 ```
