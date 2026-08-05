@@ -43,7 +43,6 @@ import (
 	"bytes"
 	"context"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -53,7 +52,6 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 )

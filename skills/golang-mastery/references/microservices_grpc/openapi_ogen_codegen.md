@@ -46,7 +46,6 @@ package openapigen_test
 import (
 	"context"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"

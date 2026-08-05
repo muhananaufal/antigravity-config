@@ -41,8 +41,6 @@ package grpclb_test
 
 import (
 	"context"
-	"fmt"
-	"log"
 	"net"
 	"testing"
 	"time"

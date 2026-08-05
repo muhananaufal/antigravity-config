@@ -89,8 +89,8 @@ Scenario: Payment service call Midtrans API 1000 RPS
 package httpclient
 
 import (
-	"context"
 	"crypto/tls"
+	"fmt"
 	"net"
 	"net/http"
 	"time"
@@ -169,10 +169,21 @@ func New(cfg Config) *http.Client {
 	return &http.Client{
 		Timeout:   cfg.Timeout,
 		Transport: transport,
-		// CheckRedirect: batasi redirect untuk keamanan
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			// JANGAN memakai http.ErrUseLastResponse untuk membatasi redirect.
+			// Ia menyuruh klien MENGEMBALIKAN respons 3xx terakhir TANPA galat --
+			// pemanggil yang tidak memeriksa status akan mengurai badan
+			// halaman redirect seolah itu datanya. Batas keamanan harus
+			// menghasilkan GALAT.
 			if len(via) >= 5 {
-				return http.ErrUseLastResponse // stop setelah 5 redirect
+				return fmt.Errorf("terlalu banyak redirect (%d) menuju %s", len(via), req.URL.Redacted())
+			}
+			// Redirect lintas host membawa header Authorization ke tujuan yang
+			// tidak Anda pilih. Go sudah menahan sebagian kasus, tetapi untuk
+			// klien service-to-service, menolak eksplisit lebih jujur.
+			if len(via) > 0 && req.URL.Host != via[0].URL.Host {
+				return fmt.Errorf("redirect lintas host ditolak: %s -> %s",
+					via[0].URL.Host, req.URL.Host)
 			}
 			return nil
 		},
@@ -189,8 +200,6 @@ package httpclient
 
 import (
 	"context"
-	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"time"
@@ -245,7 +254,10 @@ func (l *LoggingRoundTripper) RoundTrip(req *http.Request) (*http.Response, erro
 		l.logger.ErrorContext(req.Context(), "http client error",
 			"service", l.service,
 			"method", req.Method,
-			"url", req.URL.String(),
+			// Redacted(): query string rutin memuat token, kunci API, dan
+			// data pribadi. URL.String() mentah di log adalah kebocoran
+			// yang paling mudah terjadi dan paling sulit ditarik kembali.
+			"url", req.URL.Redacted(),
 			"duration_ms", duration.Milliseconds(),
 			"error", err.Error(),
 		)
@@ -310,13 +322,22 @@ package httpclient
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 )
 
-// Do melakukan HTTP request dengan proper response body handling.
-// WAJIB: drain + close body agar connection dikembalikan ke pool.
+// batasBodySukses membatasi berapa banyak yang mau kita baca dari respons.
+//
+// Tanpa batas ini, hilir yang rusak atau jahat bisa mengalirkan gigabyte dan
+// meng-OOM klien -- vektor DoS dari sisi yang justru Anda percaya. Jalur
+// GALAT di bawah sudah dibatasi 4 KB; jalur SUKSES tidak boleh kurang
+// terlindungi hanya karena statusnya 200.
+const batasBodySukses = 8 << 20 // 8 MB
+
+// Do melakukan HTTP request dengan penanganan body yang benar.
 func Do[T any](ctx context.Context, client *http.Client, req *http.Request) (T, error) {
 	var zero T
 
@@ -325,27 +346,54 @@ func Do[T any](ctx context.Context, client *http.Client, req *http.Request) (T, 
 		return zero, fmt.Errorf("http request failed: %w", err)
 	}
 	defer func() {
-		// WAJIB: drain body sebelum close agar connection reuse ke pool.
-		// Tanpa ini: setiap request buat TCP connection baru → performance collapse.
-		_, _ = io.Copy(io.Discard, resp.Body)
-		resp.Body.Close()
+		// Drain sebelum Close agar koneksi kembali ke pool. Tanpa ini, setiap
+		// permintaan membuka koneksi TCP baru dan pool berhenti bermakna.
+		// Dibatasi juga: menguras body raksasa hanya untuk membuangnya
+		// tetap membakar bandwidth dan waktu.
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, batasBodySukses))
+		_ = resp.Body.Close()
 	}()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096)) // limit 4KB untuk error body
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096)) // 4 KB cukup untuk pesan galat
 		return zero, &HTTPError{
 			StatusCode: resp.StatusCode,
 			Body:       string(body),
-			URL:        req.URL.String(),
+			URL:        req.URL.Redacted(), // JANGAN URL.String(): query bisa memuat token
 		}
 	}
 
 	var result T
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, batasBodySukses)).Decode(&result); err != nil {
 		return zero, fmt.Errorf("decode response: %w", err)
 	}
 
 	return result, nil
+}
+
+// isNetworkError membedakan kegagalan jaringan dari kegagalan aplikasi.
+//
+// Fungsi ini dipanggil IsRetryable di bawah. Tanpanya berkas ini tidak
+// dikompilasi -- dan tanpa `errors` serta `net` di daftar import di atas,
+// juga tidak.
+func isNetworkError(err error) bool {
+	if err == nil {
+		return false
+	}
+	// Pembatalan oleh pemanggil BUKAN kegagalan jaringan: mengulanginya
+	// hanya membebani hilir untuk permintaan yang sudah tidak ada penerimanya.
+	if errors.Is(err, context.Canceled) {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true // timeout: hilir lambat, layak dicoba lagi
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return netErr.Timeout()
+	}
+	var opErr *net.OpError
+	return errors.As(err, &opErr)
 }
 
 // HTTPError adalah typed error untuk HTTP non-2xx response.
@@ -384,6 +432,7 @@ package httpclient
 
 import (
 	"log/slog"
+	"net/http"
 	"sync"
 )
 

@@ -45,9 +45,7 @@ package apiversioning_test
 
 import (
 	"context"
-	"log"
 	"net"
-	"strings"
 	"testing"
 
 	"google.golang.org/grpc"

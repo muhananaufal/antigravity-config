@@ -68,9 +68,10 @@ package grpcinterceptors_test
 
 import (
 	"context"
-	"fmt"
-	"log"
+	"crypto/subtle"
+	"log/slog"
 	"net"
+	"runtime/debug"
 	"testing"
 	"time"
 
@@ -80,6 +81,17 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 )
+
+// kunciPengguna adalah tipe PRIVAT untuk kunci context.
+//
+// Memakai string telanjang (`ctx.Value("userID")`) berarti paket lain --
+// pustaka tracing, framework, middleware pihak ketiga -- yang kebetulan
+// memakai kunci "userID" akan menimpa atau membaca nilai Anda. Tidak ada
+// galat kompilasi, tidak ada galat runtime; hanya identitas yang kadang
+// salah.
+type kunciCtx string
+
+const kunciPengguna kunciCtx = "userID"
 
 // ==============================================================================
 // 1. SIMULASI PROTO-GENERATED CODE
@@ -137,11 +149,21 @@ func RecoveryInterceptor() grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (resp interface{}, err error) {
 		defer func() {
 			if r := recover(); r != nil {
-				// Di production, gunakan logging terpusat (contoh: zerolog/slog)
-				log.Printf("[PANIC RECOVERED] method: %s, err: %v", info.FullMethod, r)
-				
-				// Jangan pernah mengekspos detail internal panic ke client, cukup codes.Internal
-				err = status.Errorf(codes.Internal, "internal server error")
+				// STACK TRACE ADALAH SATU-SATUNYA HAL YANG BENAR-BENAR
+				// DIBUTUHKAN DI SINI. Panic yang di-recover memutus jejaknya:
+				// tanpa debug.Stack(), yang tersisa hanya pesan seperti
+				// "database connection lost" tanpa satu pun petunjuk baris
+				// mana yang memicunya. Insiden menjadi tebakan.
+				slog.ErrorContext(ctx, "panic dipulihkan di handler gRPC",
+					slog.String("method", info.FullMethod),
+					slog.Any("panic", r),
+					slog.String("stack", string(debug.Stack())),
+				)
+
+				// Ke klien: hanya codes.Internal. Detail panic tidak boleh
+				// menyeberang -- ia memuat nama fungsi, path berkas, dan
+				// kadang nilai variabel.
+				err = status.Error(codes.Internal, "internal server error")
 			}
 		}()
 		
@@ -164,15 +186,19 @@ func AuthInterceptor(validToken string) grpc.UnaryServerInterceptor {
 			return nil, status.Error(codes.Unauthenticated, "authorization token missing")
 		}
 
-		expectedHeader := fmt.Sprintf("Bearer %s", validToken)
-		if authHeader[0] != expectedHeader {
+		expectedHeader := "Bearer " + validToken
+		// Perbandingan konstan waktu. `!=` biasa berhenti pada byte pertama
+		// yang berbeda, sehingga waktu responsnya membocorkan berapa banyak
+		// prefiks token yang sudah benar -- cukup untuk menebak token
+		// karakter demi karakter dari jarak jauh.
+		if subtle.ConstantTimeCompare([]byte(authHeader[0]), []byte(expectedHeader)) != 1 {
 			return nil, status.Error(codes.Unauthenticated, "invalid or expired token")
 		}
 
-		// (Opsional) Meng-inject user ID ke dalam context baru agar bisa dibaca handler
-		// newCtx := context.WithValue(ctx, "userID", "user_123")
-		
-		return handler(ctx, req)
+		// Menyuntikkan identitas ke context. Kunci WAJIB bertipe privat --
+		// string telanjang bisa ditimpa paket lain yang kebetulan memakai
+		// kunci yang sama, diam-diam.
+		return handler(context.WithValue(ctx, kunciPengguna, "user_123"), req)
 	}
 }
 

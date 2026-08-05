@@ -53,12 +53,10 @@ package grpcgateway_test
 import (
 	"context"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"google.golang.org/grpc"
