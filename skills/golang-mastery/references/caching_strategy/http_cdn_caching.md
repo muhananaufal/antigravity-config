@@ -1,5 +1,7 @@
 # Panduan Ekstensif HTTP & CDN Caching di Golang
 
+> **Berlaku:** Go 1.21+ · RFC 9111 · **Lihat juga:** `caching_strategy/cache_invalidation_strategies.md` · `microservices_grpc/rest_chi_middleware_stack.md` · `caching_strategy/cache_aside_singleflight.md` · `cli_tooling/binary_distribution_release.md`
+
 Dalam arsitektur *web scale*, caching bukan sekadar optimasi opsional, melainkan fondasi vital untuk bertahan dari *traffic spike*, menghemat *bandwidth* egress, dan memberikan *Response Time* (TTFB) di bawah 50ms ke seluruh dunia. Caching bekerja berlapis (multi-tier), mulai dari browser pengguna, proxy korporat, *Content Delivery Network* (CDN) edge, hingga reverse proxy internal. Dokumen ini membedah spesifikasi HTTP Caching (RFC 9111), strategi CDN modern, dan implementasi idiomatic di Golang.
 
 ## 1. Arsitektur Multi-Tier Caching
@@ -327,3 +329,38 @@ func TestConfigHandler_Conditional_IfModifiedSince(t *testing.T) {
 
 ---
 *Reference ini dirancang untuk insinyur backend dan DevOps dalam merancang pipeline distribusi aset/API yang resilient.*
+
+## Kapan JANGAN Pakai Ini
+
+- **`Cache-Control: public` untuk respons yang bergantung identitas pengguna.** Satu respons milik satu pengguna akan disajikan CDN kepada semua orang. Ini kebocoran data yang paling mudah terjadi dan paling sulit dipercaya sudah terjadi.
+- **`ETag` yang dihitung dari waktu pembuatan.** Ia berubah setiap kali meski isinya sama, sehingga revalidasi tidak pernah menghasilkan `304` dan seluruh mekanismenya jadi beban tanpa manfaat.
+- **TTL panjang tanpa mekanisme purge.** Aset yang salah akan bertahan selama TTL di ribuan edge, dan Anda tidak punya cara memperbaikinya selain menunggu. Pakai URL berversi (fingerprint) untuk aset statis.
+- **`Vary` pada header berkardinalitas tinggi.** `Vary: User-Agent` memecah cache menjadi ribuan varian dan hit rate mendekati nol — cache-nya ada, manfaatnya tidak.
+- **Meng-cache respons galat.** `500` yang tersimpan mengubah gangguan sepuluh detik menjadi gangguan sepanjang TTL, dan sering baru ketahuan setelah gangguan aslinya lama berlalu.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Pengguna melihat data pengguna lain | `Cache-Control` pada respons berautentikasi | Respons privat ditandai publik |
+| Hit rate CDN sangat rendah | header `Vary` | Cache terpecah oleh header berkardinalitas tinggi |
+| Revalidasi tidak pernah `304` | dasar perhitungan `ETag` | ETag berubah meski isi sama |
+| Galat bertahan lama setelah diperbaiki | apakah `5xx` ikut di-cache | Respons galat tersimpan di edge |
+| Aset lama muncul setelah deploy | apakah URL berfingerprint | Purge tidak menjangkau semua edge |
+
+```bash
+# Header yang benar-benar dikirim -- periksa untuk endpoint berautentikasi
+curl -sI -H 'Authorization: Bearer x' https://api.contoh.id/v1/profil \
+  | grep -iE 'cache-control|vary|etag|age|x-cache'
+
+# Apakah CDN benar-benar menyimpannya? X-Cache/CF-Cache-Status menjawabnya.
+curl -sI https://cdn.contoh.id/app.js | grep -iE 'x-cache|cf-cache-status|age'
+
+# Revalidasi menghasilkan 304 atau tidak
+ETAG=$(curl -sI https://cdn.contoh.id/app.js | grep -i etag | tr -d '\r' | cut -d' ' -f2)
+curl -sI -H "If-None-Match: $ETAG" https://cdn.contoh.id/app.js | head -1
+
+# Endpoint berautentikasi yang ditandai publik -- daftar risiko kebocoran
+kubectl logs -l app=api --since=1h \
+  | jq -r 'select(.auth==true and (.cache_control|test("public"))) | .path' | sort | uniq -c
+```

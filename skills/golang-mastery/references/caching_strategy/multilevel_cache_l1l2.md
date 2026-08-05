@@ -1,5 +1,7 @@
 # Multilevel Caching (L1/L2) di Golang: Arsitektur, Implementasi, dan Praktik Produksi
 
+> **Berlaku:** Go 1.21+ · Redis 7+ · **Lihat juga:** `caching_strategy/cache_aside_singleflight.md` · `caching_strategy/cache_invalidation_strategies.md` · `db_sqlc/multi_layer_caching.md` · `runtime_internals/gc_mark_sweep_internals.md`
+
 ## 1. Konsep Mendalam & Arsitektur Multilevel Cache
 
 Dalam rekayasa sistem terdistribusi modern dengan beban baca yang luar biasa tinggi (read-heavy), pangkalan data SQL (PostgreSQL, MySQL) sering kali menjadi rintangan utama kinerja (bottleneck). Untuk mengatasi ini, *caching* (penyanggaan) adalah praktik standar. Namun, menggunakan memori bersama (distributed cache) seperti Redis saja terkadang tidak cukup karena masih terdapat latensi jaringan (network hop), biaya koneksi TCP, serta biaya overhead serialisasi dan deserialisasi JSON/Protobuf. 
@@ -475,4 +477,35 @@ func TestMultilevelCache_L2Resilience(t *testing.T) {
 	assert.Equal(t, "xyz", dict["data_rahasia"])
 	assert.Equal(t, 0, fetchCount, "Fetcher DB dilarang dieksekusi, karena Redis L2 sanggup memenuhinya!")
 }
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **L1 untuk data yang sering berubah.** Nilai per-pod yang tidak sinkron lebih membingungkan bagi pengguna dan bagi tim daripada satu round-trip ke Redis. Gejalanya — "kadang benar, kadang lama" — adalah salah satu bug tersulit dilacak.
+- **L1 tanpa batas ukuran.** Cache dalam-proses yang tidak dibatasi adalah kebocoran memori dengan nama yang lebih baik. Pakai LRU berkapasitas tetap, dan hitung ongkosnya terhadap `GOMEMLIMIT`.
+- **L1 dan L2 dengan TTL yang sama.** L1 harus jauh lebih pendek. Bila tidak, invalidasi di L2 tidak berarti apa-apa selama L1 masih memegang nilai lama.
+- **Menyalin objek besar ke L1.** Memori pod terbatas dan dibagi dengan heap aplikasi; satu cache 500 MB akan tampak sebagai masalah GC, bukan sebagai masalah cache.
+- **Mengukur hit rate gabungan saja.** Yang menentukan adalah hit rate L1 dan L2 secara terpisah. L1 dengan hit rate rendah adalah biaya memori tanpa manfaat, dan angka gabungan menyembunyikannya.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Jawaban berbeda tergantung pod | nilai L1 tiap pod | L1 tidak sinkron; TTL terlalu panjang |
+| RSS naik dan tidak turun | ukuran cache L1 | Cache dalam-proses tanpa batas |
+| Invalidasi tidak berefek | TTL L1 vs L2 | L1 menahan nilai lama lebih lama dari L2 |
+| Tekanan GC naik setelah menambah cache | profil heap | Objek cache berumur panjang membebani GC |
+| Hit rate gabungan bagus, beban DB tetap | hit rate per level | L2 yang bekerja; L1 hanya biaya |
+
+```bash
+# Nilai berbeda antar pod adalah bukti langsung L1 tidak sinkron
+for p in $(kubectl get pods -l app=api -o name); do
+  kubectl exec "$p" -- curl -s localhost:8080/debug/cache/produk/42
+done | sort | uniq -c
+
+# Hit rate HARUS dipisah per level
+curl -s localhost:9090/metrics | grep -E 'cache_(hits|misses)_total\{level='
+
+# Berapa besar cache L1 dalam heap
+go tool pprof -sample_index=inuse_space -top http://localhost:6060/debug/pprof/heap | head -20
 ```

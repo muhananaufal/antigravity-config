@@ -1,5 +1,7 @@
 # Clean Architecture & Hexagonal (Ports and Adapters) di Go
 
+> **Berlaku:** Go 1.21+ · **Lihat juga:** `arch_patterns/dependency_injection_wire.md` · `arch_patterns/ddd_aggregate_repository.md` · `arch_patterns/modular_monolith_go.md` · `testing_quality/mocking_interfaces.md`
+
 ## Konsep Utama dan Internal
 
 Clean Architecture, atau Hexagonal Architecture (Ports and Adapters), dirancang untuk memisahkan logika bisnis inti (Domain) dari detail teknis (Infrastruktur, UI, Framework, Database). Di Go, konsep ini direalisasikan secara elegan menggunakan *Dependency Inversion Principle* (DIP) melalui `interface`. 
@@ -307,3 +309,32 @@ type CreateUserInput struct {
 3. **Transaction / Unit of Work Across Multiple Repositories:**
    Dalam Clean Architecture, Usecase tidak boleh mengimpor objek database (seperti `sql.Tx` atau `pgx.Tx`). Bagaimana jika `OrderUsecase.Checkout()` harus memanggil `OrderRepo.Save()`, `InventoryRepo.Deduct()`, dan `WalletRepo.Charge()` dalam satu transaksi ACID? Mengoper `*sql.Tx` ke dalam argumen method Usecase adalah pelanggaran berat terhadap isolasi layer.
    *Defensive:* Terapkan pattern *Unit of Work (UoW)* dengan menyisipkan transaction via `context.Context` atau *closure*. Buat interface `TransactionManager` di Usecase layer yang memiliki signature: `RunInTransaction(ctx context.Context, fn func(ctx context.Context) error) error`. Infrastruktur mengimplementasikannya dengan membungkus `sql.Tx` ke dalam `context.WithValue`. Tiap Repository Adapter kemudian akan mencoba mengekstrak `sql.Tx` dari context, dan jika ada, menggunakannya, jika tidak, kembali menggunakan koneksi standar. Ini membiarkan Usecase tetap 100% agnostik terhadap transaksi SQL.
+
+## Kapan JANGAN Pakai Ini
+
+- **Untuk layanan kecil yang batasnya sudah jelas.** Empat lapisan dan tiga interface untuk CRUD dengan lima endpoint menambah berkas tanpa menambah kejelasan. Arsitektur berlapis membayar dirinya ketika ada perubahan yang benar-benar perlu diisolasi.
+- **Interface untuk setiap dependensi.** Di Go, interface milik konsumen dan lahir ketika ada dua implementasi nyata atau kebutuhan uji yang tidak bisa dipenuhi cara lain. Interface satu-implementasi yang dibuat "demi arsitektur" adalah kerja tanpa hasil.
+- **Memetakan struct antar lapisan yang isinya identik.** Bila DTO, entity, dan model database sama field demi field, tiga salinan itu murni biaya pemeliharaan — dan tempat bug menyelinap saat salah satunya lupa diperbarui.
+- **Menerapkannya seragam ke seluruh modul.** Modul pembayaran mungkin butuh lapisan penuh; modul "daftar negara" tidak. Keseragaman di sini bukan kebajikan.
+- **Sebagai alasan menunda keputusan tentang batas domain.** Arsitektur berlapis tidak memperbaiki model domain yang salah — ia menyebarkannya ke lebih banyak berkas sehingga lebih mahal diperbaiki nanti.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Perubahan sepele menyentuh 6+ berkas | jumlah lapisan yang dilewati | Lapisan tidak membayar dirinya untuk kasus ini |
+| Domain mengimpor paket infrastruktur | `go list -deps` pada paket domain | Arah dependensi terbalik |
+| Uji domain butuh database | apa yang di-mock di uji | Batas tidak benar-benar ada |
+| Interface hanya punya satu implementasi | jumlah implementasi per interface | Abstraksi yang tidak pernah dipakai untuk apa pun |
+| Logika bisnis ada di handler | ukuran fungsi handler | Lapisan ada di nama direktori, bukan di kode |
+
+```bash
+# Aturan paling penting: domain TIDAK BOLEH bergantung pada infrastruktur
+go list -deps ./internal/domain/... | grep -E 'database/sql|net/http|redis|pgx|aws-sdk'
+
+# Penegakan di CI -- tanpa ini aturan lapisan hanya kesepakatan lisan
+grep -rn 'net/http\|database/sql' --include='*.go' internal/domain/ internal/service/
+
+# golangci-lint dengan linter depguard bisa memblokir import terlarang per direktori
+golangci-lint run --enable=depguard
+```

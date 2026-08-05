@@ -1,5 +1,7 @@
 # Redis Advanced Patterns di Go: Arsitektur, Optimasi, dan Implementasi Production-Ready
 
+> **Berlaku:** Go 1.21+ · Redis 7+ · `redis/go-redis/v9` · **Lihat juga:** `caching_strategy/cache_invalidation_strategies.md` · `concurrency/distributed_locks_redis.md` · `observability_resilience/rate_limiting_patterns.md` · `caching_strategy/multilevel_cache_l1l2.md`
+
 Redis bukan sekadar key-value store biasa. Dengan stuktur data yang kaya dan kapabilitas eksekusi command pada level mikrodetik, Redis adalah senjata utama dalam arsitektur distributed systems modern. Namun, penggunaan Redis yang naif hanya akan memberikan sekelumit performa aslinya, dan pada skala besar, dapat menjadi bottleneck atau single point of failure. 
 
 Dokumen ini adalah referensi mendalam mengenai advanced patterns penggunaan Redis dalam ekosistem Go, membahas mekanika internal, strategi optimal, implementasi kode *production-ready*, hingga jebakan (anti-patterns) dan *edge cases* yang sering terjadi di lapangan.
@@ -571,4 +573,40 @@ func TestIsAllowedRateLimit(t *testing.T) {
 	assert.NoError(t, err)
 	assert.False(t, allowed, "Harusnya DITOLAK karena bucket habis")
 }
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **`KEYS` di produksi.** Redis bersifat satu utas; `KEYS` memblokir **seluruh** server selama pemindaian. Pada dataset besar itu berarti setiap klien membeku bersamaan. `SCAN` yang benar, dan tetap dengan hati-hati.
+- **Skrip Lua yang panjang.** Skrip berjalan atomik — artinya seluruh server berhenti melayani selama skrip berjalan. Atomisitas yang Anda dapat dibayar dengan latensi semua orang.
+- **Redis sebagai database utama tanpa memahami persistensinya.** RDB dan AOF memberi jaminan yang berbeda, dan konfigurasi bawaan bisa kehilangan penulisan terakhir saat crash. Itu keputusan yang harus diambil sadar.
+- **`MULTI/EXEC` dianggap transaksi ACID.** Ia tidak punya rollback: perintah yang gagal saat eksekusi tidak membatalkan yang lain. Untuk atomisitas sungguhan, pakai skrip Lua yang pendek.
+- **Kunci raksasa** — list atau hash berisi jutaan elemen. Satu operasi padanya memblokir server, dan `DEL`-nya juga. Gunakan `UNLINK` untuk penghapusan asinkron, dan pecah strukturnya sejak awal.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Semua klien membeku bersamaan | `slowlog` | Satu perintah memblokir server satu utas |
+| Latensi p99 melonjak berkala | `latency history` | Fork untuk RDB, atau perintah berat periodik |
+| Memori penuh lebih cepat dari perkiraan | `--bigkeys` | Ada struktur data yang membengkak |
+| Data hilang setelah restart | `info persistence` | Konfigurasi persistensi tidak sesuai harapan |
+| `DEL` menyebabkan lonjakan latensi | ukuran kunci yang dihapus | Penghapusan sinkron pada kunci raksasa |
+
+```bash
+# Perintah yang memblokir server -- ini tempat pertama yang dilihat saat Redis lambat
+redis-cli slowlog get 10
+redis-cli --latency-history -i 5
+
+# Kunci raksasa: penyebab paling umum lonjakan latensi yang tidak dijelaskan apa pun
+redis-cli --bigkeys
+redis-cli memory usage nama:kunci:besar
+
+# Jaminan persistensi yang sebenarnya berlaku
+redis-cli info persistence | grep -E 'aof_enabled|rdb_last_bgsave_status|aof_last_write_status'
+redis-cli config get save
+redis-cli config get appendfsync
+
+# Klien yang paling banyak mengirim perintah
+redis-cli info commandstats | sort -t= -k2 -rn | head
 ```

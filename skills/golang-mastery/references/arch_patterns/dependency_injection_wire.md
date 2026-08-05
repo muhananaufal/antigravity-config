@@ -1,5 +1,7 @@
 # Dependency Injection dengan Google Wire
 
+> **Berlaku:** Go 1.21+ · `google/wire` · **Lihat juga:** `arch_patterns/clean_hexagonal_architecture.md` · `arch_patterns/config_management.md` · `testing_quality/mocking_interfaces.md` · `cli_tooling/cobra_command_architecture.md`
+
 ## Konsep Utama dan Internal Mendalam
 
 Dependency Injection (DI) adalah teknik fundamental dalam rekayasa perangkat lunak yang memisahkan pembentukan (instansiasi) dependensi dari penggunaannya. Di Go, hal ini secara konvensional dicapai melalui constructor manual (misal `NewService(repo)`). Namun, saat skala aplikasi membengkak ratusan file, merangkai komponen secara manual menjadi neraka pemeliharaan.
@@ -326,3 +328,35 @@ func NewServiceB(s *SharedComponent) *ServiceB { return &ServiceB{shared: s} }
 5. **Graceful Shutdown & LIFO Cleanup Execution (Aggregate Cleanup):**
    *Edge Case:* Jika ada 5 provider I/O (DB, Redis, gRPC Client, Kafka, NATS) dan di tengah-tengah inisialisasi, provider ke-3 melempar error, apakah provider ke-1 dan ke-2 akan mengalami *resource leak*?
    *Detail Implementasi:* Tidak. Algoritma auto-generated dari Wire secara otomatis akan memanggil `cleanup()` pada dependensi yang telah berhasil dibuat secara berurutan mundur (LIFO) sebelum mereturn error kepada caller. Ini mencegah zombie process atau memori leak pada Kubernetes Pod *OOM-kill* jika aplikasi gagal startup. Perhatikan struktur kode `wire_gen.go`: jika ada `err != nil`, ia langsung memanggil defer/cleanup dari instance sebelumnya.
+
+## Kapan JANGAN Pakai Ini
+
+- **Wire untuk graf dependensi yang kecil.** Konstruktor manual di `main.go` lebih mudah dibaca, tidak butuh langkah generate, dan tidak menambah alat yang harus dipelajari orang baru. Wire mulai berguna ketika grafnya cukup dalam sehingga urutan inisialisasi sulit dilacak dengan mata.
+- **DI berbasis refleksi (container runtime).** Ia memindahkan kegagalan dari waktu kompilasi ke waktu jalan — persis kebalikan dari alasan memilih Go. Dependensi yang hilang seharusnya gagal saat build, bukan pada permintaan pertama di produksi.
+- **Menyuntikkan segalanya.** `time.Now` dan `rand` layak disuntikkan bila memang perlu diuji. Menyuntikkan hal yang tidak pernah diganti hanya memperpanjang daftar parameter.
+- **Singleton global sebagai jalan pintas.** Ia menyembunyikan urutan inisialisasi dan membuat uji saling mempengaruhi lewat state yang tidak terlihat di tanda tangan fungsi mana pun.
+- **Wire untuk dependensi yang dibangun per permintaan.** Wire menyusun graf sekali saat start; apa pun yang bersifat per-permintaan bukan urusannya dan akan memaksa desain yang aneh.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Aplikasi gagal start setelah deploy | urutan inisialisasi | Dependensi dibangun sebelum yang dibutuhkannya siap |
+| `wire_gen.go` tidak sesuai provider | `go generate` + `git diff` di CI | Kode hasil generate basi |
+| Waktu start lama | apa yang dilakukan konstruktor | Koneksi jaringan dibangun sinkron saat start |
+| Uji saling mempengaruhi | variabel global paket | Singleton menyimpan state antar uji |
+| Sulit mengganti implementasi untuk uji | tanda tangan konstruktor | Dependensi dibuat di dalam, bukan disuntikkan |
+
+```bash
+wire ./... && go build ./...
+
+# Gerbang CI: hasil generate WAJIB sinkron
+go generate ./... && git diff --exit-code
+
+# Singleton global yang menyimpan sumber daya -- kandidat masalah urutan init
+grep -rnE '^var [A-Z][A-Za-z]* +\*?[A-Za-z.]+ *=' --include='*.go' internal/ \
+  | grep -iE 'client|pool|conn|logger|cache'
+
+# Waktu dari start sampai siap menerima trafik
+kubectl logs <pod> | grep -iE 'listening|siap|ready' | head -3
+```

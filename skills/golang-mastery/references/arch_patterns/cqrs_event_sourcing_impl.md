@@ -1,5 +1,7 @@
 # CQRS & Event Sourcing Implementation di Go
 
+> **Berlaku:** Go 1.21+ · PostgreSQL 14+ · **Lihat juga:** `distributed_patterns_resilience/cqrs_event_sourcing.md` · `arch_patterns/ddd_aggregate_repository.md` · `distributed_patterns_resilience/outbox_pattern_transactional.md` · `db_sqlc/acid_transactions_isolation.md`
+
 ## Konsep Utama dan Internal
 
 CQRS (Command Query Responsibility Segregation) adalah pola arsitektur yang memisahkan operasi pembacaan data (*Queries*) dari operasi penulisan atau mutasi state (*Commands*). Pemisahan ini memungkinkan kita untuk mengoptimalkan, menskalakan, dan memodelkan database baca (Read DB) secara independen dari database tulis (Write DB). 
@@ -299,3 +301,34 @@ type UserCreated struct {
 3. **Eventual Consistency Projection Lag pada UI/UX:**
    Klien mengklik "Checkout/Withdraw", lalu di-redirect kembali ke halaman Beranda ("GetBalance"), namun uang yang tampil belum berkurang (karena delay asinkron 50ms di Kafka/Read Projection). Pengguna mengira gagal, lalu mengklik "Checkout" lagi dua kali.
    *Defensive:* Dalam DDD CQRS, atasi ini via optimisasi *Optimistic UI Update* di frontend (simulasikan mutasi UI sebelum API merespons), atau, biarkan API `Withdraw` mengembalikan Token/Versi mutasi (misal `CommandID: 123`). UI kemudian melakukan *short-polling* ke sisi Read-DB untuk mengecek apakah `LastProcessedCommandID == 123`. Selama Read-DB belum *up-to-date*, tampilkan indikator "Sedang Memproses" (Loading State).
+
+## Kapan JANGAN Pakai Ini
+
+- **Menyimpan event sebagai JSON tanpa nomor versi skema.** Deserialisasi event lama akan gagal begitu strukturnya berubah, dan data yang sudah tertulis tidak bisa diperbaiki — ia adalah fakta historis. Versi skema WAJIB ada sejak event pertama.
+- **Membangun read model secara sinkron di dalam transaksi tulis.** Itu membuang seluruh alasan memisahkan sisi baca, dan satu proyeksi yang lambat memperlambat setiap penulisan di sistem.
+- **Tanpa snapshot untuk agregat berumur panjang.** Memuat 200.000 event untuk merekonstruksi satu agregat mengubah operasi sederhana menjadi hitungan detik — dan itu memburuk setiap hari.
+- **Memakai event store sebagai antrean pesan untuk konsumer eksternal.** Event domain internal berubah mengikuti kebutuhan domain; konsumer eksternal membutuhkan kontrak yang stabil. Terbitkan event integrasi yang terpisah.
+- **Menyunting event yang sudah tertulis.** Koreksi dilakukan dengan menambahkan event kompensasi. Menyunting riwayat menghancurkan satu-satunya jaminan yang membuat event sourcing berharga.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Memuat agregat makin lambat tiap bulan | jumlah event per agregat | Tidak ada snapshot |
+| Deserialisasi gagal untuk event lama | versi skema di payload | Skema berubah tanpa jalur migrasi |
+| Latensi tulis mengikuti latensi proyeksi | apakah proyeksi sinkron | Read model dibangun di dalam transaksi tulis |
+| Konsumer eksternal rusak saat refactor domain | jenis event yang dipublikasikan | Event domain dipakai sebagai kontrak eksternal |
+| Rebuild proyeksi memakan waktu berjam-jam | posisi awal rebuild | Selalu diputar dari event pertama |
+
+```sql
+-- Agregat dengan riwayat terpanjang: kandidat snapshot paling mendesak
+SELECT agregat_id, count(*) AS jumlah_event, max(versi) AS versi
+FROM event_store GROUP BY 1 ORDER BY 2 DESC LIMIT 10;
+
+-- Sebaran versi skema event: yang lama masih dibaca sampai kapan pun
+SELECT jenis_event, versi_skema, count(*) FROM event_store GROUP BY 1,2 ORDER BY 1,2;
+
+-- Lag tiap proyeksi
+SELECT nama_proyeksi, posisi_terakhir, now() - diperbarui_pada AS lag
+FROM proyeksi_checkpoint ORDER BY lag DESC;
+```

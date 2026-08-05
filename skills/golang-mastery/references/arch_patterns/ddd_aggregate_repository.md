@@ -1,5 +1,7 @@
 # Domain-Driven Design (DDD), Aggregate, & Repository Pattern di Go
 
+> **Berlaku:** Go 1.21+ · **Lihat juga:** `arch_patterns/clean_hexagonal_architecture.md` · `arch_patterns/cqrs_event_sourcing_impl.md` · `db_sqlc/acid_transactions_isolation.md` · `db_sqlc/query_optimization_n_plus_one.md`
+
 ## Konsep Utama dan Internal
 
 Domain-Driven Design (DDD) adalah pendekatan pengembangan perangkat lunak yang menempatkan model domain dan aturan bisnis inti di jantung arsitektur. Di Go, implementasi DDD memfokuskan pada pemisahan state, pembatasan mutasi yang ketat, dan pengelolaan dependensi melalui interface. Tiga pilar taktis utamanya adalah:
@@ -322,3 +324,38 @@ func (o *Order) Items() []OrderItem { return o.items }
 3. **In-Memory Mock State Side-Effects di Testing (Go Map Pointers):**
    Repository in-memory memetakan dictionary map menggunakan pointer objek (`map[string]*Order`). Jika fungsi test mengubah struct agregat dan menolak memanggil `repo.Save(order)` karena ada error validasi di simulasi layer, namun secara sembunyi-sembunyi *pointer in-memory* tersebut mereferensi alamat memori absolut, state di "Mock DB" sudah ikut kotor (berubah state-nya) yang mana bisa merusak run TestSuite beruntun.
    *Defensive:* Metode mock `FindByID` dan `Save` WAJIB menduplikasi instance dengan pointer baru (Deep Copy/Marshal JSON ulang) sebelum me-return data ke pemanggil, menyimulasikan ketatnya deserialisasi driver Database aslinya.
+
+## Kapan JANGAN Pakai Ini
+
+- **Untuk domain yang sederhana dan stabil.** Ubiquitous language, aggregate, dan value object adalah alat untuk kompleksitas bisnis yang nyata. Pada CRUD, mereka hanya nama baru untuk hal lama — dan nama baru itu harus dipelajari setiap orang yang bergabung.
+- **Aggregate yang terlalu besar.** Aggregate menentukan batas transaksi. Yang memuat ratusan entitas anak akan mengunci banyak baris sekaligus dan menjadi titik kontensi yang tidak terlihat sampai trafik naik.
+- **Memuat seluruh aggregate untuk membaca satu field.** Repository yang selalu mengembalikan objek lengkap membuat query sederhana menjadi mahal. Sediakan jalur baca terpisah yang tidak melewati aggregate.
+- **Repository yang membocorkan detail penyimpanan.** Metode bernama `FindByJSONBQuery` mengikat domain pada PostgreSQL, dan sejak saat itu batas yang Anda bangun tidak lagi ada.
+- **Memaksa satu aggregate per transaksi ketika bisnis menuntut sebaliknya.** Aturan itu panduan, bukan hukum fisika. Bila dua aggregate memang harus berubah bersama dan keduanya berada di database yang sama, transaksi biasa lebih jujur daripada saga.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Kontensi lock pada baris tertentu | `pg_blocking_pids` | Aggregate terlalu besar; batas transaksinya melebar |
+| Query sederhana memuat ratusan baris | jumlah baris per operasi baca | Semua baca melewati aggregate lengkap |
+| Latensi tulis naik seiring pertumbuhan data | jumlah anak per aggregate | Aggregate tumbuh tanpa batas |
+| Domain berubah setiap kali skema berubah | nama metode repository | Detail penyimpanan bocor ke domain |
+| Saga dipakai untuk dua tabel di database yang sama | batas aggregate | Aggregate dipecah lebih halus dari yang dibutuhkan |
+
+```sql
+-- Aggregate raksasa terlihat sebagai satu induk dengan ribuan anak
+SELECT induk_id, count(*) AS jumlah_anak
+FROM item_pesanan GROUP BY 1 ORDER BY 2 DESC LIMIT 10;
+
+-- Baris yang paling sering diperebutkan
+SELECT bl.pid, left(bl.query,60), ka.pid AS pemblokir
+FROM pg_stat_activity bl
+JOIN pg_stat_activity ka ON ka.pid = ANY(pg_blocking_pids(bl.pid));
+```
+
+```bash
+# Jumlah query database per operasi -- aggregate besar terlihat jelas di sini
+curl -s "$JAEGER/api/traces?service=api&limit=20" \
+  | jq '[.data[]|{t:.traceID,db:([.spans[]|select(.operationName|test("^db"))]|length)}]|sort_by(-.db)[:5]'
+```

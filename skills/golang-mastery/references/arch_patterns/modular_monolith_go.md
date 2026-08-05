@@ -1,5 +1,7 @@
 # Modular Monolith di Go
 
+> **Berlaku:** Go 1.21+ · **Lihat juga:** `arch_patterns/clean_hexagonal_architecture.md` · `arch_patterns/event_driven_pubsub.md` · `engineering_practice/adr_decision_records.md` · `devops_control_planes/docker_container_go.md`
+
 ## Konsep Utama dan Internal Mendalam
 
 Tren arsitektur sering memaksakan pengembang untuk segera memecah sistem menjadi ratusan wadah (containers) *Microservices* yang membengkakkan kompleksitas DevOps, latensi jaringan (RPC calls), dan observabilitas (distributed tracing) terlalu dini.
@@ -354,3 +356,33 @@ func (o *OrderListener) Handle(event InventoryDecreasedEvent) {
        return *s.cache[id] // Dereference pointer untuk membuat duplikat nilai
    }
    ```
+
+## Kapan JANGAN Pakai Ini
+
+- **Memecah menjadi layanan mikro sebelum batas modulnya terbukti stabil.** Batas yang salah di dalam satu proses adalah refactor sore hari; batas yang salah antar layanan adalah migrasi data, koordinasi lintas tim, dan API yang tidak bisa ditarik kembali.
+- **Modul yang boleh saling mengimpor bebas.** Tanpa penegakan otomatis, "modular" hanya sebutan di README. Dalam enam bulan grafnya menjadi bola benang yang tidak bisa dipecah tanpa menulis ulang.
+- **Satu database dengan semua modul berbagi tabel.** Itu menghapus batas yang paling penting. Pemisahan di kemudian hari berubah dari memindahkan kode menjadi migrasi data lintas sistem.
+- **Sebagai alasan menunda observability per modul.** Modul yang tidak punya metrik dan trace sendiri tidak bisa dinilai kesiapannya untuk dipisah — Anda tidak tahu beban maupun ketergantungannya.
+- **Memaksa semua modul memakai kedalaman arsitektur yang sama.** Modul dengan kompleksitas berbeda layak diperlakukan berbeda; keseragaman di sini menghasilkan pekerjaan tanpa manfaat pada modul yang sederhana.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Perubahan satu modul memecahkan modul lain | graf import antar modul | Batas sudah bocor |
+| Tidak bisa menjawab "modul mana yang lambat" | metrik berlabel modul | Observability tidak sadar modul |
+| Deploy satu modul memaksa deploy semuanya | struktur build | Itu memang sifat monolit — pastikan disengaja |
+| Modul mengakses tabel milik modul lain | query per direktori modul | Batas data tidak ditegakkan |
+| Import melingkar antar modul | `go list -deps` | Grafnya sudah tidak berbentuk pohon |
+
+```bash
+# Siapa mengimpor siapa antar modul -- ini peta batas yang sebenarnya
+go list -deps ./internal/modul/... | grep 'internal/modul' | sort -u
+
+# Modul yang menyentuh tabel milik modul lain
+grep -rn 'FROM pesanan\|JOIN pesanan' --include='*.sql' internal/modul/ \
+  | cut -d/ -f3 | sort -u
+
+# Metrik berlabel modul: tanpa ini tidak ada dasar memutuskan pemisahan
+curl -s localhost:9090/metrics | grep -oE 'modul="[a-z_]+"' | sort | uniq -c
+```

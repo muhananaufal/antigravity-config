@@ -1,5 +1,7 @@
 # Panduan Ekstensif dan Definitif: Arsitektur Cache-Aside, Mitigasi Thundering Herd, dan Penerapan Singleflight di Golang
 
+> **Berlaku:** Go 1.21+ · Redis 7+ · `golang.org/x/sync/singleflight` · **Lihat juga:** `concurrency/singleflight_thundering_herd.md` · `caching_strategy/cache_invalidation_strategies.md` · `caching_strategy/multilevel_cache_l1l2.md` · `db_sqlc/multi_layer_caching.md`
+
 ## 1. Anatomi dan Fondasi: Cache-Aside Pattern
 Di antara lusinan pola caching (seperti Write-Through, Write-Behind, Refresh-Ahead), **Cache-Aside (atau Lazy Loading)** adalah pola desain paling populer, paling mudah dipahami, sekaligus paling banyak digunakan di industri perangkat lunak modern. Pada pola ini, lapisan *cache* tidak berkomunikasi langsung dengan pangkalan data (*database*). Aplikasi itu sendiri (dalam hal ini, service Golang Anda) bertindak sebagai orkestrator yang menjembatani klien, *cache* (seperti Redis atau Memcached), dan database persisten (seperti PostgreSQL, MySQL, MongoDB).
 
@@ -443,4 +445,33 @@ func TestUserCacheService_NegativeCaching(t *testing.T) {
 	assert.Nil(t, user2)
 	assert.Equal(t, int32(1), atomic.LoadInt32(&dbHitCounter), "Database called again on fake ID! Negative caching failed.")
 }
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **Untuk data yang harus konsisten seketika.** Selalu ada jendela antara penulisan ke database dan invalidasi cache di mana pembaca menerima nilai lama. Bila jendela itu tidak bisa diterima, cache-aside bukan polanya.
+- **Menulis ke cache dari jalur tulis tanpa memikirkan urutan.** Dua penulis serentak bisa meninggalkan nilai **lama** di cache secara permanen: penulis lambat menyimpan hasil bacaan lamanya setelah penulis cepat selesai. Butuh versi atau invalidasi, bukan penulisan langsung.
+- **Menyimpan hasil galat di cache.** Satu kegagalan sementara akan disajikan berulang selama TTL, mengubah gangguan lima detik menjadi gangguan lima menit.
+- **Singleflight sebagai perlindungan stampede lintas pod.** Ia hanya menggabungkan di dalam satu proses — lihat `concurrency/singleflight_thundering_herd.md`.
+- **Tanpa memikirkan apa yang terjadi saat Redis mati.** Bila kode langsung gagal ketika cache tidak terjangkau, Anda menambahkan satu titik kegagalan baru alih-alih mengurangi beban. Cache yang tidak terjangkau harus berarti "lambat", bukan "gagal".
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Layanan mati saat Redis bermasalah | penanganan galat cache | Cache jadi dependensi keras, bukan optimasi |
+| Nilai lama bertahan meski data sudah berubah | urutan tulis dan invalidasi | Penulisan cache dari jalur tulis tanpa versi |
+| Galat yang sama disajikan berulang | apakah galat ikut di-cache | Hasil gagal tersimpan di cache |
+| Lonjakan database di detik yang sama tiap jam | keseragaman TTL | Semua kunci kedaluwarsa bersamaan |
+| Hit rate tinggi tapi beban DB tetap | apa yang di-cache | Yang di-cache bukan query yang mahal |
+
+```bash
+redis-cli info stats | grep -E 'keyspace_hits|keyspace_misses|expired_keys|evicted_keys'
+
+# Sebaran TTL sisa: menumpuk di satu nilai berarti jitter belum dipasang
+for k in $(redis-cli --scan --pattern 'produk:*' | head -200); do redis-cli ttl "$k"; done \
+  | sort -n | uniq -c | tail -10
+
+# Apakah layanan tetap hidup tanpa cache? Uji ini WAJIB dilakukan sebelum insiden.
+redis-cli client pause 5000   # di staging, bukan produksi
 ```

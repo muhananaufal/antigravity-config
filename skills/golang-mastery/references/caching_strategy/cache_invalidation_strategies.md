@@ -1,5 +1,7 @@
 # Cache Invalidation Strategies di Go: A Deep Dive
 
+> **Berlaku:** Go 1.21+ · Redis 7+ · **Lihat juga:** `caching_strategy/cache_aside_singleflight.md` · `caching_strategy/multilevel_cache_l1l2.md` · `db_sqlc/multi_layer_caching.md` · `distributed_patterns_resilience/outbox_pattern_transactional.md`
+
 Mendesain sistem caching pada lingkungan terdistribusi dan highly concurrent selalu kembali pada salah satu masalah klasik dalam ilmu komputer: *Cache Invalidation*. Kesalahan dalam melakukan invalidasi cache dapat menyebabkan inkonsistensi data yang parah (stale data), anomali sistem, hingga cache stampede (thundering herd problem). Di Go, ekosistem untuk menangani ini sangat kaya berkat goroutine dan integrasi kuat dengan in-memory datastores seperti Redis dan Memcached.
 
 Dokumen ini adalah referensi definitif mengenai berbagai strategi cache invalidation di Go, lengkap dengan implementasi production-ready, trade-off arsitektural, best practices, anti-patterns, dan edge cases ekstrem yang sering terjadi di environment skala besar.
@@ -365,3 +367,36 @@ Akibatnya: DB berisi "Andi", tapi Cache Invalidator memproses B lalu A. Cache be
 ---
 
 Dengan memahami strategi, pola implementasi, serta jebakan-jebakan ini, sistem terdistribusi di Go dapat mengamankan performa latensi mikrosekon tanpa mengorbankan konsistensi data yang fatal.
+
+## Kapan JANGAN Pakai Ini
+
+- **Invalidasi berbasis event tanpa jaminan pengiriman.** Satu pesan invalidasi yang hilang berarti data usang bertahan sampai TTL habis — dan bila TTL-nya panjang, itu berjam-jam data salah yang tidak ada yang tahu.
+- **Menghapus bertumpuk dengan pemindaian awalan.** `KEYS` memblokir Redis; `SCAN` massal tetap mahal dan lambat. Yang benar adalah menyertakan nomor versi di dalam kunci sehingga versi lama menjadi tidak terjangkau tanpa perlu dihapus.
+- **Write-through untuk data yang jarang dibaca.** Setiap penulisan membayar ongkos cache yang mungkin tidak pernah dibaca sekali pun.
+- **TTL seragam di seluruh kunci.** Semua kedaluwarsa bersamaan dan menghasilkan lonjakan berkala ke database — persis pada saat trafik sedang tinggi karena itulah kuncinya dibuat bersamaan.
+- **Invalidasi yang mengandalkan urutan operasi.** Tanpa versi atau timestamp, penulis yang lambat bisa menimpa nilai baru dengan nilai lama, dan hasilnya bertahan sampai penulisan berikutnya.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Data usang bertahan sampai TTL | tingkat keberhasilan pesan invalidasi | Invalidasi hilang tanpa ada yang tahu |
+| Redis membeku beberapa detik | `slowlog` | `KEYS` atau `DEL` massal dijalankan |
+| Lonjakan database periodik | sebaran waktu kedaluwarsa | TTL seragam tanpa jitter |
+| Nilai lama muncul kembali setelah diperbarui | urutan penulisan cache | Penulis lambat menimpa nilai baru |
+| Memori Redis penuh oleh kunci versi lama | pola penamaan kunci | Versi lama tidak pernah kedaluwarsa |
+
+```bash
+# Perintah lambat: KEYS dan DEL massal akan muncul di sini
+redis-cli slowlog get 10
+redis-cli config get slowlog-log-slower-than
+
+# Kunci yang tidak punya TTL sama sekali -- akan hidup selamanya
+redis-cli --scan --pattern 'produk:*' | head -100 \
+  | while read -r k; do [ "$(redis-cli ttl "$k")" = "-1" ] && echo "TANPA TTL: $k"; done
+
+redis-cli info memory | grep -E 'used_memory_human|maxmemory_human|evicted_keys'
+
+# Tingkat keberhasilan pesan invalidasi
+curl -s localhost:9090/metrics | grep -E 'cache_invalidation_(sent|failed)_total'
+```

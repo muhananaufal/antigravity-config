@@ -1,5 +1,7 @@
 # Event-Driven Architecture & Pub/Sub di Go
 
+> **Berlaku:** Go 1.21+ · Kafka / NATS JetStream · **Lihat juga:** `distributed_patterns_resilience/outbox_pattern_transactional.md` · `arch_patterns/modular_monolith_go.md` · `background_jobs_worker/asynq_redis_jobs.md` · `microservices_grpc/webhook_delivery_engine.md`
+
 ## Konsep Utama dan Internal
 
 Arsitektur Event-Driven memecah monolitisitas operasional dengan membuat komponen-komponen sistem bereaksi terhadap *events* (kejadian historis) secara asinkron alih-alih saling memanggil secara sinkron via RPC atau HTTP. 
@@ -346,3 +348,36 @@ func StartOutboxForwarder(db *sql.DB, brokerPublisher message.Publisher) error {
    
 2. **Outbox Table Growth Management (Ukuran Tabel Membengkak)**:
    Karena setiap event yang diterbitkan direkam secara abadi di tabel `outbox_events`, tabel tersebut bisa membengkak menjadi jutaan baris dalam hitungan hari. Ini membebani ruang disk dan performa DB. Solusi: Buat operasi pembersihan asinkron (*cron job*) atau *partitioning* DB untuk menghapus (`DELETE`) rekaman di tabel *outbox_events* yang `published_at`-nya sudah lebih lama dari 7 hari.
+
+## Kapan JANGAN Pakai Ini
+
+- **Untuk komunikasi yang membutuhkan jawaban.** Bila pemanggil menunggu hasilnya, itu permintaan-respons. Membungkusnya sebagai event hanya menambah korelasi, timeout, dan jalur kegagalan tanpa satu pun manfaat asinkron.
+- **Publish dari dalam transaksi bisnis tanpa outbox.** Bila publish berhasil lalu transaksi rollback, konsumer bereaksi terhadap kejadian yang tidak pernah terjadi — dan tidak ada cara menariknya kembali.
+- **Event yang membawa seluruh keadaan objek.** Konsumer akan mulai bergantung pada field yang tidak pernah Anda niatkan menjadi kontrak, dan sejak saat itu Anda tidak bisa lagi mengubahnya tanpa memecahkan sistem orang lain.
+- **Tanpa dead letter queue.** Satu pesan beracun akan menghentikan konsumer atau diulang selamanya, dan lag akan tumbuh sampai ada yang menyadarinya.
+- **Berasumsi urutan terjamin lintas partisi.** Urutan hanya dijamin dalam satu partisi. Kunci partisi yang salah menghancurkan asumsi itu **diam-diam** — tidak ada galat, hanya hasil yang kadang salah.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Consumer lag tumbuh terus | lag per partisi | Konsumer kalah cepat, atau satu partisi tersangkut |
+| Satu partisi jauh lebih penuh | kunci partisi | Sebaran kunci timpang |
+| Kejadian diproses di luar urutan | kunci partisi vs asumsi urutan | Entitas yang sama tersebar ke banyak partisi |
+| Konsumer mengulang pesan yang sama | apakah ada DLQ | Pesan beracun tanpa jalur keluar |
+| Konsumer bereaksi ke kejadian yang batal | apakah publish lewat outbox | Publish di luar transaksi bisnis |
+
+```bash
+# Lag per partisi -- kolom LAG adalah metrik kesehatan utama
+kafka-consumer-groups --bootstrap-server "$BROKER" --describe --group pesanan
+
+# Sebaran pesan antar partisi
+kafka-run-class kafka.tools.GetOffsetShell --broker-list "$BROKER" --topic pesanan
+
+# DLQ yang terisi berarti ada pesan yang tidak pernah bisa diproses
+kafka-run-class kafka.tools.GetOffsetShell --broker-list "$BROKER" --topic pesanan.dlq
+
+# NATS JetStream
+nats stream info PESANAN
+nats consumer report PESANAN
+```

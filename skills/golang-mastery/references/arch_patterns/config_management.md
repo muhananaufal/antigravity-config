@@ -1,5 +1,7 @@
 # Golang Configuration Management & Arch Patterns
 
+> **Berlaku:** Go 1.21+ · **Lihat juga:** `cli_tooling/config_precedence_viper.md` · `arch_patterns/dependency_injection_wire.md` · `distributed_patterns_resilience/feature_flags_launchdarkly.md` · `devops_control_planes/docker_container_go.md`
+
 Dokumen ini adalah referensi komprehensif (Top 1%) tentang arsitektur manajemen konfigurasi, environment bindings, secret handling, dan flag management di Go untuk skala production (Microservices & 12-Factor Apps).
 
 ---
@@ -361,4 +363,35 @@ func TestConfigSecrets_AreNotExposedInString(t *testing.T) {
 	
 	assert.Equal(t, "super_secret_p4ssw0rd", cfg.Database.Password)
 }
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **Membaca variabel lingkungan tersebar di seluruh kode.** Konfigurasi harus dibaca sekali saat start dan divalidasi di situ. `os.Getenv` di tengah handler berarti kesalahan konfigurasi baru terlihat ketika jalur itu kebetulan dipakai — bisa berminggu-minggu setelah deploy.
+- **Nilai bawaan yang nyaman tapi berbahaya bila lupa disetel.** `DEBUG=true` sebagai default berarti satu variabel yang terlewat membuka informasi internal ke publik. Default WAJIB yang paling aman, bukan yang paling mudah.
+- **Rahasia di berkas konfigurasi yang ikut repo.** Termasuk `.env.example` yang perlahan diisi nilai sungguhan oleh orang yang ingin cepat.
+- **Konfigurasi yang bisa diubah saat runtime tanpa jejak.** Perubahan perilaku produksi yang tidak tercatat membuat insiden tidak bisa direkonstruksi — dan itu selalu ketahuan pada saat paling buruk.
+- **Validasi yang hanya memeriksa keberadaan.** `DATABASE_URL` yang ada tapi menunjuk ke staging lolos pemeriksaan "tidak kosong" dengan mulus. Validasi harus memeriksa bentuk dan, bila mungkin, konektivitas.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Galat konfigurasi muncul jam setelah deploy | di mana konfigurasi dibaca | Dibaca saat dipakai, bukan saat start |
+| Perilaku berbeda antar pod | konfigurasi tiap pod | ConfigMap tidak seragam, atau ada yang belum restart |
+| Rahasia ditemukan di riwayat git | `git log` pada berkas env | Pernah ter-commit, dan tetap ada meski sudah dihapus |
+| Produksi menulis ke database staging | nilai DSN yang benar-benar dipakai | Validasi hanya memeriksa keberadaan |
+| Perubahan perilaku tanpa deploy | sumber konfigurasi runtime | Perubahan tanpa jejak audit |
+
+```bash
+# Berapa banyak tempat membaca env di luar paket config
+grep -rn 'os.Getenv' --include='*.go' . | grep -v '_test.go' | grep -v '/config/' | head -20
+
+# Rahasia yang pernah masuk riwayat git -- menghapus berkasnya tidak menghapus riwayatnya
+git ls-files | grep -E '\.env$'
+git log --all --oneline -- '*.env' | head
+
+# Konfigurasi yang BENAR-BENAR berjalan di pod (rahasia disaring)
+kubectl get deploy api -o jsonpath='{.spec.template.spec.containers[0].env}' | jq
+kubectl exec <pod> -- env | grep -viE 'password|secret|token|key'
 ```
