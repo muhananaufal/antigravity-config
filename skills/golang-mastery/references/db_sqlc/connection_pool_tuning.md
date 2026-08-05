@@ -1,5 +1,7 @@
 # Connection Pool Tuning & Management di Go dengan pgx/v5
 
+> **Berlaku:** Go 1.21+ · pgx/v5 (`pgxpool`) · **Lihat juga:** `db_sqlc/acid_transactions_isolation.md` · `db_sqlc/read_replica_routing.md` · `db_sqlc/sharding_partitioning.md` · `concurrency/worker_pool_errgroup.md`
+
 ## Konsep dan Internals
 
 Dalam bahasa ber-konkurensi tinggi seperti Go, membuat sebuah *goroutine* sangatlah murah (hanya membutuhkan sekitar ~2KB memori). Di sisi lain, setiap koneksi jaringan ke **PostgreSQL** sangatlah mahal. PostgreSQL beroperasi dengan model *process-per-connection*; setiap koneksi dari aplikasi Anda akan memicu (*fork*) sebuah proses *backend* OS baru di server PostgreSQL, yang memakan setidaknya 5-10MB RAM serta resource CPU untuk manajemen *context switching*.
@@ -287,4 +289,53 @@ func TestPoolConfigParsingWithOverrides(t *testing.T) {
 		t.Errorf("expected MaxConns to be overridden to 50, got %d", parsedConfig.MaxConns)
 	}
 }
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **Memperbesar `MaxConns` sebagai obat latensi.** PostgreSQL punya titik jenuh; melewatinya throughput justru **turun** karena kontensi lock internal dan context switch. Antrean lebih murah di aplikasi daripada di dalam database.
+- **Menyetel pool per pod tanpa menghitung totalnya.** Batas sebenarnya adalah `jumlah_pod × MaxConns ≤ max_connections − cadangan superuser − alat lain (migrasi, metrik, admin)`. Autoscaling yang menaikkan pod juga menaikkan koneksi.
+- **Pool aplikasi besar di belakang PgBouncer mode transaksi.** Poolnya sudah ada di PgBouncer; pool aplikasi yang besar hanya menambah satu lapisan antrean tanpa menambah kapasitas.
+- **`MinConns` tinggi pada layanan bertrafik jarang.** Koneksi idle tetap memakan memori di sisi server dan tetap harus di-health-check. Untuk cron atau layanan internal, `MinConns` kecil lebih tepat.
+- **Pool sebagai pengganti perbaikan query.** Query 2 detik dengan pool 100 hanya berarti 100 query lambat berjalan bersamaan. Perbaiki query-nya lebih dulu — lihat `db_sqlc/index_design_explain_analyze.md`.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Latensi permintaan naik, waktu query tetap cepat | `AcquireDuration` vs waktu query | Antre menunggu koneksi, bukan menunggu database |
+| `FATAL: sorry, too many clients already` | pod × MaxConns vs `max_connections` | Total pool melewati batas server |
+| `prepared statement "..." does not exist` sporadis | mode PgBouncer | Transaction pooling mengacak state prepared statement |
+| Memori server PostgreSQL tinggi dengan sedikit query aktif | jumlah koneksi idle | Terlalu banyak koneksi menganggur |
+| Lonjakan galat tepat saat autoscaling | jumlah pod saat insiden | Penambahan pod melewati batas koneksi |
+
+```go
+// Tanpa metrik ini, penyetelan pool hanya tebakan. Ekspor sebagai gauge.
+s := pool.Stat()
+_ = s.AcquireCount()          // total permintaan koneksi
+_ = s.AcquireDuration()       // akumulasi waktu tunggu -- yang paling penting
+_ = s.EmptyAcquireCount()     // berapa kali harus menunggu karena pool kosong
+_ = s.CanceledAcquireCount()  // pemanggil menyerah sebelum dapat koneksi
+_ = s.TotalConns()
+_ = s.IdleConns()
+_ = s.MaxConns()
+```
+
+```sql
+-- Berapa yang terpakai vs berapa batasnya
+SELECT (SELECT count(*) FROM pg_stat_activity) AS terpakai,
+       (SELECT setting::int FROM pg_settings WHERE name='max_connections') AS batas,
+       (SELECT setting::int FROM pg_settings WHERE name='superuser_reserved_connections') AS cadangan;
+
+-- Siapa yang memakai koneksi: sering ternyata bukan aplikasi utama
+SELECT usename, application_name, state, count(*)
+FROM pg_stat_activity GROUP BY 1,2,3 ORDER BY count DESC LIMIT 20;
+```
+
+```bash
+kubectl logs -l app=api --since=1h | grep -c 'too many clients'
+
+# Bila memakai PgBouncer: cl_waiting > 0 berarti klien mengantre
+psql -p 6432 pgbouncer -c 'SHOW POOLS;'
+psql -p 6432 pgbouncer -c 'SHOW STATS;'
 ```

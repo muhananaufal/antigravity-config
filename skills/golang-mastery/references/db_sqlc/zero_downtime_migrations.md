@@ -1,5 +1,7 @@
 # Migrasi Database Zero-Downtime (Tanpa Henti)
 
+> **Berlaku:** PostgreSQL 14+ · **Lihat juga:** `db_sqlc/database_migration_go.md` · `db_sqlc/database_locking_strategies.md` · `db_sqlc/index_design_explain_analyze.md` · `db_sqlc/sharding_partitioning.md`
+
 ## Konsep dan Internals
 
 Dalam lingkungan infrastruktur modern seperti Kubernetes, *deployment* aplikasi terjadi secara *Rolling Update*. Ini berarti selama beberapa detik atau menit, Pod aplikasi versi lama (V1) dan versi baru (V2) akan beroperasi (melayani *traffic*) secara bersamaan dan mengakses database PostgreSQL yang sama. 
@@ -296,3 +298,42 @@ ALTER TABLE orders VALIDATE CONSTRAINT fk_orders_user_id;
 
 2. **FK ke Tabel Tujuan yang Sangat Besar:**
    Walau memvalidasi dari tabel *asal* tidak terlalu mengunci, PostgreSQL di balik layar memicu mekanisme `SELECT FOR SHARE` pada tabel *tujuan* (tabel `users` yang dirujuk) untuk memastikan konsistensi. Jika ada kueri lain yang berniat memodifikasi (`UPDATE`/`DELETE`) struktur atau baris-baris tertentu yang sedang di-*share-lock* pada tabel `users`, kueri mutasi tersebut akan terblokir menanti validasi selesai. *Tindakan*: Eksekusi di jam *low-traffic* jika tabel rujukan dimutasi tinggi secara reguler.
+
+## Kapan JANGAN Pakai Ini
+
+- **Expand-contract untuk perubahan sepele pada tabel kecil.** Tiga siklus deploy untuk menambah kolom pada tabel 500 baris adalah ritual tanpa manfaat. Ongkos prosedurnya harus sebanding dengan risiko yang dihindari.
+- **Melewatkan fase contract.** Kolom lama yang tidak pernah dihapus menumpuk menjadi jebakan bagi orang berikutnya — mereka tidak tahu mana yang masih dipakai. Jadwalkan contract-nya sebagai tiket, bukan sebagai niat.
+- **Menjalankan DDL tanpa `lock_timeout`.** Satu `ALTER TABLE` yang menunggu lock akan mengantre di belakang satu query panjang, dan **seluruh query baru mengantre di belakangnya**. Tabel terkunci total oleh perintah yang bahkan belum mulai bekerja.
+- **Backfill dalam satu pernyataan.** `UPDATE ... SET kolom_baru = ...` pada 50 juta baris menahan lock, membengkakkan WAL, dan membuat replica tertinggal jauh. Potong per batch dengan jeda di antaranya.
+- **Mengasumsikan versi aplikasi lama sudah mati.** Selama rolling update, dua versi berjalan bersamaan. Skema WAJIB kompatibel dengan keduanya — itulah alasan expand-contract ada.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| `column "x" does not exist` sesaat setelah deploy | urutan deploy vs migrasi | Kode baru berjalan sebelum skema siap |
+| Galat hanya pada sebagian pod saat rollout | versi image tiap pod | Skema tidak kompatibel dua arah |
+| Replica lag melonjak selama migrasi | volume WAL yang dihasilkan | Backfill besar membanjiri replikasi |
+| Seluruh tabel membeku saat `ALTER TABLE` | `pg_blocking_pids` untuk pid DDL | DDL menunggu lock dan memblokir antrean di belakangnya |
+| Aplikasi lambat berjam-jam setelah migrasi | statistik tabel | `ANALYZE` belum dijalankan setelah perubahan besar |
+
+```sql
+-- WAJIB sebelum DDL apa pun di produksi. Gagal cepat lebih baik daripada
+-- memblokir seluruh tabel sambil menunggu.
+SET lock_timeout = '3s';
+SET statement_timeout = '30s';
+
+-- Siapa yang menghalangi DDL Anda (ganti <pid> dengan pid migrasi)
+SELECT pid, now()-query_start AS lama, state, left(query,80)
+FROM pg_stat_activity WHERE pid = ANY(pg_blocking_pids(<pid>));
+
+-- Volume WAL yang menumpuk selama backfill
+SELECT pg_size_pretty(sum(size)) AS ukuran_wal FROM pg_ls_waldir();
+SELECT slot_name, active,
+       pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)) AS tertinggal
+FROM pg_replication_slots;
+
+-- Statistik yang belum diperbarui setelah perubahan besar
+SELECT relname, n_mod_since_analyze, last_analyze, last_autoanalyze
+FROM pg_stat_user_tables ORDER BY n_mod_since_analyze DESC LIMIT 10;
+```

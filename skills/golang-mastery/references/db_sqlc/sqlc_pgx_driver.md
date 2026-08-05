@@ -1,5 +1,7 @@
 # SQLC dan Driver pgx/v5 (PostgreSQL Native di Go)
 
+> **Berlaku:** Go 1.21+ · sqlc 1.25+ · pgx/v5 · **Lihat juga:** `db_sqlc/query_optimization_n_plus_one.md` · `db_sqlc/connection_pool_tuning.md` · `db_sqlc/acid_transactions_isolation.md` · `testing_quality/testcontainers_integration.md`
+
 ## Konsep dan Internals
 
 Dalam membangun layanan back-end Go kelas *enterprise* yang menggunakan PostgreSQL, kombinasi pustaka lawas `database/sql` dengan driver `github.com/lib/pq` telah lama dianggap **usang** (masuk mode maintenance) dan kurang efisien.
@@ -288,4 +290,40 @@ Jika Anda menjalankan `pgxpool` di balik **pgBouncer** yang berjalan di mode `tr
 config.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeExec // atau QueryExecModeSimpleProtocol
 ```
 Ini sedikit mengorbankan CPU parsing tapi mencegah outage koneksi di multi-tenant cloud setup.
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **sqlc untuk query yang benar-benar dinamis.** sqlc bekerja pada SQL statis yang bisa dianalisis saat generate. Filter opsional yang berubah-ubah memaksa SQL penuh `CASE WHEN $1 IS NULL` yang tidak bisa dipakai planner dengan baik. Untuk itu pakai query builder, dan terima bahwa keamanan tipenya berkurang.
+- **`pgx.CopyFrom` untuk data yang butuh `ON CONFLICT`.** Protokol `COPY` tidak mendukungnya. Pakai `pgx.Batch`, atau salin ke tabel sementara lalu `INSERT ... SELECT ... ON CONFLICT`.
+- **Mode prepared statement bawaan pgx di belakang PgBouncer transaction pooling.** Statement yang di-*prepare* hilang antar transaksi. Setel `default_query_exec_mode=exec` pada DSN, atau pindah ke session pooling.
+- **Mengabaikan `pgtype` untuk kolom nullable.** `""` dan `NULL` adalah dua hal berbeda; menyamakannya menghasilkan data yang salah tanpa satu pun galat muncul.
+- **Berpindah ke pgx semata demi angka performa.** Keuntungan nyatanya adalah protokol biner, tipe PostgreSQL native, dan `CopyFrom` — bukan percepatan ajaib pada query yang memang lambat.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| `prepared statement "stmt_N" does not exist` sporadis | mode pooling PgBouncer | Transaction pooling mengacak state prepared statement |
+| Kolom berisi `''` padahal seharusnya `NULL` | pemetaan `pgtype` di kode generate | Nullable ditangani sebagai tipe dasar |
+| Alokasi memori tinggi saat memindai banyak baris | profil alokasi | Scan per baris tanpa memakai `CopyFrom`/`Batch` untuk operasi massal |
+| Kode generate tidak cocok dengan skema | `sqlc diff` di CI | Berkas `.sql` berubah tapi belum di-generate ulang |
+| Insert massal sangat lambat | apakah looping atau `CopyFrom` | Satu round-trip per baris |
+
+```bash
+# Pasang keduanya di CI: mencegah kode generate dan skema saling menyimpang
+sqlc vet     # menjalankan aturan lint terhadap query sebelum generate
+sqlc diff    # gagal bila hasil generate tidak sinkron dengan berkas .sql
+
+kubectl logs -l app=api --since=1h | grep -c 'prepared statement'
+
+# Alokasi saat scan baris banyak
+go tool pprof -top 'http://localhost:6060/debug/pprof/allocs?seconds=30'
+```
+
+```sql
+-- Kolom yang seharusnya NULL tapi terisi string kosong: gejala pgtype terlewat
+SELECT count(*) FILTER (WHERE catatan = '')   AS kosong,
+       count(*) FILTER (WHERE catatan IS NULL) AS null_asli
+FROM pesanan;
 ```

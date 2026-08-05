@@ -1,5 +1,7 @@
 # Transaksi ACID, Isolation Levels, dan Concurrency Control di PostgreSQL
 
+> **Berlaku:** Go 1.21+ · PostgreSQL 14+ · pgx/v5 · **Lihat juga:** `db_sqlc/database_locking_strategies.md` · `db_sqlc/connection_pool_tuning.md` · `distributed_patterns_resilience/retry_backoff_jitter.md` · `distributed_patterns_resilience/saga_orchestration_choreography.md`
+
 ## Konsep dan Internals
 
 Dalam ekosistem Golang yang sangat *concurrent*, interaksi dengan database relasional seperti PostgreSQL menuntut pemahaman mendalam tentang **ACID (Atomicity, Consistency, Isolation, Durability)**. Kesalahan pemahaman pada tingkat isolasi (Isolation Level) dapat menyebabkan bug data-korupsi yang sangat sulit dilacak (seperti *lost updates*, *phantom reads*, atau *write skew*).
@@ -408,4 +410,47 @@ func TestExecuteSerializableTx_RetryOnSerializationFailure(t *testing.T) {
 		t.Errorf("expected exactly 3 attempts, got %d", attempts)
 	}
 }
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **`Serializable` sebagai tingkat isolasi bawaan.** Ia mengubah bentrokan konkurensi menjadi galat `40001` yang **WAJIB** di-retry. Kode yang belum siap retry akan memuntahkan galat acak ke pengguna pada beban tinggi. Pakai `Read Committed` kecuali ada invarian lintas baris yang benar-benar tidak bisa dijaga cara lain.
+- **Membungkus panggilan jaringan di dalam transaksi.** Setiap milidetik transaksi terbuka menahan snapshot MVCC dan menghambat `VACUUM`. Satu panggilan HTTP di tengah transaksi berarti transaksi sepanjang timeout HTTP — dan bloat yang mengikutinya.
+- **Retry pada callback yang tidak idempoten.** Percobaan kedua akan mengirim email kedua, memotong saldo kedua kali, atau menerbitkan event ganda. Efek samping non-transaksional WAJIB dipindahkan ke luar, atau dijamin idempoten.
+- **Transaksi lintas database atau lintas layanan.** `PREPARE TRANSACTION` (two-phase commit) menahan lock tanpa batas bila koordinatornya mati, dan hampir selalu keputusan yang salah di arsitektur layanan. Yang tepat adalah saga atau outbox.
+- **Satu transaksi untuk pekerjaan batch besar.** `UPDATE` 10 juta baris dalam satu transaksi menghasilkan bloat besar, WAL raksasa, dan rollback yang bisa berjam-jam. Potong per batch dengan commit di antaranya.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Galat `40001` melonjak saat trafik naik | tingkat isolasi + pola akses baris | Serializable tanpa retry yang memadai |
+| Tabel membengkak, `VACUUM` tidak pernah menyusul | umur transaksi tertua | Ada transaksi menganggur menahan snapshot |
+| `40P01 deadlock detected` berkala | urutan pengambilan lock antar jalur kode | Dua jalur mengunci baris dengan urutan berbeda |
+| p99 tulis melar tanpa kenaikan CPU | `pg_blocking_pids` | Transaksi antre menunggu lock |
+| Efek samping terjadi dua kali | apakah callback di-retry | Operasi non-idempoten di dalam transaksi yang di-retry |
+
+```sql
+-- Transaksi menganggur yang masih memegang snapshot: pembunuh VACUUM nomor satu
+SELECT pid, state, now()-xact_start AS umur_tx, now()-state_change AS diam,
+       left(query,60) AS query
+FROM pg_stat_activity
+WHERE xact_start IS NOT NULL AND state <> 'idle'
+ORDER BY xact_start LIMIT 20;
+
+-- Rasio rollback dan jumlah deadlock sejak statistik terakhir direset
+SELECT datname, xact_commit, xact_rollback, deadlocks, conflicts
+FROM pg_stat_database WHERE datname = current_database();
+
+-- Siapa memblokir siapa, lengkap dengan query keduanya
+SELECT bl.pid AS diblokir, left(bl.query,50) AS q_diblokir,
+       ka.pid AS pemblokir, left(ka.query,50) AS q_pemblokir
+FROM pg_stat_activity bl
+JOIN pg_stat_activity ka ON ka.pid = ANY(pg_blocking_pids(bl.pid));
+```
+
+```bash
+# Berapa banyak permintaan mati karena serialization failure?
+kubectl logs -l app=api --since=1h | grep -c 'SQLSTATE 40001'
+kubectl logs -l app=api --since=1h | grep -c 'SQLSTATE 40P01'
 ```

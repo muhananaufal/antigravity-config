@@ -1,5 +1,7 @@
 # TimescaleDB & Partitioning Data Runtun Waktu (Time-Series)
 
+> **Berlaku:** PostgreSQL 14+ · TimescaleDB 2.x · **Lihat juga:** `db_sqlc/sharding_partitioning.md` · `db_sqlc/index_design_explain_analyze.md` · `db_sqlc/zero_downtime_migrations.md` · `observability_resilience/prometheus_metrics_red.md`
+
 ## Konsep dan Internals
 
 Aplikasi modern seperti agregator metrik IoT, *telemetri microservices*, atau perdagangan saham frekuensi tinggi (*High-Frequency Trading*) memproduksi log data yang membludak. Secara konseptual, data ini disebut sebagai **Time-Series (Runtun Waktu)**: mayoritas *append-only* (hanya sisip, jarang ubah), berlabel waktu (*timestamped*), dan biasanya dkueri berdasarkan rentang waktu.
@@ -299,4 +301,46 @@ func TestClockSkewFiltering(t *testing.T) {
 	
 	t.Log("Ingester successfully dropped invalid time payload")
 }
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **Untuk data yang bukan runtun waktu.** Seluruh keunggulan hypertable bertumpu pada satu kolom waktu yang mendominasi query. Data tanpa dimensi waktu yang dominan tidak mendapat apa pun selain ketergantungan ekstensi.
+- **Untuk volume yang masih kecil.** Di bawah puluhan juta baris, partisi deklaratif PostgreSQL biasa — atau bahkan tabel biasa dengan index yang benar — sudah cukup, dan tidak mengikat Anda pada ekstensi yang harus tersedia di setiap lingkungan.
+- **Ketika penyedia terkelola Anda tidak menyediakan ekstensinya.** Ketergantungan ini membatasi pilihan hosting di kemudian hari. Pastikan sebelum menulis kode, bukan sesudah.
+- **Continuous aggregate sebagai pengganti gudang data.** Untuk analitik lintas sumber dan query ad-hoc besar, ClickHouse atau BigQuery lebih tepat. Continuous aggregate unggul pada rollup yang bentuknya sudah diketahui.
+- **Menyetel `chunk_time_interval` asal-asalan.** Terlalu kecil menghasilkan ribuan chunk dan perencanaan query yang lambat; terlalu besar membuang manfaat pruning. Sasarannya: satu chunk aktif muat dalam sekitar 25% memori yang tersedia.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Query melambat seiring waktu meski rentangnya tetap | jumlah chunk | Chunk interval terlalu kecil; perencanaan menyentuh terlalu banyak chunk |
+| Rencana query menyentuh semua chunk | `EXPLAIN` untuk query berpredikat waktu | Pruning gagal — predikat waktunya tidak sargable |
+| Disk terus penuh meski ada kebijakan retensi | status job retensi | Job retensi gagal atau tidak pernah dijadwalkan |
+| Ukuran tidak turun setelah kompresi dinyalakan | kolom `is_compressed` per chunk | Job kompresi tidak berjalan |
+| Data masuk ke chunk yang salah | tipe kolom waktu | `TIMESTAMP` tanpa zona waktu; pakai `TIMESTAMPTZ` |
+
+```sql
+-- Ukuran dan jumlah chunk per hypertable
+SELECT hypertable_name, num_chunks,
+       pg_size_pretty(hypertable_size(
+         format('%I.%I', hypertable_schema, hypertable_name)::regclass)) AS ukuran
+FROM timescaledb_information.hypertables;
+
+-- Apakah job retensi dan kompresi benar-benar berjalan?
+SELECT job_id, application_name, schedule_interval, next_start
+FROM timescaledb_information.jobs;
+SELECT job_id, last_run_started_at, last_successful_finish, last_run_status,
+       total_failures
+FROM timescaledb_information.job_stats ORDER BY last_run_started_at DESC LIMIT 10;
+
+-- Chunk terbaru dan status kompresinya
+SELECT chunk_name, range_start, range_end, is_compressed
+FROM timescaledb_information.chunks
+WHERE hypertable_name = 'metrik' ORDER BY range_start DESC LIMIT 10;
+
+-- Pruning bekerja? Rencana harus menyentuh sedikit chunk, bukan semuanya.
+EXPLAIN (COSTS OFF)
+SELECT avg(nilai) FROM metrik WHERE waktu > now() - interval '1 day';
 ```

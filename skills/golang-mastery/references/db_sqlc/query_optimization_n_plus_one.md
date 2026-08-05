@@ -1,5 +1,7 @@
 # Query Optimization: Menumpas N+1 & JSON Aggregation
 
+> **Berlaku:** Go 1.21+ · PostgreSQL 14+ · **Lihat juga:** `db_sqlc/index_design_explain_analyze.md` · `db_sqlc/sqlc_pgx_driver.md` · `microservices_grpc/graphql_gqlgen_dataloader.md` · `db_sqlc/multi_layer_caching.md`
+
 ## Konsep dan Internals
 
 Kelemahan paling kronis dan mematikan dalam pengembangan backend berbasis objek (terutama saat transisi dari ORM ke SQL murni) adalah **Anomali N+1**.
@@ -339,3 +341,41 @@ Perintah `EXPLAIN ANALYZE` **BENAR-BENAR MENGEKSEKUSI** *kueri* yang ada di bela
 **Solusi:**
 1. Hanya gunakan flag `ANALYZE` di lingkungan tes atau replika. 
 2. Jika terpaksa di production (untuk kueri mutasi seperti `UPDATE/DELETE`), selalu bungkus dalam blok `BEGIN; EXPLAIN ANALYZE ...; ROLLBACK;` untuk mencegah mutasi permanen!
+
+## Kapan JANGAN Pakai Ini
+
+- **`jsonb_agg` untuk hasil yang sangat besar.** Seluruh dokumen dibangun di memori server lalu dikirim sekaligus. Untuk 100 ribu baris anak, ini menaikkan memori PostgreSQL sekaligus latensi. Dua query terpisah lalu digabungkan di Go lebih hemat.
+- **Satu query raksasa dengan banyak `JOIN` demi menghindari N+1.** Perkalian baris (fan-out) bisa membuat hasil yang dikirim jauh lebih besar daripada data sebenarnya — 100 pesanan × 20 item × 5 tag = 10.000 baris untuk 125 objek.
+- **Batching pada jalur yang memang mengambil satu baris.** Kerumitan dataloader tidak terbayar bila jumlah anaknya nol atau satu.
+- **`IN (...)` dengan daftar puluhan ribu ID.** Rencana query membengkak dan waktu parse ikut naik. Pakai `= ANY($1::bigint[])` dengan satu parameter array, atau salin ID ke tabel sementara.
+- **Mengoptimalkan sebelum mengukur.** N+1 yang berjalan tiga kali per permintaan bukan masalah. Yang berjalan tiga ribu kali baru masalah — dan hanya pengukuran yang bisa membedakannya.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Latensi naik sebanding jumlah item di halaman | jumlah query per permintaan | Tanda paling khas N+1 |
+| `pg_stat_statements`: `calls` sangat tinggi, `mean_exec_time` sangat rendah | rasio calls vs total_exec_time | Ribuan query kecil; masing-masing cepat, totalnya lambat |
+| CPU database tinggi tapi tidak ada query lambat | total_exec_time terakumulasi | Beban berasal dari volume, bukan dari satu query berat |
+| Memori PostgreSQL melonjak pada endpoint tertentu | ukuran hasil `jsonb_agg` | Agregasi membangun dokumen raksasa di memori |
+| Satu trace berisi ratusan span database | jumlah span `db.*` per trace | N+1 yang terlihat langsung di tracing |
+
+```sql
+-- Ciri khas N+1: calls sangat tinggi, rata-rata sangat cepat, total mendominasi
+SELECT calls, mean_exec_time::numeric(10,3) AS rata_ms,
+       total_exec_time::int AS total_ms, left(query,70) AS query
+FROM pg_stat_statements
+WHERE calls > 10000 ORDER BY calls DESC LIMIT 20;
+
+-- Query yang paling menghabiskan waktu SECARA TOTAL -- bukan yang paling lambat
+SELECT calls, total_exec_time::int AS total_ms, left(query,70)
+FROM pg_stat_statements ORDER BY total_exec_time DESC LIMIT 15;
+```
+
+```bash
+# Jumlah span database per trace. Satu trace dengan 200 span db = N+1 yang jelas.
+curl -s "$JAEGER/api/traces?service=api&limit=20" \
+  | jq '[.data[] | {trace: .traceID,
+                    db: ([.spans[] | select(.operationName | test("^db"))] | length)}]
+        | sort_by(-.db)[:5]'
+```

@@ -1,5 +1,7 @@
 # Multi-Layer Caching (In-Process, Redis, DB) & Sinkronisasi Invalidation
 
+> **Berlaku:** Go 1.21+ · Redis 7+ · PostgreSQL `LISTEN/NOTIFY` · **Lihat juga:** `caching_strategy/multilevel_cache_l1l2.md` · `caching_strategy/cache_invalidation_strategies.md` · `concurrency/singleflight_thundering_herd.md` · `db_sqlc/read_replica_routing.md`
+
 ## Konsep dan Internals
 
 Untuk aplikasi Go ber-frekuensi sangat tinggi (High-Frequency / High-Throughput) seperti Gateway API atau e-Commerce, mengandalkan **Database (L3)** saja akan menyebabkan kelebihan muatan (bottleneck) secara instan. Menambahkan **Redis (L2)** memang membantu, namun setiap akses ke Redis tetap melibatkan *Network I/O* (Round-Trip Time) dan *Serialization/Deserialization*, yang rata-rata memakan waktu 1-2 milidetik per operasi. 
@@ -298,4 +300,41 @@ func TestSingleflightStampedePrevention(t *testing.T) {
 		t.Fatalf("Expected exactly 1 DB execution, got %d. Cache Stampede prevention failed!", executionCount)
 	}
 }
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **Cache L1 dalam-proses untuk data yang wajib konsisten antar pengguna.** Tiap pod memegang salinannya sendiri dan invalidasinya tidak pernah serentak. Pengguna akan melihat nilai berbeda tergantung pod mana yang kebetulan melayaninya — dan itu tampak seperti bug hantu.
+- **Cache untuk data yang jarang dibaca.** Hit rate rendah berarti seluruh kerumitan invalidasi dibayar tanpa imbalan. Ukur rasio baca/tulis sebelum menambah lapisan.
+- **Cache di depan query yang belum di-index.** Yang disembunyikan hanya gejalanya. Saat cache dingin — deploy, restart Redis, eviction massal — beban penuh langsung menghantam database yang tidak pernah disiapkan menerimanya.
+- **Menyimpan hasil yang bergantung pada identitas pemanggil tanpa memasukkannya ke kunci.** Ini cara paling umum data satu pengguna muncul di layar pengguna lain. Tenant, bahasa, dan peran WAJIB masuk ke dalam kunci.
+- **Cache tanpa rencana invalidasi.** "TTL 1 jam" adalah rencana yang sah. "Nanti kita pikirkan" bukan — dan biasanya berakhir sebagai data usang yang bertahan berhari-hari.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Beban database tidak turun setelah cache dipasang | `keyspace_hits` vs `keyspace_misses` | Hit rate rendah; kuncinya terlalu spesifik atau TTL terlalu pendek |
+| Pengguna melapor data lama, hilang setelah refresh | perbedaan nilai antar pod | L1 tidak menerima sinyal invalidasi |
+| Lonjakan query database tepat setelah deploy | waktu deploy vs lonjakan | Seluruh L1 kosong serentak |
+| Data hilang dari cache sebelum TTL | `evicted_keys` di Redis | Memori Redis penuh; kebijakan eviction membuang data |
+| Pengguna melihat data milik orang lain | komposisi kunci cache | Identitas pemanggil tidak masuk ke kunci |
+
+```bash
+redis-cli info stats  | grep -E 'keyspace_hits|keyspace_misses|expired_keys|evicted_keys'
+redis-cli info memory | grep -E 'used_memory_human|maxmemory_human|maxmemory_policy'
+
+# Kunci raksasa yang membuat latensi Redis melonjak
+redis-cli --bigkeys
+
+# Nilai berbeda antar pod = bukti L1 tidak sinkron
+for p in $(kubectl get pods -l app=api -o name); do
+  kubectl exec "$p" -- curl -s localhost:8080/debug/cache/produk/42
+done | sort | uniq -c
+```
+
+```sql
+-- LISTEN/NOTIFY: pastikan pendengarnya benar-benar ada dan hidup
+SELECT pid, application_name, state, now()-state_change AS diam
+FROM pg_stat_activity WHERE query ILIKE 'LISTEN%';
 ```

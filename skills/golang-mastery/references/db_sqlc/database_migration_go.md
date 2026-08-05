@@ -1,5 +1,7 @@
 # Golang Database Migration: Zero-Downtime, Tooling, & Best Practices
 
+> **Berlaku:** Go 1.21+ · `golang-migrate` / `goose` / `atlas` · **Lihat juga:** `db_sqlc/zero_downtime_migrations.md` · `db_sqlc/database_locking_strategies.md` · `db_sqlc/sharding_partitioning.md` · `testing_quality/testcontainers_integration.md`
+
 Dokumen ini adalah referensi komprehensif (Top 1%) tentang manajemen migrasi database di Go, mencakup *tooling* modern, strategi zero-downtime, pengujian, dan penanganan edge-case di production environment.
 
 ---
@@ -330,4 +332,44 @@ func MigrateAllTenants(db *sql.DB, tenants []string) error {
     return errors.Join(errs...)
 }
 ```
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **Menjalankan migrasi otomatis saat aplikasi start pada armada banyak pod.** Sepuluh pod berlomba menjalankan migrasi yang sama; yang kalah balapan gagal start, dan tabel versi bisa berakhir `dirty`. Pakai Job/initContainer tunggal, atau bungkus dengan advisory lock.
+- **Migrasi turun (`down`) sebagai strategi rollback produksi.** `down` yang menghapus kolom membuang data yang tidak bisa dikembalikan. Rollback produksi yang benar adalah **maju** dengan migrasi perbaikan. `down` berguna di lingkungan pengembangan, bukan sebagai jaring pengaman.
+- **Menggabungkan DDL dan backfill jutaan baris dalam satu berkas.** DDL selesai dalam milidetik, backfill butuh menit sampai jam; menyatukannya menahan lock selama seluruh backfill.
+- **Auto-migrate bawaan ORM di produksi.** DDL-nya dihasilkan saat runtime dan tidak pernah Anda lihat sebelum berjalan. Skema produksi harus berupa berkas yang bisa ditinjau di code review.
+- **Membungkus `CREATE INDEX CONCURRENTLY` dalam transaksi.** Perintah itu menolak berjalan di dalam blok transaksi. Berkas migrasinya WAJIB ditandai tanpa transaksi (`-- +goose NO TRANSACTION` atau berkas `.up.sql` terpisah).
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Deploy tersendat lama pada langkah migrasi | `pg_blocking_pids` untuk pid migrasi | DDL menunggu lock di belakang query panjang |
+| Aplikasi gagal start setelah migrasi gagal | kolom `dirty` di tabel versi | Migrasi berhenti separuh jalan; butuh `force` setelah diperiksa manual |
+| Sebagian tenant/shard berperilaku beda | versi migrasi per shard | Migrasi tidak seragam di seluruh cluster |
+| Index ada tapi tidak pernah dipakai | `pg_index WHERE NOT indisvalid` | `CREATE INDEX CONCURRENTLY` gagal dan meninggalkan index rusak |
+| Beberapa pod gagal start bersamaan saat rollout | siapa yang menjalankan migrasi | Balapan migrasi antar pod |
+
+```sql
+-- Status versi dan penanda gagal-separuh
+SELECT * FROM schema_migrations;
+
+-- Index yang tertinggal dalam keadaan tidak valid: WAJIB di-DROP lalu dibuat ulang
+SELECT indexrelid::regclass FROM pg_index WHERE NOT indisvalid;
+
+-- Apa yang memblokir migrasi yang sedang berjalan
+SELECT pid, now()-query_start AS lama, state, left(query,80)
+FROM pg_stat_activity
+WHERE query ILIKE '%ALTER TABLE%' OR query ILIKE '%CREATE INDEX%';
+```
+
+```bash
+migrate -path ./migrations -database "$DSN" version
+kubectl get jobs -l app=migrate
+kubectl logs job/migrate --tail=80
+
+# Migrasi seragam di semua shard? Angka yang berbeda berarti cluster tidak konsisten.
+for dsn in $SHARD_DSNS; do psql "$dsn" -tAc 'SELECT max(version) FROM schema_migrations'; done | sort | uniq -c
 ```

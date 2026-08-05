@@ -1,5 +1,7 @@
 # Strategi Database Locking: Pessimistic, Optimistic, & Advisory
 
+> **Berlaku:** PostgreSQL 14+ · pgx/v5 · **Lihat juga:** `db_sqlc/acid_transactions_isolation.md` · `concurrency/distributed_locks_redis.md` · `background_jobs_worker/river_postgres_jobs.md` · `db_sqlc/index_design_explain_analyze.md`
+
 ## Konsep dan Internals
 
 Meskipun *Isolation Levels* pada PostgreSQL dapat mencegah anomali standar (seperti *dirty reads* atau *write skew*), aplikasi skala produksi seringkali menuntut aturan bisnis eksplisit. Misalnya: "Jangan biarkan dua *worker* mengirim email selamat datang ke pengguna yang sama," atau "Pastikan hanya ada satu server yang mengeksekusi migrasi *cron job* harian". Untuk inilah sistem *Locking* (penguncian) ada.
@@ -305,4 +307,43 @@ func TestUpdateProductOptimistic_Success(t *testing.T) {
 	}
 	// success case
 }
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **Pessimistic lock untuk operasi yang jarang bentrok.** Bila peluang dua penulis bertemu di baris yang sama kecil, optimistic locking (kolom `version`) memberi throughput jauh lebih tinggi, dan kegagalannya eksplisit alih-alih tersembunyi sebagai antrean.
+- **Optimistic lock ketika bentrokan sering.** Retry berulang membakar CPU dan memperbesar kemacetan. Pada baris panas — saldo, stok satu SKU — antre sekali dengan `FOR UPDATE` lebih murah daripada gagal lima kali.
+- **`FOR UPDATE` tanpa `SKIP LOCKED` pada tabel antrean.** Semua worker akan antre di baris yang sama dan throughput menjadi serial, persis kebalikan dari yang diinginkan.
+- **Advisory lock untuk data yang punya barisnya sendiri.** Mengunci baris dengan `SELECT ... FOR UPDATE` lebih jelas, otomatis lepas saat transaksi selesai, dan tidak berisiko benturan namespace integer global.
+- **Lock database untuk koordinasi antar layanan yang tidak berbagi database.** Itu persoalan berbeda dengan syarat berbeda — lihat `concurrency/distributed_locks_redis.md`.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| `deadlock detected` muncul berkala | urutan pengambilan lock antar jalur | Dua jalur mengunci baris dengan urutan berbeda |
+| Throughput worker antrean serial meski pod ditambah | apakah `SKIP LOCKED` dipakai | Semua worker antre di baris yang sama |
+| Job tertentu tidak pernah jalan | ID advisory lock yang dipakai | Benturan namespace advisory lock global |
+| `UPDATE` mengembalikan 0 baris tanpa galat | kolom `version` | Optimistic lock gagal; pemanggil WAJIB menanganinya |
+| Transaksi menunggu lama tanpa CPU | `pg_locks WHERE NOT granted` | Antre lock, bukan kekurangan sumber daya |
+
+```sql
+-- Lock yang diminta tapi belum diberikan, diurut dari yang paling lama menunggu
+SELECT l.locktype, l.relation::regclass, l.mode, l.pid,
+       now()-a.query_start AS lama, left(a.query,60) AS query
+FROM pg_locks l JOIN pg_stat_activity a USING (pid)
+WHERE NOT l.granted ORDER BY lama DESC;
+
+-- Advisory lock yang sedang dipegang beserta ID-nya
+SELECT pid, classid, objid, granted FROM pg_locks WHERE locktype = 'advisory';
+
+-- Deadlock baru terdeteksi setelah ambang ini (default 1 detik)
+SHOW deadlock_timeout;
+SELECT deadlocks FROM pg_stat_database WHERE datname = current_database();
+```
+
+```bash
+# Aktifkan dulu: log_lock_waits = on, deadlock_timeout = 1s
+grep -c 'deadlock detected' /var/log/postgresql/*.log
+grep 'still waiting for' /var/log/postgresql/*.log | tail -20
 ```
