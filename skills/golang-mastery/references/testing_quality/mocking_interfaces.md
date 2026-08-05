@@ -46,6 +46,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -58,9 +59,16 @@ import (
 //go:generate mockgen -destination=mocks/mock_payment.go -package=mocks -source=mocking_interfaces.go PaymentGateway
 
 // PaymentGateway adalah kontrak untuk proses pembayaran.
+//
+// Jumlah dalam SATUAN MINOR bertipe int64. Di berkas tentang mocking, ini
+// bukan sekadar soal uang: `gomock.Eq(99.99)` mencocokkan nilai float64
+// secara persis, sehingga begitu jumlahnya melewati satu operasi aritmetika
+// pun, matcher-nya berhenti cocok dan gomock melaporkannya sebagai
+// "missing call" — kegagalan yang menuntun Anda mencari bug di logika,
+// padahal yang salah adalah matcher-nya.
 type PaymentGateway interface {
-	Charge(ctx context.Context, amount float64, token string) (string, error)
-	Refund(ctx context.Context, txID string, amount float64) error
+	Charge(ctx context.Context, amountSen int64, token string) (string, error)
+	Refund(ctx context.Context, txID string, amountSen int64) error
 }
 
 // AuditLogger adalah kontrak untuk audit log.
@@ -79,31 +87,44 @@ func NewCheckoutService(g PaymentGateway, l AuditLogger) *CheckoutService {
 	return &CheckoutService{gateway: g, logger: l}
 }
 
+// Galat validasi sebagai sentinel, supaya uji bisa memeriksanya dengan
+// errors.Is alih-alih mencocokkan teks.
+var (
+	ErrJumlahTidakValid = errors.New("jumlah harus positif")
+	ErrTokenKosong      = errors.New("token pembayaran wajib ada")
+)
+
 // ProcessOrder memproses pesanan dan mencatat audit log.
-func (s *CheckoutService) ProcessOrder(ctx context.Context, amount float64, token string) (string, error) {
-	if amount <= 0 {
-		return "", errors.New("amount must be positive")
+func (s *CheckoutService) ProcessOrder(ctx context.Context, amountSen int64, token string) (string, error) {
+	if amountSen <= 0 {
+		return "", ErrJumlahTidakValid
 	}
 	if token == "" {
-		return "", errors.New("payment token required")
+		return "", ErrTokenKosong
 	}
 
-	txID, err := s.gateway.Charge(ctx, amount, token)
+	txID, err := s.gateway.Charge(ctx, amountSen, token)
 	if err != nil {
-		// Log audit untuk failed charge
-		_ = s.logger.Log(ctx, "charge_failed", map[string]any{
-			"amount": amount,
-			"error":  err.Error(),
-		})
-		return "", fmt.Errorf("charge failed: %w", err)
+		// Galat audit di jalur ini pun tidak boleh ditelan diam-diam.
+		if errLog := s.logger.Log(ctx, "charge_failed", map[string]any{
+			"amount_minor": amountSen,
+			"error":        err.Error(),
+		}); errLog != nil {
+			slog.ErrorContext(ctx, "audit charge_failed gagal dicatat", "galat", errLog)
+		}
+		return "", fmt.Errorf("charge gagal: %w", err)
 	}
 
 	if err := s.logger.Log(ctx, "charge_success", map[string]any{
-		"txID":   txID,
-		"amount": amount,
+		"txID":         txID,
+		"amount_minor": amountSen,
 	}); err != nil {
-		// Log failure tidak membatalkan order — non-fatal
-		fmt.Printf("audit log error: %v\n", err)
+		// Kegagalan audit tidak membatalkan pesanan — tetapi ia WAJIB
+		// terlihat. fmt.Printf menulis ke stdout tanpa level, tanpa korelasi,
+		// dan tidak akan pernah memicu alert apa pun; padahal audit yang
+		// gagal diam-diam persis yang ingin Anda ketahui.
+		slog.ErrorContext(ctx, "audit charge_success gagal dicatat",
+			"galat", err, "tx_id", txID)
 	}
 
 	return txID, nil
@@ -111,8 +132,27 @@ func (s *CheckoutService) ProcessOrder(ctx context.Context, amount float64, toke
 
 // --- Tests dengan go.uber.org/mock ---
 
-// MockPaymentGateway — normalnya digenerate oleh mockgen.
-// Di sini ditulis manual untuk demo.
+// MockPaymentGateway — normalnya digenerate mockgen; ditulis manual di sini
+// agar bentuknya terlihat.
+//
+// Dua hal yang WAJIB ditiru dari keluaran mockgen, dan keduanya salah pada
+// versi sebelumnya:
+//
+//  1. **`RecordCall`, bukan `RecordCallWithMethodType`.** Tanda tangan yang
+//     kedua adalah `(receiver any, method string, methodType reflect.Type,
+//     args ...any)` — parameter ketiganya bertipe `reflect.Type`. Meneruskan
+//     `ctx` yang bertipe `any` ke sana adalah **galat kompilasi**, sehingga
+//     seluruh blok demo ini sebelumnya tidak bisa dibangun sama sekali.
+//     mockgen memang memakai varian WithMethodType, tetapi ia menyertakan
+//     `reflect.TypeOf((*MockX)(nil).Metode)` sebagai argumen ketiga. Untuk
+//     mock yang ditulis tangan, `RecordCall` menemukan tipe metodenya
+//     sendiri lewat refleksi dan lebih sulit disalahtulis.
+//
+//  2. **`ctrl.T.Helper()` di awal setiap metode.** Tanpanya, laporan
+//     kegagalan gomock menunjuk ke baris DI DALAM berkas mock, bukan ke
+//     baris pemanggil yang sebenarnya salah — dan pada suite besar itu
+//     berarti setiap kegagalan menunjuk ke tempat yang sama dan tidak
+//     berguna.
 type MockPaymentGateway struct {
 	ctrl     *gomock.Controller
 	recorder *MockPaymentGatewayMockRecorder
@@ -125,22 +165,27 @@ func NewMockPaymentGateway(ctrl *gomock.Controller) *MockPaymentGateway {
 	return m
 }
 func (m *MockPaymentGateway) EXPECT() *MockPaymentGatewayMockRecorder { return m.recorder }
-func (m *MockPaymentGateway) Charge(ctx context.Context, amount float64, token string) (string, error) {
-	ret := m.ctrl.Call(m, "Charge", ctx, amount, token)
+
+func (m *MockPaymentGateway) Charge(ctx context.Context, amountSen int64, token string) (string, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Charge", ctx, amountSen, token)
 	ret0, _ := ret[0].(string)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
-func (m *MockPaymentGateway) Refund(ctx context.Context, txID string, amount float64) error {
-	ret := m.ctrl.Call(m, "Refund", ctx, txID, amount)
+func (m *MockPaymentGateway) Refund(ctx context.Context, txID string, amountSen int64) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Refund", ctx, txID, amountSen)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
-func (mr *MockPaymentGatewayMockRecorder) Charge(ctx, amount, token any) *gomock.Call {
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Charge", ctx, amount, token)
+func (mr *MockPaymentGatewayMockRecorder) Charge(ctx, amountSen, token any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCall(mr.mock, "Charge", ctx, amountSen, token)
 }
-func (mr *MockPaymentGatewayMockRecorder) Refund(ctx, txID, amount any) *gomock.Call {
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Refund", ctx, txID, amount)
+func (mr *MockPaymentGatewayMockRecorder) Refund(ctx, txID, amountSen any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCall(mr.mock, "Refund", ctx, txID, amountSen)
 }
 
 // MockAuditLogger — minimal mock untuk AuditLogger.
@@ -156,32 +201,35 @@ func NewMockAuditLogger(ctrl *gomock.Controller) *MockAuditLogger {
 	return m
 }
 func (m *MockAuditLogger) EXPECT() *MockAuditLoggerMockRecorder { return m.recorder }
+
 func (m *MockAuditLogger) Log(ctx context.Context, event string, metadata map[string]any) error {
+	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Log", ctx, event, metadata)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 func (mr *MockAuditLoggerMockRecorder) Log(ctx, event, metadata any) *gomock.Call {
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Log", ctx, event, metadata)
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCall(mr.mock, "Log", ctx, event, metadata)
 }
 
 // TestCheckoutService_ProcessOrder adalah test table-driven dengan multiple scenarios.
 func TestCheckoutService_ProcessOrder(t *testing.T) {
 	tests := []struct {
 		name      string
-		amount    float64
+		amountSen int64
 		token     string
 		setupMock func(gw *MockPaymentGateway, log *MockAuditLogger)
 		wantTxID  string
-		wantErr   bool
+		wantErr   error // sentinel, bukan bool: "ada galat" tidak membedakan galat yang SALAH
 	}{
 		{
-			name:   "success — charge and log both succeed",
-			amount: 150.00,
-			token:  "tok_visa_success",
+			name:      "sukses — charge dan audit sama-sama berhasil",
+			amountSen: 15_000,
+			token:     "tok_visa_success",
 			setupMock: func(gw *MockPaymentGateway, log *MockAuditLogger) {
 				gw.EXPECT().
-					Charge(gomock.Any(), gomock.Eq(150.00), "tok_visa_success").
+					Charge(gomock.Any(), gomock.Eq(int64(15_000)), "tok_visa_success").
 					Return("txn_abc123", nil).
 					Times(1)
 				log.EXPECT().
@@ -192,45 +240,53 @@ func TestCheckoutService_ProcessOrder(t *testing.T) {
 			wantTxID: "txn_abc123",
 		},
 		{
-			name:   "gateway error — log failure event, return error",
-			amount: 99.99,
-			token:  "tok_declined",
+			name:      "gateway gagal — audit charge_failed tetap dicatat",
+			amountSen: 9_999,
+			token:     "tok_declined",
 			setupMock: func(gw *MockPaymentGateway, log *MockAuditLogger) {
 				gw.EXPECT().
-					Charge(gomock.Any(), gomock.Eq(99.99), "tok_declined").
-					Return("", errors.New("card declined")).
+					Charge(gomock.Any(), gomock.Eq(int64(9_999)), "tok_declined").
+					Return("", errors.New("kartu ditolak")).
 					Times(1)
-				// charge_failed log dipanggil saat gateway error
 				log.EXPECT().
 					Log(gomock.Any(), "charge_failed", gomock.Any()).
 					Return(nil).
 					Times(1)
 			},
-			wantErr: true,
+			wantErr: errKartuDitolak,
 		},
 		{
-			name:    "validation — negative amount returns error immediately",
-			amount:  -10.0,
-			token:   "tok_any",
-			setupMock: func(gw *MockPaymentGateway, log *MockAuditLogger) {
-				// Tidak ada call ke gateway atau logger untuk validasi error
-				gw.EXPECT().Charge(gomock.Any(), gomock.Any(), gomock.Any()).Times(0)
-				log.EXPECT().Log(gomock.Any(), gomock.Any(), gomock.Any()).Times(0)
-			},
-			wantErr: true,
+			// Tanpa EXPECT sama sekali: controller gomock SUDAH menggagalkan
+			// panggilan yang tidak diharapkan. `Times(0)` di sini hanya
+			// mengulang jaminan yang sudah ada, dan menyiratkan bahwa tanpa
+			// baris itu panggilan liar akan lolos — padahal tidak.
+			name:      "validasi — jumlah negatif ditolak sebelum menyentuh gateway",
+			amountSen: -1_000,
+			token:     "tok_any",
+			setupMock: func(*MockPaymentGateway, *MockAuditLogger) {},
+			wantErr:   ErrJumlahTidakValid,
 		},
 		{
-			name:   "log failure is non-fatal — order still succeeds",
-			amount: 50.00,
-			token:  "tok_ok",
+			// Cabang ini sama sekali tidak diuji pada versi sebelumnya,
+			// meski validasinya ada dua.
+			name:      "validasi — token kosong ditolak",
+			amountSen: 5_000,
+			token:     "",
+			setupMock: func(*MockPaymentGateway, *MockAuditLogger) {},
+			wantErr:   ErrTokenKosong,
+		},
+		{
+			name:      "audit gagal tidak membatalkan pesanan",
+			amountSen: 5_000,
+			token:     "tok_ok",
 			setupMock: func(gw *MockPaymentGateway, log *MockAuditLogger) {
 				gw.EXPECT().
-					Charge(gomock.Any(), gomock.Eq(50.00), "tok_ok").
+					Charge(gomock.Any(), gomock.Eq(int64(5_000)), "tok_ok").
 					Return("txn_xyz", nil).
 					Times(1)
 				log.EXPECT().
 					Log(gomock.Any(), "charge_success", gomock.Any()).
-					Return(errors.New("log service down")).  // logger error
+					Return(errors.New("layanan audit mati")).
 					Times(1)
 			},
 			wantTxID: "txn_xyz", // order tetap sukses
@@ -238,49 +294,58 @@ func TestCheckoutService_ProcessOrder(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
-			ctrl := gomock.NewController(t) // auto-finish + assertion saat t cleanup
+			ctrl := gomock.NewController(t) // auto-finish + asersi saat cleanup
 
 			mockGW := NewMockPaymentGateway(ctrl)
 			mockLog := NewMockAuditLogger(ctrl)
 			tt.setupMock(mockGW, mockLog)
 
 			svc := NewCheckoutService(mockGW, mockLog)
-			txID, err := svc.ProcessOrder(context.Background(), tt.amount, tt.token)
+			txID, err := svc.ProcessOrder(context.Background(), tt.amountSen, tt.token)
 
-			if tt.wantErr {
-				require.Error(t, err)
+			if tt.wantErr != nil {
+				// errors.Is, bukan require.Error. `wantErr bool` hanya
+				// menjawab "ada galat" — ia sama-sama lulus ketika kode
+				// mengembalikan galat yang SALAH, mis. ErrTokenKosong padahal
+				// yang diharapkan ErrJumlahTidakValid.
+				require.ErrorIs(t, err, tt.wantErr)
 				assert.Empty(t, txID)
-			} else {
-				require.NoError(t, err)
-				assert.Equal(t, tt.wantTxID, txID)
+				return
 			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantTxID, txID)
 		})
 	}
 }
 
-// TestCheckoutService_DoAndReturn contoh penggunaan DoAndReturn untuk side-effects.
+// errKartuDitolak dipakai tabel di atas agar asersinya bisa memakai errors.Is.
+var errKartuDitolak = errors.New("kartu ditolak")
+
+// TestCheckoutService_DoAndReturn contoh DoAndReturn untuk efek samping.
 func TestCheckoutService_DoAndReturn(t *testing.T) {
 	ctrl := gomock.NewController(t)
 
 	mockGW := NewMockPaymentGateway(ctrl)
 	mockLog := NewMockAuditLogger(ctrl)
 
-	// DoAndReturn: eksekusi custom function saat method dipanggil
+	// DoAndReturn: fungsi kustom dijalankan saat metode dipanggil.
+	//
+	// Tanda tangannya WAJIB persis sama dengan metode yang di-mock. gomock
+	// memanggilnya lewat refleksi, sehingga ketidakcocokan tipe baru meledak
+	// saat runtime sebagai panic — bukan ditangkap kompilator.
 	mockGW.EXPECT().
 		Charge(gomock.Any(), gomock.Any(), gomock.Any()).
-		DoAndReturn(func(ctx context.Context, amount float64, token string) (string, error) {
-			// Simulasi latency atau side effect kompleks
-			if amount > 1000.00 {
-				return "", errors.New("amount exceeds limit")
+		DoAndReturn(func(ctx context.Context, amountSen int64, token string) (string, error) {
+			if amountSen > 100_000 {
+				return "", errors.New("jumlah melebihi batas")
 			}
 			return fmt.Sprintf("txn_%s", token), nil
 		})
 	mockLog.EXPECT().Log(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
 	svc := NewCheckoutService(mockGW, mockLog)
-	txID, err := svc.ProcessOrder(context.Background(), 500.00, "abc")
+	txID, err := svc.ProcessOrder(context.Background(), 50_000, "abc")
 	require.NoError(t, err)
 	assert.Equal(t, "txn_abc", txID)
 }
@@ -313,19 +378,24 @@ func NewService(g PaymentGateway) *CheckoutService { ... }
 ### ❌ Anti-Pattern 2: Over-Specification pada Argument Matcher
 
 ```go
-// BAD: matcher terlalu ketat pada dynamic values → flaky test
+// BAD: matcher terlalu ketat pada nilai dinamis → uji flaky
 mockGW.EXPECT().
-    Charge(gomock.Eq(ctx), gomock.Eq(100.0), gomock.Eq(time.Now().String()))
+    Charge(gomock.Eq(ctx), gomock.Eq(int64(10_000)), gomock.Eq(time.Now().String()))
     // time.Now() berbeda tiap run → selalu gagal!
 
-// GOOD: gunakan gomock.Any() untuk dynamic/non-deterministic values
+// GOOD: gomock.Any() untuk nilai non-deterministik
 mockGW.EXPECT().
-    Charge(gomock.Any(), gomock.Eq(100.0), gomock.Any())
-
-// Atau gunakan gomock.AssignableToTypeOf() untuk type assertion:
-mockGW.EXPECT().
-    Charge(gomock.AssignableToTypeOf(context.Background()), ...)
+    Charge(gomock.Any(), gomock.Eq(int64(10_000)), gomock.Any())
 ```
+
+**Dan satu bentuk over-specification yang jauh lebih sunyi: `gomock.Eq` pada `float64`.**
+
+```go
+// BAD: cocok HANYA bila bit-nya sama persis
+mockGW.EXPECT().Charge(gomock.Any(), gomock.Eq(99.99), gomock.Any())
+```
+
+Selama nilainya diteruskan apa adanya dari literal yang sama, ini kebetulan cocok. Begitu jumlahnya melewati **satu** operasi aritmetika — pajak, pembulatan, penjumlahan keranjang — hasilnya berbeda beberapa ULP dan matcher berhenti cocok. gomock melaporkannya sebagai **"missing call"**, yang menuntun Anda mencari bug di logika bisnis, padahal yang salah adalah matcher-nya. Jumlah uang dalam satuan minor bertipe `int64` menghapus seluruh kelas kegagalan ini; bila terpaksa memakai float, pakai matcher toleransi kustom, jangan `Eq`.
 
 **Kenapa berbahaya:** Test bergantung pada nilai timestamp, UUID, atau pointer yang berubah setiap run. Hasilnya: flaky test yang lulus di lokal tapi gagal di CI.
 
