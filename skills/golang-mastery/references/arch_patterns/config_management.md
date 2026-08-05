@@ -17,7 +17,9 @@ Viper menangani parsing file, membaca variabel env, dan default value. Konsep te
 package config
 
 import (
+	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/go-playground/validator/v10"
@@ -111,8 +113,19 @@ func LoadConfigWithFallback(basePath string, env string) (*Config, error) {
 	if env != "" {
 		v.SetConfigName(fmt.Sprintf("config.%s", env))
 		if err := v.MergeInConfig(); err != nil {
-			// Jika file env spesifik tidak ditemukan, log warning, jangan panic.
-			fmt.Printf("Warning: no specific config file found for env '%s'\n", env)
+			// "Tidak ada berkas" dan "berkasnya rusak" WAJIB dibedakan.
+			//
+			// Versi sebelumnya menelan SEMUA galat dengan pesan "no specific
+			// config file found". Akibatnya satu salah indentasi di
+			// config.production.yaml membuat aplikasi diam-diam jatuh ke base
+			// config dan menyala dengan setelan yang SALAH — bukan gagal.
+			// Fungsi LoadConfig di §1 sudah membedakan keduanya dengan benar;
+			// yang ini tidak, di berkas yang sama.
+			var tidakAda viper.ConfigFileNotFoundError
+			if !errors.As(err, &tidakAda) {
+				return nil, fmt.Errorf("config env %q rusak: %w", env, err)
+			}
+			slog.Warn("tidak ada config khusus environment, memakai base", "env", env)
 		}
 	}
 
@@ -120,6 +133,28 @@ func LoadConfigWithFallback(basePath string, env string) (*Config, error) {
 	v.SetEnvPrefix("APP")
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	v.AutomaticEnv()
+
+	// AutomaticEnv TIDAK CUKUP bila hasilnya di-Unmarshal.
+	//
+	// Ini jebakan Viper yang paling sering menggigit, dan ia gagal secara
+	// SENYAP. AutomaticEnv hanya memengaruhi v.Get(); Unmarshal bekerja dari
+	// AllSettings(), yang dibangun dari berkas config, default, dan env yang
+	// DIIKAT EKSPLISIT. Viper tidak bisa menyebutkan isi environment, jadi
+	// kunci yang HANYA ada di env — tidak ada di YAML mana pun — tidak akan
+	// pernah muncul di AllSettings dan tidak pernah ikut ter-unmarshal.
+	//
+	// Hasilnya: judul "Env Vars Override (Tertinggi)" benar untuk kunci yang
+	// kebetulan ada di YAML, dan diam-diam salah untuk yang tidak. Ikat
+	// setiap kunci secara eksplisit — atau beri SetDefault untuk semuanya,
+	// yang punya efek sama karena defaultnya masuk AllSettings.
+	for _, kunci := range []string{
+		"server.http_port", "server.grpc_port",
+		"database.url", "auth.provider", "auth.secret_key",
+	} {
+		if err := v.BindEnv(kunci); err != nil {
+			return nil, fmt.Errorf("ikat env untuk %q: %w", kunci, err)
+		}
+	}
 
 	var cfg Config
 	if err := v.Unmarshal(&cfg); err != nil {
@@ -158,17 +193,29 @@ type ServerConfig struct {
 Bila gagal, error bawaan *validator* sulit dibaca. Kita perlu memformatnya:
 ```go
 func ValidateConfig(cfg *Config) error {
-	validate := validator.New()
-	err := validate.Struct(cfg)
-	if err != nil {
-		var errMsgs []string
-		for _, err := range err.(validator.ValidationErrors) {
-			errMsgs = append(errMsgs, fmt.Sprintf("Field '%s' failed on the '%s' tag", err.Namespace(), err.Tag()))
-		}
-		// Output: "Startup failed: [Field 'Config.Auth.SecretKey' failed on the 'required_if' tag]"
-		return fmt.Errorf("configuration errors: %s", strings.Join(errMsgs, ", "))
+	err := validator.New().Struct(cfg)
+	if err == nil {
+		return nil
 	}
-	return nil
+
+	// errors.As, BUKAN `err.(validator.ValidationErrors)` telanjang.
+	//
+	// validate.Struct juga bisa mengembalikan *validator.InvalidValidationError
+	// — misalnya ketika yang dioper bukan struct, atau nil pointer. Tipe itu
+	// BUKAN ValidationErrors, sehingga assertion telanjang PANIC. Dan panic
+	// itu terjadi di dalam fungsi yang tugasnya justru mengubah kegagalan
+	// menjadi pesan yang bisa dibaca: alih-alih daftar field yang salah,
+	// operator mendapat stack trace saat boot.
+	var vErrs validator.ValidationErrors
+	if !errors.As(err, &vErrs) {
+		return fmt.Errorf("validasi konfigurasi tidak dapat dijalankan: %w", err)
+	}
+
+	pesan := make([]string, 0, len(vErrs))
+	for _, e := range vErrs {
+		pesan = append(pesan, fmt.Sprintf("field %q gagal pada aturan %q", e.Namespace(), e.Tag()))
+	}
+	return fmt.Errorf("konfigurasi tidak valid: %s", strings.Join(pesan, "; "))
 }
 ```
 
