@@ -48,79 +48,180 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
+	"runtime/debug"
+	"sync/atomic"
 	"time"
 )
 
-var (
-	ErrBulkheadFull = errors.New("bulkhead is full, request rejected to preserve system stability")
-)
+var ErrBulkheadFull = errors.New("bulkhead penuh, permintaan ditolak demi menjaga stabilitas sistem")
 
 // Bulkhead membatasi jumlah eksekusi konkuren.
 type Bulkhead struct {
+	nama string
 	pool chan struct{}
+
+	// Metrik. Bagian "Cara Mendeteksi Gejalanya di Produksi" di bawah
+	// memerintahkan memantau bulkhead_active / bulkhead_rejected_total /
+	// bulkhead_wait_seconds -- angka-angka itu harus benar-benar ADA, atau
+	// perintah deteksinya hanya menghasilkan keluaran kosong yang terbaca
+	// seperti "tidak ada masalah".
+	aktif      atomic.Int64 // gauge: sedang berjalan
+	diterima   atomic.Int64 // counter: total yang pernah mendapat tiket
+	ditolak    atomic.Int64 // counter: total yang ditolak
+	tungguNano atomic.Int64 // counter: akumulasi waktu tunggu tiket
 }
 
 // NewBulkhead menginisialisasi kapasitas maksimum kompartemen.
-func NewBulkhead(maxConcurrent int) *Bulkhead {
+func NewBulkhead(nama string, maxConcurrent int) *Bulkhead {
+	if maxConcurrent < 1 {
+		panic("kapasitas bulkhead harus >= 1")
+	}
 	return &Bulkhead{
+		nama: nama,
 		// Buffered channel berfungsi sebagai Semaphore.
 		pool: make(chan struct{}, maxConcurrent),
 	}
 }
 
-// Execute menjalankan tugas di dalam partisi Bulkhead.
-// Jika pool penuh, fungsi akan *fail fast* atau menunggu maksimal sepanjang `timeout`.
-func (b *Bulkhead) Execute(ctx context.Context, timeout time.Duration, task func(ctx context.Context) (interface{}, error)) (interface{}, error) {
-	// Gunakan timer untuk fallback (Slight delay tolerance)
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
+// Statistik mengembalikan cuplikan metrik untuk diekspor ke Prometheus.
+//
+// `aktif` adalah GAUGE (sedang berjalan sekarang); `diterima` dan `ditolak`
+// adalah COUNTER kumulatif. Membaginya dengan gauge -- godaan yang mudah --
+// menghasilkan angka tak bermakna yang berubah-ubah mengikuti beban sesaat.
+func (b *Bulkhead) Statistik() (aktif, diterima, ditolak int64, rerataTunggu time.Duration) {
+	aktif = b.aktif.Load()
+	diterima = b.diterima.Load()
+	ditolak = b.ditolak.Load()
+	if n := diterima + ditolak; n > 0 {
+		rerataTunggu = time.Duration(b.tungguNano.Load() / n)
+	}
+	return aktif, diterima, ditolak, rerataTunggu
+}
+
+// Kapasitas mengembalikan batas maksimum kompartemen ini.
+func (b *Bulkhead) Kapasitas() int { return cap(b.pool) }
+
+// Jalankan menjalankan tugas di dalam partisi Bulkhead.
+//
+// FUNGSI PAKET, BUKAN METHOD, dan itu bukan pilihan gaya: Go TIDAK
+// mengizinkan method punya type parameter sendiri (`func (b *Bulkhead)
+// Execute[T any]` adalah galat kompilasi). Karena itu satu-satunya cara
+// mendapatkan hasil bertipe tanpa `interface{}` adalah menaikkannya menjadi
+// fungsi paket dengan penerima sebagai argumen. Ini pola yang sama dengan
+// `slices.SortFunc` dan sejenisnya.
+//
+// Bentuk lama `Execute(...) (interface{}, error)` memaksa SETIAP pemanggil
+// melakukan type assertion, dan assertion tanpa comma-ok adalah panic yang
+// menunggu giliran -- di dalam fungsi yang justru bertugas menjaga stabilitas.
+func Jalankan[T any](
+	ctx context.Context,
+	b *Bulkhead,
+	timeout time.Duration,
+	task func(ctx context.Context) (T, error),
+) (T, error) {
+	var nol T
+	mulaiTunggu := time.Now()
 
 	// 1. Fase Acquire Resource (Mencoba masuk kompartemen)
-	select {
-	case b.pool <- struct{}{}:
-		// Berhasil masuk pool
-		defer func() {
-			// Lepaskan resource saat selesai
-			<-b.pool
-		}()
-	case <-timer.C:
-		// Pool penuh dan waktu tunggu habis. FAIL FAST.
-		// Menyelamatkan sistem utama dari request hang.
-		return nil, ErrBulkheadFull
-	case <-ctx.Done():
-		// Klien sudah membatalkan request sebelum kita masuk pool
-		return nil, fmt.Errorf("request cancelled while waiting for bulkhead: %w", ctx.Err())
+	err := b.ambilTiket(ctx, timeout)
+	b.tungguNano.Add(int64(time.Since(mulaiTunggu)))
+	if err != nil {
+		b.ditolak.Add(1)
+		return nol, err
 	}
+	b.diterima.Add(1)
+	b.aktif.Add(1)
 
-	// 2. Fase Eksekusi
-	// Perlu kita bungkus dengan goroutine jika task berpotensi blocking panjang
-	// Namun karena kita sudah mengontrol concurrency dengan semaphore, 
-	// mengeksekusi langsung di goroutine caller juga aman, ASALKAN task menghormati context cancellation.
-	
-	// Untuk keamanan maksimal dari task jahat, gunakan channel.
-	type result struct {
-		val interface{}
+	type hasil struct {
+		val T
 		err error
 	}
-	resChan := make(chan result, 1)
+	// Kapasitas 1 WAJIB. Dengan channel tanpa buffer, goroutine di bawah akan
+	// menggantung selamanya pada pengiriman bila Jalankan sudah keluar lewat
+	// ctx.Done() -- kebocoran goroutine di dalam pola yang tujuannya justru
+	// membatasi goroutine.
+	chHasil := make(chan hasil, 1)
 
 	go func() {
-		// Panic recovery penting agar semaphore tidak lock permanen
+		// URUTAN DEFER DI SINI MENENTUKAN KEBENARANNYA.
+		//
+		// Tiket dilepas DI DALAM goroutine ini, BUKAN lewat defer di Jalankan.
+		// Inilah perbedaan antara bulkhead yang bekerja dan bulkhead yang
+		// hanya terlihat bekerja:
+		//
+		//   Bila tiket dilepas saat Jalankan RETURN, maka jalur ctx.Done() di
+		//   bawah melepaskan tiket SEMENTARA task-nya MASIH BERJALAN. Slot
+		//   dinyatakan kosong, permintaan berikutnya masuk, task-nya juga
+		//   menggantung, dan seterusnya. Di bawah hilir yang macet plus klien
+		//   yang time out -- kombinasi yang PASTI terjadi bersamaan -- jumlah
+		//   goroutine tumbuh tanpa batas sementara metrik melaporkan kapasitas
+		//   tersedia. Itu persis OOM yang Anti-Pattern 1 ada untuk mencegahnya,
+		//   hanya dengan pembatas yang berbohong.
+		//
+		// Didaftarkan PERTAMA berarti dieksekusi TERAKHIR (LIFO), sehingga
+		// tiket baru lepas setelah recover selesai mengirim hasilnya.
+		defer func() {
+			<-b.pool
+			b.aktif.Add(-1)
+		}()
+
 		defer func() {
 			if r := recover(); r != nil {
-				resChan <- result{nil, fmt.Errorf("panic in task: %v", r)}
+				// Stack WAJIB dicatat di sini. Mengubah panic menjadi error
+				// tanpa mencatat stack-nya menghapus satu-satunya petunjuk
+				// letak bug-nya; yang sampai ke pemanggil hanya pesan panik
+				// tanpa satu pun nama fungsi.
+				slog.ErrorContext(ctx, "panic dalam task bulkhead",
+					"bulkhead", b.nama, "panic", r, "stack", string(debug.Stack()))
+				chHasil <- hasil{err: fmt.Errorf("panic dalam task: %v", r)}
 			}
 		}()
+
 		val, err := task(ctx)
-		resChan <- result{val, err}
+		chHasil <- hasil{val, err}
 	}()
 
 	select {
-	case res := <-resChan:
+	case res := <-chHasil:
 		return res.val, res.err
 	case <-ctx.Done():
-		return nil, fmt.Errorf("context cancelled during task execution: %w", ctx.Err())
+		// Jalankan kembali lebih awal agar klien tidak menunggu, TETAPI
+		// tiketnya tetap dipegang goroutine di atas sampai task benar-benar
+		// selesai. Slot yang tidak pernah kembali berarti task Anda tidak
+		// menghormati ctx -- dan itu memang harus terlihat sebagai kapasitas
+		// yang menyusut, bukan disembunyikan.
+		return nol, fmt.Errorf("context dibatalkan saat task berjalan: %w", ctx.Err())
+	}
+}
+
+func (b *Bulkhead) ambilTiket(ctx context.Context, timeout time.Duration) error {
+	// timeout <= 0 berarti fail-fast murni. Ini BUKAN kasus akademis:
+	// `time.NewTimer(0)` menyala seketika, dan `select` memilih ACAK di antara
+	// case yang sama-sama siap -- sehingga permintaan bisa ditolak meski slot
+	// tersedia. Jalur non-blocking dengan `default` menghilangkan keacakan itu.
+	if timeout <= 0 {
+		select {
+		case b.pool <- struct{}{}:
+			return nil
+		case <-ctx.Done():
+			return fmt.Errorf("permintaan dibatalkan sebelum masuk bulkhead: %w", ctx.Err())
+		default:
+			return ErrBulkheadFull
+		}
+	}
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	select {
+	case b.pool <- struct{}{}:
+		return nil
+	case <-timer.C:
+		// Pool penuh dan waktu tunggu habis. FAIL FAST.
+		return ErrBulkheadFull
+	case <-ctx.Done():
+		return fmt.Errorf("permintaan dibatalkan sebelum masuk bulkhead: %w", ctx.Err())
 	}
 }
 
@@ -134,20 +235,36 @@ type Application struct {
 func NewApp() *Application {
 	return &Application{
 		// Order diberi porsi 80% kapasitas karena ini krusial
-		orderBulkhead:  NewBulkhead(80),
+		orderBulkhead: NewBulkhead("order", 80),
 		// Report hanya diberi 20% agar tidak membunuh service
-		reportBulkhead: NewBulkhead(20),
+		reportBulkhead: NewBulkhead("report", 20),
 	}
 }
 
-func (a *Application) HandleReport(ctx context.Context) error {
-	_, err := a.reportBulkhead.Execute(ctx, 500*time.Millisecond, func(c context.Context) (interface{}, error) {
-		// Simulasi proses report yang berat dan lambat
-		log.Println("Generating heavy report...")
-		time.Sleep(10 * time.Second) 
-		return nil, nil
-	})
-	return err
+type Laporan struct{ Baris int }
+
+func (a *Application) HandleReport(ctx context.Context) (Laporan, error) {
+	// Hasilnya BERTIPE. Tidak ada type assertion, tidak ada interface{}.
+	return Jalankan(ctx, a.reportBulkhead, 500*time.Millisecond,
+		func(ctx context.Context) (Laporan, error) {
+			slog.InfoContext(ctx, "membangun laporan berat")
+
+			// `time.Sleep(10*time.Second)` -- bentuk yang paling sering ditulis
+			// di sini -- adalah TASK JAHAT yang dibahas berkas ini: ia tidak
+			// bisa dibangunkan oleh ctx, sehingga slot bulkhead-nya tertahan
+			// penuh 10 detik meski kliennya sudah pergi di detik pertama.
+			// Dengan kapasitas 20, dua puluh klien yang menyerah membekukan
+			// seluruh kompartemen laporan selama sepuluh detik.
+			//
+			// Bulkhead membatasi BERAPA BANYAK yang berjalan; hanya task yang
+			// menghormati ctx yang membatasi BERAPA LAMA. Keduanya diperlukan.
+			select {
+			case <-time.After(10 * time.Second):
+				return Laporan{Baris: 1_000_000}, nil
+			case <-ctx.Done():
+				return Laporan{}, ctx.Err()
+			}
+		})
 }
 ```
 
@@ -182,11 +299,53 @@ db.SetMaxOpenConns(100) // Global pool
 
 2. **Panics di Dalam Eksekusi yang Tidak Dilepas**:
    Jika fungsi `task()` mengalami `panic()` secara fatal dan developer tidak menggunakan `defer <-pool`, tiket dalam *channel Semaphore* tidak akan pernah dilepaskan. Kapasitas Bulkhead berkurang permanen (Goroutine Pool Leak).
-   *Penanganan*: *Production code* di atas telah menunjukkan cara yang benar. Pelepasan tiket **wajib** diletakkan di dalam statemen `defer` yang berada langsung di atas (setelah sukses memasukkan tiket), bukan di akhir eksekusi biasa.
+   *Penanganan*: Pelepasan tiket **wajib** berada di `defer`, dan — ini bagian yang jauh lebih sering salah — **di dalam goroutine yang menjalankan task, bukan di dalam fungsi yang menunggunya.**
+
+   Bedanya menentukan apakah bulkhead benar-benar membatasi sesuatu:
+
+   ```go
+   // ❌ SALAH -- terlihat benar, dan hijau di hampir semua uji
+   func Jalankan(...) {
+       b.pool <- struct{}{}
+       defer func() { <-b.pool }()   // lepas saat Jalankan RETURN
+       go func() { chHasil <- task(ctx) }()
+       select {
+       case res := <-chHasil: return res
+       case <-ctx.Done():    return ctx.Err()   // <-- tiket lepas, TASK MASIH JALAN
+       }
+   }
+
+   // ✅ BENAR -- tiket lepas saat KERJA-nya selesai, bukan saat penunggunya pergi
+   go func() {
+       defer func() { <-b.pool }()
+       ...
+       chHasil <- task(ctx)
+   }()
+   ```
+
+   Pada bentuk pertama, klien yang time out melepaskan slot sementara task-nya masih menahan koneksi DB dan memori. Permintaan berikutnya masuk, ikut menggantung, dan seterusnya — **jumlah goroutine tumbuh tanpa batas sementara metrik melaporkan kapasitas tersedia.** Itu persis kondisi OOM yang Anti-Pattern 1 ada untuk mencegahnya, hanya kali ini dengan pembatas yang berbohong. Dan cacat ini tidak terlihat oleh uji mana pun kecuali yang secara khusus mengukur konkurensi puncak saat pemanggil menyerah — lihat `TestBulkhead_TiketTidakLepasSaatPemanggilMenyerah`.
+
+   Konsekuensi yang harus diterima: task yang tidak menghormati `ctx` akan menahan slotnya selamanya, dan kapasitas menyusut permanen. Itu **benar** — sumber dayanya memang masih terpakai. Yang salah adalah menyembunyikannya.
 
 3. **Ketidakseimbangan Kapasitas Dinamis (Static Sizing)**:
-   Saat aplikasi berskala, limit statis `NewBulkhead(80)` mungkin sudah tidak relevan dan malah mencekik *traffic* normal yang meningkat organik.
+   Saat aplikasi berskala, limit statis `NewBulkhead("order", 80)` mungkin sudah tidak relevan dan malah mencekik *traffic* normal yang meningkat organik.
    *Penanganan*: Di perusahaan *Big Tech*, Bulkhead tidak di-set statis. Mereka menggunakan algoritma adaptif (mirip TCP Congestion Control) seperti **Netflix's Adaptive Concurrency Limits**, di mana kapasitas maksimum di-*adjust* (naik/turun) secara dinamis berdasarkan kalkulasi latensi rata-rata dari *server* downstream.
+
+   *Sebelum sampai ke sana, ada angka awal yang bisa diturunkan, bukan ditebak.* Bagian "Kapan JANGAN Pakai Ini" di bawah menyatakan ukuran partisi harus berasal dari kapasitas hilir dan target latensi — rumusnya adalah **Hukum Little**:
+
+   ```text
+   konkurensi = throughput × latensi
+
+   Contoh: hilir sanggup 200 permintaan/detik, latensi p99-nya 150 ms
+           konkurensi = 200 × 0,15 = 30 slot
+   ```
+
+   Tiga hal yang membuat angka ini benar dan sering dilewatkan:
+   - **Pakai latensi p99, bukan rata-rata.** Slot ditahan oleh permintaan yang lambat, bukan oleh yang khas. Memakai p50 menghasilkan partisi yang terlalu kecil dan menolak trafik normal.
+   - **Batasnya adalah kapasitas HILIR, bukan kapasitas Anda.** Memberi 200 slot pada database yang hanya punya 50 koneksi tidak menambah throughput — ia hanya memindahkan antrean ke tempat yang tidak punya metrik.
+   - **Jumlah seluruh partisi harus muat di anggaran nyata.** 80 + 20 slot yang semuanya menyentuh satu `sql.DB` ber-`MaxOpenConns(50)` berarti isolasinya berhenti di lapisan Go — persis Anti-Pattern 2.
+
+   Setelah angka awal itu terpasang, barulah metriknya (`Statistik()`) memberi tahu apakah ia perlu naik atau turun: `ditolak` yang tinggi sementara hilir santai berarti terlalu kecil; `ditolak` yang selalu nol berarti ia tidak melindungi apa pun.
 
 ## 5. Unit Tests (Behavioral Testing)
 
@@ -196,75 +355,207 @@ package resilience
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 )
 
-func TestBulkhead_RejectsWhenFull(t *testing.T) {
-	// Kapasitas maksimal hanya 2
-	bulkhead := NewBulkhead(2)
+func TestBulkhead_MenolakSaatPenuh(t *testing.T) {
+	b := NewBulkhead("uji", 2)
 	ctx := context.Background()
 
-	// Fungsi yang memblokir secara sengaja
-	block := make(chan struct{})
-	task := func(ctx context.Context) (interface{}, error) {
-		<-block // Tunggu instruksi buka
-		return "done", nil
+	masuk := make(chan struct{}, 2) // sinyal: task sudah benar-benar berjalan
+	lepas := make(chan struct{})
+	task := func(context.Context) (string, error) {
+		masuk <- struct{}{}
+		<-lepas
+		return "selesai", nil
 	}
 
-	// 1. Eksekusi 2 task (akan mengambil semua kapasitas)
-	go bulkhead.Execute(ctx, 1*time.Second, task)
-	go bulkhead.Execute(ctx, 1*time.Second, task)
-
-	// Beri waktu goroutine agar masuk ke dalam semaphore
-	time.Sleep(50 * time.Millisecond)
-
-	// 2. Eksekusi task ke-3, harusnya gagal
-	// Timeout disetel ke 50ms agar cepat putus asa.
-	_, err := bulkhead.Execute(ctx, 50*time.Millisecond, task)
-
-	if !errors.Is(err, ErrBulkheadFull) {
-		t.Fatalf("Expected ErrBulkheadFull, got %v", err)
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := Jalankan(ctx, b, time.Second, task); err != nil {
+				t.Errorf("task pengisi gagal: %v", err)
+			}
+		}()
 	}
 
-	// Lepaskan kunci
-	close(block)
-}
-
-func TestBulkhead_ContextCancellationPropagation(t *testing.T) {
-	bulkhead := NewBulkhead(5)
-	
-	ctx, cancel := context.WithCancel(context.Background())
-	
-	var executed atomic.Bool
-	
-	task := func(c context.Context) (interface{}, error) {
-		executed.Store(true)
-		// Simulasi long running task
+	// Sinkronisasi lewat channel, BUKAN time.Sleep(50ms). Tidur adalah
+	// taruhan dua arah: gagal acak di mesin sibuk (CI), dan membuang waktu di
+	// mesin cepat. Di sini ia juga bisa membuat uji lolos karena alasan yang
+	// salah -- bila kedua task belum sempat masuk, penolakan berikutnya
+	// terjadi bukan karena bulkhead penuh.
+	for i := 0; i < 2; i++ {
 		select {
-		case <-c.Done():
-			return nil, errors.New("internal aborted")
-		case <-time.After(5 * time.Second):
-			return "done", nil
+		case <-masuk:
+		case <-time.After(2 * time.Second):
+			t.Fatal("task pengisi tidak pernah mulai berjalan")
 		}
 	}
 
-	// Cancel context segera
+	_, err := Jalankan(ctx, b, 50*time.Millisecond, task)
+	if !errors.Is(err, ErrBulkheadFull) {
+		t.Fatalf("mengharapkan ErrBulkheadFull, dapat %v", err)
+	}
+
+	// Fail-fast murni (timeout 0) juga harus menolak, tanpa menunggu.
+	mulai := time.Now()
+	if _, err := Jalankan(ctx, b, 0, task); !errors.Is(err, ErrBulkheadFull) {
+		t.Errorf("timeout 0 harus fail-fast dengan ErrBulkheadFull, dapat %v", err)
+	}
+	if d := time.Since(mulai); d > 20*time.Millisecond {
+		t.Errorf("fail-fast menunggu %v; seharusnya nyaris seketika", d)
+	}
+
+	close(lepas)
+	wg.Wait() // uji tidak boleh selesai sementara goroutine-nya masih berjalan
+}
+
+// INI UJI YANG PALING PENTING DI BERKAS INI.
+//
+// Ia memeriksa bahwa tiket TIDAK dilepas ketika pemanggil menyerah sementara
+// task-nya masih berjalan. Tanpa ini, cacatnya tidak terlihat: setiap uji lain
+// tetap hijau sementara bulkhead diam-diam kehilangan kemampuan membatasi
+// apa pun -- persis di bawah beban yang menjadi alasan ia dipasang.
+func TestBulkhead_TiketTidakLepasSaatPemanggilMenyerah(t *testing.T) {
+	const kapasitas = 3
+	b := NewBulkhead("uji", kapasitas)
+
+	var berjalan atomic.Int64
+	var puncak atomic.Int64
+	tahan := make(chan struct{})
+
+	// Task yang SENGAJA mengabaikan ctx -- mensimulasikan hilir yang macet
+	// atau pustaka pihak ketiga tanpa dukungan context.
+	task := func(context.Context) (int, error) {
+		n := berjalan.Add(1)
+		for {
+			p := puncak.Load()
+			if n <= p || puncak.CompareAndSwap(p, n) {
+				break
+			}
+		}
+		defer berjalan.Add(-1)
+		<-tahan
+		return 1, nil
+	}
+
+	var wg sync.WaitGroup
+	// Jauh lebih banyak pemanggil daripada kapasitas. Setiap pemanggil
+	// menyerah cepat, tetapi task-nya tetap berjalan.
+	for i := 0; i < 30; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ctx, batal := context.WithTimeout(context.Background(), 30*time.Millisecond)
+			defer batal()
+			_, _ = Jalankan(ctx, b, 50*time.Millisecond, task)
+		}()
+	}
+	wg.Wait()
+
+	// Beri kesempatan task yang tertinggal untuk terdaftar.
+	time.Sleep(50 * time.Millisecond)
+
+	if p := puncak.Load(); p > kapasitas {
+		t.Fatalf("task berjalan serentak mencapai %d, melebihi kapasitas %d; "+
+			"tiket dilepas saat pemanggil keluar padahal task masih berjalan", p, kapasitas)
+	}
+
+	close(tahan)
+}
+
+func TestBulkhead_PembatalanContextDiteruskan(t *testing.T) {
+	b := NewBulkhead("uji", 5)
+	ctx, batal := context.WithCancel(context.Background())
+
+	mulai := make(chan struct{})
+	task := func(c context.Context) (string, error) {
+		close(mulai)
+		select {
+		case <-c.Done():
+			return "", c.Err()
+		case <-time.After(5 * time.Second):
+			return "selesai", nil
+		}
+	}
+
 	go func() {
-		time.Sleep(100 * time.Millisecond)
-		cancel()
+		<-mulai
+		batal()
 	}()
 
-	_, err := bulkhead.Execute(ctx, 10*time.Second, task)
+	_, err := Jalankan(ctx, b, 10*time.Second, task)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("mengharapkan context.Canceled di rantai galat, dapat %v", err)
+	}
+}
 
+// Panic dalam task tidak boleh mengurangi kapasitas secara permanen.
+func TestBulkhead_PanicMelepasTiket(t *testing.T) {
+	b := NewBulkhead("uji", 1)
+	ctx := context.Background()
+
+	_, err := Jalankan(ctx, b, time.Second, func(context.Context) (int, error) {
+		panic("task meledak")
+	})
 	if err == nil {
-		t.Fatal("Expected error from context cancellation")
+		t.Fatal("panic harus dikembalikan sebagai galat")
 	}
 
-	if !executed.Load() {
-		t.Fatal("Task should have started execution")
+	// Bila tiket tidak dilepas, panggilan berikutnya menggantung sampai
+	// timeout dan mengembalikan ErrBulkheadFull.
+	if _, err := Jalankan(ctx, b, 200*time.Millisecond, func(context.Context) (int, error) {
+		return 7, nil
+	}); err != nil {
+		t.Fatalf("kapasitas tidak pulih setelah panic: %v", err)
 	}
+}
+
+// Metrik yang diperintahkan bagian deteksi harus benar-benar bergerak.
+func TestBulkhead_MetrikTercatat(t *testing.T) {
+	b := NewBulkhead("uji", 1)
+	ctx := context.Background()
+
+	if _, err := Jalankan(ctx, b, time.Second, func(context.Context) (int, error) {
+		return 1, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	tahan := make(chan struct{})
+	siap := make(chan struct{})
+	go func() {
+		_, _ = Jalankan(ctx, b, time.Second, func(context.Context) (int, error) {
+			close(siap)
+			<-tahan
+			return 1, nil
+		})
+	}()
+	<-siap
+
+	if _, err := Jalankan(ctx, b, 0, func(context.Context) (int, error) {
+		return 1, nil
+	}); !errors.Is(err, ErrBulkheadFull) {
+		t.Fatalf("mengharapkan penolakan, dapat %v", err)
+	}
+
+	aktif, diterima, ditolak, _ := b.Statistik()
+	if aktif != 1 {
+		t.Errorf("aktif = %d, mau 1", aktif)
+	}
+	if diterima != 2 {
+		t.Errorf("diterima = %d, mau 2", diterima)
+	}
+	if ditolak != 1 {
+		t.Errorf("ditolak = %d, mau 1", ditolak)
+	}
+
+	close(tahan)
 }
 ```
 
@@ -285,9 +576,17 @@ func TestBulkhead_ContextCancellationPropagation(t *testing.T) {
 | Slot penuh tapi tidak ada kemajuan | durasi pemakaian slot | Tidak ada timeout; slot tertahan selamanya |
 | Waktu tunggu slot mendominasi latensi | rasio tunggu vs kerja | Kapasitas hilir yang jadi batas, bukan bulkhead |
 | Bulkhead tidak pernah penuh | ukuran vs trafik nyata | Partisi terlalu longgar; tidak melindungi apa pun |
+| Goroutine tumbuh terus padahal slot "tersedia" | konkurensi puncak vs kapasitas | Tiket dilepas saat pemanggil menyerah, bukan saat task selesai (Edge Case 2) |
 
 ```bash
-curl -s localhost:9090/metrics | grep -E 'bulkhead_(active|rejected_total|wait_seconds)'
+# Metrik ini berasal dari Bulkhead.Statistik(). Ekspor ketiganya, bukan hanya
+# yang aktif: gauge saja tidak bisa membedakan "tidak ada beban" dari
+# "semua ditolak".
+curl -s localhost:9090/metrics | grep -E 'bulkhead_(active|accepted_total|rejected_total|wait_seconds)'
+
+# Konkurensi nyata vs kapasitas yang dideklarasikan. Angka pertama yang
+# melebihi angka kedua membuktikan pembatasnya bocor.
+curl -s 'localhost:6060/debug/pprof/goroutine?debug=1' | grep -c 'resilience.Jalankan'
 
 # Aktifkan dulu: runtime.SetBlockProfileRate(1)
 go tool pprof -top http://localhost:6060/debug/pprof/block
