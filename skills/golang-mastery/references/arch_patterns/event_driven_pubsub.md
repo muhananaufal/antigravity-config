@@ -50,9 +50,11 @@ package eventpubsub
 
 import (
 	"context"
-	"errors"
+	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -73,11 +75,30 @@ func NewPublisher(p message.Publisher) *Publisher {
 	return &Publisher{pub: p}
 }
 
-// PublishUserRegistered mengirim event bahwa user berhasil mendaftar
+// UserRegistered adalah skema event yang dipublikasikan.
+type UserRegistered struct {
+	UserID string `json:"user_id"`
+	Email  string `json:"email"`
+}
+
+// PublishUserRegistered mengirim event bahwa user berhasil mendaftar.
 func (p *Publisher) PublishUserRegistered(ctx context.Context, userID, email string) error {
-	// Buat payload mentah (di production gunakan JSON/Protobuf serializer)
-	payload := []byte(fmt.Sprintf(`{"user_id":"%s", "email":"%s"}`, userID, email))
-	
+	// json.Marshal, BUKAN fmt.Sprintf ke template JSON.
+	//
+	// Versi sebelumnya menyusun payload dengan
+	//   fmt.Sprintf(`{"user_id":"%s","email":"%s"}`, userID, email)
+	// disertai komentar "di production gunakan serializer" — lalu tetap
+	// dikirim begitu. Ini injeksi JSON, setara injeksi SQL: satu email
+	// berisi tanda kutip sudah merusak payload, dan email berbentuk
+	//   a","role":"admin","x":"
+	// MENYISIPKAN FIELD yang tidak pernah diterbitkan publisher. Consumer
+	// hilir mem-parse-nya sebagai data yang sah, dan tidak ada satu pun
+	// lapisan di antaranya yang bisa mendeteksi bahwa itu bukan dari Anda.
+	payload, err := json.Marshal(UserRegistered{UserID: userID, Email: email})
+	if err != nil {
+		return fmt.Errorf("serialisasi event: %w", err)
+	}
+
 	// watermill.NewUUID menjamin traceability
 	msg := message.NewMessage(watermill.NewUUID(), payload)
 	msg.SetContext(ctx) // Sebarkan context untuk tracing/cancellation
@@ -97,29 +118,60 @@ func (p *Publisher) PublishUserRegistered(ctx context.Context, userID, email str
 // 2. EVENT CONSUMER (ROUTER)
 // =====================================
 
+// SudahDiproses mencatat event mana yang sudah pernah dikerjakan.
+// Di produksi: tabel dengan UNIQUE constraint pada message ID, atau Redis
+// SETNX ber-TTL. Lihat `distributed_patterns_resilience/idempotency_key_engine.md`.
+type SudahDiproses interface {
+	// Tandai mengembalikan false bila id SUDAH pernah ditandai sebelumnya.
+	Tandai(ctx context.Context, id string) (baru bool, err error)
+}
+
 // UserRegistrationHandler adalah instance handler untuk consumer.
 type UserRegistrationHandler struct {
 	emailSender func(email string) error
+	dedup       SudahDiproses
 }
 
 // Handle memproses satu buah pesan secara aman.
+//
+// IDEMPOTENSI ADALAH SYARAT, BUKAN PENYEMPURNAAN — dan bagian ini hilang
+// sepenuhnya dari versi sebelumnya.
+//
+// Anti-Pattern 1 di bawah mengajarkan Transactional Outbox karena
+// pengiriman bersifat AT-LEAST-ONCE: outbox worker yang crash setelah
+// mengirim tetapi sebelum menandai terkirim akan mengirim ulang, dan setiap
+// Nack di sini memicu redelivery. Handler yang mengirim email tanpa dedup
+// karena itu mengirimkan email SETIAP kali pesan datang. Berkas yang
+// mengajarkan at-least-once pada sisi publikasi tidak boleh menampilkan
+// consumer yang menganggap dirinya menerima exactly-once.
 func (h *UserRegistrationHandler) Handle(msg *message.Message) error {
-	eventType := msg.Metadata.Get("event_type")
-	if eventType != "UserRegistered" {
+	if msg.Metadata.Get("event_type") != "UserRegistered" {
 		return nil // Abaikan event yang tak relevan di topik ini
 	}
 
-	// Simulasi parsing sederhana
-	payload := string(msg.Payload) // {"user_id":"X", "email":"Y"}
-	fmt.Printf("[Consumer] Processing Event %s: Payload: %s\n", msg.UUID, payload)
-
-	// Proses bisnis
-	if err := h.emailSender("mock@mock.com"); err != nil {
-		// Mengembalikan error akan memicu mekanisme RETRY/Nack oleh Watermill
-		return fmt.Errorf("email sending failed: %w", err)
+	var ev UserRegistered
+	if err := json.Unmarshal(msg.Payload, &ev); err != nil {
+		// Payload rusak TIDAK akan membaik dengan diulang. Di-Ack agar tidak
+		// menyumbat antrean, tetapi dicatat keras — inilah yang seharusnya
+		// masuk dead-letter queue di sistem sungguhan.
+		slog.Error("payload event tidak dapat diurai, dibuang",
+			"pesan_id", msg.UUID, "galat", err)
+		return nil
 	}
 
-	// Mengembalikan nil artinya message sukses dan akan di-Ack secara otomatis
+	baru, err := h.dedup.Tandai(msg.Context(), msg.UUID)
+	if err != nil {
+		return fmt.Errorf("periksa idempotensi: %w", err) // layak diulang
+	}
+	if !baru {
+		slog.Info("event sudah pernah diproses, dilewati", "pesan_id", msg.UUID)
+		return nil
+	}
+
+	if err := h.emailSender(ev.Email); err != nil {
+		// Mengembalikan error memicu Nack/RETRY oleh Watermill.
+		return fmt.Errorf("kirim email ke %s: %w", ev.Email, err)
+	}
 	return nil
 }
 
@@ -144,11 +196,17 @@ func TestEventDrivenPubSub_FullCycle(t *testing.T) {
 		t.Fatalf("Failed to create router: %v", err)
 	}
 
-	// Flag untuk verifikasi test
-	processed := false
+	// Channel, BUKAN flag bool.
+	//
+	// `processed := false` yang ditulis handler (goroutine router) lalu
+	// dibaca fungsi uji adalah DATA RACE — `go test -race` menandainya, di
+	// berkas yang seluruh isinya tentang pemrosesan asinkron. Channel
+	// sekaligus menghapus kebutuhan akan time.Sleep di bawah.
+	diproses := make(chan string, 1)
 	handler := &UserRegistrationHandler{
+		dedup: &dedupMemori{}, // pointer: Tandai punya receiver pointer
 		emailSender: func(email string) error {
-			processed = true
+			diproses <- email
 			return nil
 		},
 	}
@@ -164,7 +222,7 @@ func TestEventDrivenPubSub_FullCycle(t *testing.T) {
 	// Jalankan Router di background
 	go func() {
 		if err := router.Run(context.Background()); err != nil {
-			log.Println("Router closed")
+			slog.Info("router berhenti", "galat", err)
 		}
 	}()
 
@@ -178,14 +236,59 @@ func TestEventDrivenPubSub_FullCycle(t *testing.T) {
 		t.Fatalf("Failed to publish: %v", err)
 	}
 
-	// Beri jeda sangat kecil agar Go channel scheduler mengirim sinyal
-	time.Sleep(50 * time.Millisecond)
-
-	if !processed {
-		t.Errorf("Expected event to be processed by consumer")
+	// Menunggu SINYAL, bukan menunggu WAKTU.
+	//
+	// `time.Sleep(50ms)` adalah taruhan dua arah: di mesin sibuk ia tidak
+	// cukup dan uji gagal acak, di mesin cepat ia membuang 50ms pada setiap
+	// eksekusi. Batas waktu di bawah hanya jaring pengaman untuk kegagalan
+	// sungguhan — bukan mekanisme sinkronisasinya.
+	select {
+	case email := <-diproses:
+		if email != "alice@example.com" {
+			t.Errorf("email tujuan = %q, mau alice@example.com", email)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("event tidak pernah diproses consumer")
 	}
 
-	router.Close()
+	if err := router.Close(); err != nil {
+		t.Errorf("tutup router: %v", err)
+	}
+}
+
+// dedupMemori adalah SudahDiproses untuk uji.
+type dedupMemori struct{ terlihat sync.Map }
+
+func (d *dedupMemori) Tandai(_ context.Context, id string) (bool, error) {
+	_, sudahAda := d.terlihat.LoadOrStore(id, struct{}{})
+	return !sudahAda, nil
+}
+
+// Redelivery WAJIB tidak menghasilkan email kedua. Tanpa uji ini, cacat
+// idempotensi baru terlihat sebagai keluhan pengguna menerima email ganda.
+func TestHandler_RedeliveryTidakMengirimUlang(t *testing.T) {
+	var jumlah atomic.Int32
+	h := &UserRegistrationHandler{
+		dedup:       &dedupMemori{},
+		emailSender: func(string) error { jumlah.Add(1); return nil },
+	}
+
+	muatan, err := json.Marshal(UserRegistered{UserID: "usr-1", Email: "a@b.co"})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	msg := message.NewMessage("id-tetap", muatan)
+	msg.Metadata.Set("event_type", "UserRegistered")
+	msg.SetContext(context.Background())
+
+	for i := 0; i < 3; i++ { // broker mengirim ulang pesan yang sama
+		if err := h.Handle(msg); err != nil {
+			t.Fatalf("Handle ke-%d: %v", i, err)
+		}
+	}
+	if got := jumlah.Load(); got != 1 {
+		t.Fatalf("email terkirim %d kali untuk satu event, mau 1", got)
+	}
 }
 ```
 
@@ -267,7 +370,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"time"
+	"log/slog"
 
 	"github.com/ThreeDotsLabs/watermill"
 	"github.com/ThreeDotsLabs/watermill-sql/v2/pkg/sql_pubsub"
@@ -283,8 +386,16 @@ func RegisterUser(ctx context.Context, tx *sql.Tx, userID string, email string) 
 	}
 
 	// B. Tulis Event ke Outbox dalam Transaksi yang Sama
-	payload, _ := json.Marshal(map[string]string{"email": email})
-	
+	//
+	// Galat marshal TIDAK boleh dibuang dengan `_`: payload nil tetap
+	// tersimpan dan tetap dipublikasikan sebagai event yang tampak sah,
+	// dengan isi kosong. Consumer hilir memprosesnya tanpa tahu ada yang
+	// hilang — dan transaksi bisnisnya sudah terlanjur commit.
+	payload, err := json.Marshal(map[string]string{"email": email})
+	if err != nil {
+		return fmt.Errorf("serialisasi payload outbox: %w", err)
+	}
+
 	outboxQuery := `
 		INSERT INTO outbox_events (id, aggregate_id, event_type, payload) 
 		VALUES ($1, $2, $3, $4)
@@ -296,8 +407,14 @@ func RegisterUser(ctx context.Context, tx *sql.Tx, userID string, email string) 
 }
 
 // 2. Polling Publisher (Watermill SQL Publisher worker)
-// Fungsi ini berjalan sebagai daemon/background worker terpisah.
-func StartOutboxForwarder(db *sql.DB, brokerPublisher message.Publisher) error {
+//
+// ctx WAJIB masuk sebagai parameter. Versi sebelumnya memanggil
+// `subscriber.Subscribe(context.Background(), ...)` dengan tanda tangan
+// tanpa ctx sama sekali — daemon yang tidak punya cara dihentikan. Ia
+// menahan shutdown sampai SIGKILL, dan seluruh urutan drain di
+// `observability_resilience/graceful_shutdown_drain.md` jadi tidak berlaku
+// untuk proses ini.
+func StartOutboxForwarder(ctx context.Context, db *sql.DB, brokerPublisher message.Publisher) error {
 	logger := watermill.NewStdLogger(false, false)
 
 	// Inisialisasi Subscriber berbasis SQL
@@ -316,25 +433,36 @@ func StartOutboxForwarder(db *sql.DB, brokerPublisher message.Publisher) error {
 	defer subscriber.Close()
 
 	// Menarik pesan dari tabel outbox_events untuk dipublish
-	messages, err := subscriber.Subscribe(context.Background(), "outbox_events")
+	messages, err := subscriber.Subscribe(ctx, "outbox_events")
 	if err != nil {
 		return err
 	}
 
-	fmt.Println("[Outbox Relay] Worker started...")
+	slog.InfoContext(ctx, "outbox relay dimulai")
 
 	// Loop pengiriman (Relay) pesan
 	for msg := range messages {
-		// Teruskan pesan ke Message Broker sesungguhnya (Kafka/RabbitMQ)
 		if err := brokerPublisher.Publish("user_events", msg); err != nil {
-			fmt.Printf("Failed to relay message %s: %v\n", msg.UUID, err)
-			msg.Nack() // Tolak, kembalikan antrian untuk dicoba ulang
+			// slog, bukan fmt.Printf: kegagalan relay adalah hal yang
+			// dipasangi alert. Yang tercetak ke stdout tanpa level tidak
+			// akan pernah memicu apa pun.
+			slog.ErrorContext(ctx, "gagal merelai pesan outbox",
+				"pesan_id", msg.UUID, "galat", err)
+			msg.Nack() // kembalikan ke antrean untuk dicoba ulang
 			continue
 		}
-		
-		// Jika sukses ke Broker, Ack akan memodifikasi DB Outbox (published_at)
+
+		// Jika sukses ke Broker, Ack memperbarui published_at di tabel outbox.
+		//
+		// PERHATIKAN CELAHNYA, dan sadari itu memang tidak bisa ditutup:
+		// bila proses mati DI ANTARA Publish dan Ack, pesan yang sama
+		// direlai lagi setelah restart. Outbox menjamin AT-LEAST-ONCE, bukan
+		// exactly-once — dan justru karena itu consumer WAJIB idempoten
+		// (lihat UserRegistrationHandler di atas). Outbox tanpa consumer
+		// idempoten hanya memindahkan kehilangan data menjadi penggandaan
+		// data.
 		msg.Ack()
-		fmt.Printf("Message %s relayed to Broker\n", msg.UUID)
+		slog.DebugContext(ctx, "pesan direlai ke broker", "pesan_id", msg.UUID)
 	}
 
 	return nil
