@@ -49,38 +49,65 @@ func httpClientVulnerable() *http.Client {
 ```
 
 ```go
-// ✅ GOOD: Tambahkan sertifikat Root CA internal agar Go bisa memvalidasinya dengan benar
-func httpClientSafe(rootCA []byte) *http.Client {
+// ✅ GOOD: muat Root CA internal, dan sajikan identitas sendiri — ini mTLS,
+// bukan TLS satu arah.
+func httpClientSafe(rootCA []byte, sertifikatKlien tls.Certificate) (*http.Client, error) {
 	pool := x509.NewCertPool()
-	pool.AppendCertsFromPEM(rootCA) // Load Root CA
+	// Nilai kembalian WAJIB diperiksa. Bila PEM rusak, pool tetap ada tetapi
+	// KOSONG — dan setiap koneksi gagal dengan "certificate signed by unknown
+	// authority", galat yang menuduh peer padahal berkas CA Anda yang cacat.
+	if !pool.AppendCertsFromPEM(rootCA) {
+		return nil, errors.New("root CA tidak dapat dimuat")
+	}
 	return &http.Client{
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{
-				RootCAs: pool,      // Validasi ketat peer server
+				RootCAs:      pool,
+				Certificates: []tls.Certificate{sertifikatKlien}, // identitas KITA
+				MinVersion:   tls.VersionTLS13,                   // lihat Kasus Tepi 2
 			},
 		},
-	}
+	}, nil
 }
 ```
+
+Perhatikan dua hal yang hilang dari bentuk yang biasa ditulis: contoh "aman" tanpa `Certificates` hanya melakukan TLS satu arah — server tetap tidak tahu siapa peneleponnya — dan tanpa `MinVersion` eksplisit, aturan yang ditulis sendiri di Kasus Tepi 2 tidak diterapkan pada contoh yang seharusnya menjadi teladan.
 
 ### ❌ Anti-Pattern 2: Lock Contention Saat Rotasi
 
-**Mengapa berbahaya (Exploit Vector)**: Membaca cert file `.pem` dari sistem operasi (I/O) setiap kali *handshake* baru terjadi (ribuan TLS handshake per detik) akan menyebabkan Server hang. Atau, jika menggunakan standard `sync.Mutex` yang mengunci terlalu lama saat IO write pembaharuan, aplikasi mengalami kebuntuan (*Deadlock* atau ekstrim *latency spike*). Solusinya adalah pola asinkron via `atomic.Pointer`.
+**Mengapa berbahaya:** membaca berkas `.pem` dari disk **di dalam callback handshake** — pada ribuan handshake per detik — memasukkan I/O sinkron ke jalur terpanas yang ada. Itulah masalah sesungguhnya.
+
+Perlu diluruskan: potongan "buruk" yang biasa ditampilkan untuk anti-pattern ini sebenarnya **tidak** menghasilkan masalah yang dijelaskan.
 
 ```go
-// VULNERABLE: Menggunakan Mutex yang memblokir semua I/O dan Handshake
-type BadCertManager struct {
-	mu   sync.RWMutex
-	cert *tls.Certificate
-}
-
-// ❌ BAD: Lock memblokir semua request selama IO/Update terjadi
+// Sering dilabeli BAD — padahal ini baik-baik saja.
 func (m *BadCertManager) UpdateCert(newCert *tls.Certificate) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.cert = newCert
+	m.cert = newCert // penugasan pointer: nanodetik, bukan I/O
 }
 ```
+
+Tidak ada I/O di dalam kunci itu, dan **tidak ada kemungkinan deadlock sama sekali** — hanya satu kunci, tanpa nested lock, tanpa pemanggilan balik. Menyebutnya penyebab "deadlock atau lonjakan latensi ekstrem" salah menunjuk sasaran, dan orang yang percaya diagnosis itu akan mencari kunci di tempat yang salah saat benar-benar ada masalah.
+
+```go
+// BAD YANG SESUNGGUHNYA: I/O di dalam callback handshake
+func (m *BadCertManager) GetCertificate(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+	c, err := tls.LoadX509KeyPair("/etc/tls/tls.crt", "/etc/tls/tls.key") // dua syscall PER HANDSHAKE
+	return &c, err
+}
+```
+
+```go
+// ✅ GOOD: muat di latar belakang, baca di handshake sebagai satu load atomik
+type SafeCertManager struct {
+	cert atomic.Pointer[tls.Certificate]
+}
+
+func (m *SafeCertManager) UpdateCert(newCert tls.Certificate) { m.cert.Store(&newCert) }
+```
+
+Alasan `atomic.Pointer` tetap lebih baik dari `RWMutex` di sini bukan soal deadlock, melainkan hal yang lebih sederhana: setiap handshake harus membaca pointer itu, dan pembacaan atomik tidak menyentuh baris cache yang sama dengan penulis maupun pembaca lain. Pada laju handshake tinggi dan banyak inti, `RLock` yang murah pun mulai terasa.
 
 ```go
 // ✅ GOOD: Menggunakan atomic.Pointer yang non-blocking (lock-free)
@@ -95,9 +122,15 @@ func (m *SafeCertManager) UpdateCert(newCert tls.Certificate) {
 
 ## 4. Edge Cases & Defensive Programming Khusus Go
 
-1. **CA Rotation dan "Chain of Trust" terputus**: Ketika perusahaan memutuskan mengganti *Root CA*, sertifikat lama dan baru bersilangan. Server harus bisa mem-parse *RootCA Bundle* (lebih dari 1 sertifikat CA `.pem` bertumpuk dalam satu file) agar mempercayai client lama dan client baru di waktu bersamaan masa transisi. Go mendukung ini dengan `.AppendCertsFromPEM()` berulang.
+1. **CA Rotation — dan alasan `tls.Config` statis membuatnya mustahil**: saat Root CA diganti, CA lama dan baru harus dipercaya bersamaan selama masa transisi. Go mendukungnya lewat bundel PEM bertumpuk yang dibaca `AppendCertsFromPEM`. **Tetapi itu hanya setengah cerita.** `ClientCAs` pada sebuah `tls.Config` yang dirakit sekali saat start membeku selamanya: bundel di disk boleh berubah sesering apa pun, server tidak akan pernah melihatnya sampai proses di-restart — dan restart demi rotasi CA adalah persis yang ingin dihindari seluruh berkas ini. Yang membuatnya bekerja adalah `GetConfigForClient`, yang membangun ulang konfigurasi per koneksi masuk dari bundel terkini (lihat `KonfigServer` di §5). Di sisi klien, `RootCAs` punya masalah kembar dan jawabannya `DialTLSContext`.
 2. **Kelemahan Cipher Suite Lama**: Mencegah *Downgrade Attack* dari TLS 1.3 ke versi yang lemah/usang (TLS 1.0 yang rawan BEAST attack). Di Go, secara eksplisit atur `MinVersion: tls.VersionTLS13` (atau TLS 1.2 minimum dengan CurvePreferences ketat).
-3. **Nilai Awal / Race Condition Load-Up**: Saat server Go pertama dinyalakan (boot), watcher rotasi background mungkin kalah cepat dengan request masuk HTTP pertama, menyebabkan pointer nil panic. Harus selalu lakukan sinkron pemuatan Sertifikat pertama kali sebelum `http.ListenAndServeTLS` atau pasang kontrol error (*fail-close* di callback).
+3. **Nilai Awal / Race Condition Load-Up**: saat proses baru menyala, watcher rotasi bisa kalah cepat dengan permintaan pertama, dan pointer yang masih nil menghasilkan panic. Muat sertifikat pertama **secara sinkron sebelum** server mulai mendengar, dan tetap pasang cabang fail-close di callback sebagai jaring pengaman.
+
+4. **Pemuatan ulang yang tidak divalidasi lebih berbahaya daripada tidak memuat ulang.** cert-manager menulis berkas; pembaca yang kebetulan bangun di tengah penulisan mendapat PEM terpotong. Bila bundel rusak itu langsung dipasang, **setiap** handshake berikutnya gagal — pemadaman total yang ditimbulkan oleh mekanisme rotasi itu sendiri, pada layanan yang sertifikat lamanya masih sepenuhnya sah. Aturannya: parse dan validasi dulu, pasang hanya bila berhasil, dan **pertahankan bundel lama** bila gagal.
+
+5. **inotify sering tidak menyala di Kubernetes.** Secret dipasang lewat direktori bersimbol (`..data`) yang **ditukar** saat pembaruan; berkas yang Anda pantau tidak pernah benar-benar ditulisi, sehingga watcher pada path berkas bisa diam selamanya sementara isinya sudah berganti. Polling berkala dengan pembandingan sidik isi terlihat kurang elegan, tetapi ia bekerja di semua cara pemasangan — dan sertifikat yang tidak pernah dimuat ulang adalah kegagalan yang baru ketahuan saat kedaluwarsa.
+
+6. **Sisa masa berlaku harus jadi metrik, bukan kejutan.** Tanpa mengekspos `NotAfter` dari sertifikat yang **sedang benar-benar disajikan**, tidak ada cara membedakan "rotasi berjalan" dari "rotasi berhenti tiga minggu lalu" — keduanya terlihat identik sampai hari kedaluwarsa. Pasang alert pada sisa masa berlaku, bukan pada kegagalan handshake; yang kedua datang terlambat.
 
 ## 5. Production-Ready Go Code
 
@@ -107,123 +140,394 @@ Implementasi arsitektur Manajemen Sertifikat *Thread-Safe* tanpa *Restart/Downti
 package security
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"log/slog"
+	"net"
+	"net/http"
+	"os"
 	"sync/atomic"
-	"testing"
+	"time"
 )
 
 var (
-	ErrCertNotLoaded    = errors.New("certificate is missing or not initialized yet")
-	ErrInvalidRootCA    = errors.New("failed to append root CA, invalid format")
+	ErrBundelBelumDimuat = errors.New("bundel sertifikat belum dimuat")
+	ErrRootCATidakValid  = errors.New("gagal mem-parse root CA")
+	ErrSertifikatExpired = errors.New("sertifikat sudah kedaluwarsa")
 )
 
-// DynamicCertManager memegang sertifikat mTLS secara memory-safe
-// Memanfaatkan go 1.19+ atomic.Pointer untuk zero-downtime hot swapping.
-type DynamicCertManager struct {
-	certPointer atomic.Pointer[tls.Certificate]
+// Bundel adalah SATU kesatuan yang dirotasi bersama: sertifikat identitas
+// beserta kumpulan CA yang dipercaya.
+//
+// Keduanya harus berada di dalam satu pointer atomik, dan inilah yang tidak
+// ada di versi sebelumnya. Merotasi sertifikat saja tidak cukup: ketika CA
+// internal diganti, `ClientCAs` pada `tls.Config` yang dirakit sekali saat
+// start TIDAK AKAN PERNAH berubah, dan klien yang sudah memakai CA baru
+// ditolak sampai pod di-restart. Itu persis baris "Klien lama gagal setelah
+// CA berganti" pada tabel deteksi berkas ini sendiri.
+type Bundel struct {
+	Sertifikat *tls.Certificate
+	CAPool     *x509.CertPool
+	NotAfter   time.Time
+	sidik      [32]byte // sidik isi berkas, untuk mendeteksi perubahan
 }
 
-// NewDynamicCertManager menginisialisasi rotasi sertifikat dengan state awal.
-// Di dunia nyata: nilai ini diinisialisasi secara sinkron dengan membacanya dari disk.
-func NewDynamicCertManager(initialCert tls.Certificate) *DynamicCertManager {
-	manager := &DynamicCertManager{}
-	manager.certPointer.Store(&initialCert)
-	return manager
-}
-
-// UpdateCert dipanggil oleh goroutine terpisah (Watch/CronJob) yang
-// membaca pembaruan file di K8S pod storage tanpa memblokir thread HTTP.
-func (m *DynamicCertManager) UpdateCert(newCert tls.Certificate) {
-	// Operasi O(1) atomic bebas kunci (Lock-free memory swap)
-	m.certPointer.Store(&newCert)
-}
-
-// GetServerCertificate adalah callback untuk tls.Config server
-func (m *DynamicCertManager) GetServerCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
-	cert := m.certPointer.Load()
-	if cert == nil {
-		// Fail-secure: Drop koneksi, bukan downgrade!
-		return nil, ErrCertNotLoaded 
+// MuatBundel membaca DAN memvalidasi sebelum bundel layak dipakai.
+//
+// Validasi ini bukan kemewahan: cert-manager menulis berkas, dan pembaca yang
+// kebetulan bangun di tengah penulisan mendapat PEM terpotong. Tanpa
+// pemeriksaan, bundel rusak itu terpasang dan SETIAP handshake berikutnya
+// gagal — pemadaman yang disebabkan oleh mekanisme rotasi itu sendiri.
+func MuatBundel(pathCert, pathKey, pathCA string) (*Bundel, error) {
+	certPEM, err := os.ReadFile(pathCert)
+	if err != nil {
+		return nil, fmt.Errorf("baca sertifikat: %w", err)
 	}
-	return cert, nil
-}
-
-// GetClientCertificate adalah callback untuk tls.Config klien
-func (m *DynamicCertManager) GetClientCertificate(info *tls.CertificateRequestInfo) (*tls.Certificate, error) {
-	cert := m.certPointer.Load()
-	if cert == nil {
-		return nil, ErrCertNotLoaded
+	keyPEM, err := os.ReadFile(pathKey)
+	if err != nil {
+		return nil, fmt.Errorf("baca kunci: %w", err)
 	}
-	return cert, nil
-}
-
-// CreateMTLSServerConfig merakit konfigurasi untuk Server pendengar
-func CreateMTLSServerConfig(ctx context.Context, manager *DynamicCertManager, caPEM []byte) (*tls.Config, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, fmt.Errorf("context timeout: %w", err)
+	caPEM, err := os.ReadFile(pathCA)
+	if err != nil {
+		return nil, fmt.Errorf("baca CA: %w", err)
 	}
 
-	caPool := x509.NewCertPool()
-	if !caPool.AppendCertsFromPEM(caPEM) {
-		return nil, ErrInvalidRootCA
+	cert, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		return nil, fmt.Errorf("sertifikat dan kunci tidak cocok atau rusak: %w", err)
+	}
+	// tls.X509KeyPair TIDAK mengisi cert.Leaf pada Go < 1.23. Diparse sendiri
+	// supaya tanggal kedaluwarsa bisa diperiksa di sini dan diekspos sebagai
+	// metrik — tanpa itu, tidak ada cara menjawab pertanyaan "kapan
+	// sertifikat ini habis" dari dalam proses.
+	leaf, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		return nil, fmt.Errorf("parse sertifikat daun: %w", err)
+	}
+	cert.Leaf = leaf
+
+	if time.Now().After(leaf.NotAfter) {
+		return nil, fmt.Errorf("%w: berakhir %s", ErrSertifikatExpired, leaf.NotAfter)
 	}
 
-	return &tls.Config{
-		GetCertificate: manager.GetServerCertificate,
-		ClientAuth:     tls.RequireAndVerifyClientCert, // KEAMANAN mTLS INTI: Wajibkan klien memiliki cert
-		ClientCAs:      caPool,                         // Validasi CA dari client
-		MinVersion:     tls.VersionTLS13,               // Cegah TLS Downgrade
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(caPEM) {
+		return nil, ErrRootCATidakValid
+	}
+
+	return &Bundel{
+		Sertifikat: &cert,
+		CAPool:     pool,
+		NotAfter:   leaf.NotAfter,
+		sidik:      sha256.Sum256(bytes.Join([][]byte{certPEM, keyPEM, caPEM}, nil)),
 	}, nil
 }
 
-// ==========================================
-// Unit Tests (Testing Security Boundaries)
-// ==========================================
+type ManajerBundel struct {
+	bundel                    atomic.Pointer[Bundel]
+	pathCert, pathKey, pathCA string
+}
 
-func TestMTLSCertificateRotation_InitialLoad(t *testing.T) {
-	initialCert := tls.Certificate{Certificate: [][]byte{[]byte("cert_V1")}}
-	manager := NewDynamicCertManager(initialCert)
-	
-	sc, err := manager.GetServerCertificate(nil)
-	if err != nil || string(sc.Certificate[0]) != "cert_V1" {
-		t.Fatalf("Failed initial GetServerCertificate")
+func NewManajerBundel(pathCert, pathKey, pathCA string) (*ManajerBundel, error) {
+	m := &ManajerBundel{pathCert: pathCert, pathKey: pathKey, pathCA: pathCA}
+	// Pemuatan pertama SINKRON — Kasus Tepi 3. Watcher yang kalah cepat
+	// dengan permintaan pertama menghasilkan pointer nil.
+	b, err := MuatBundel(pathCert, pathKey, pathCA)
+	if err != nil {
+		return nil, err
+	}
+	m.bundel.Store(b)
+	return m, nil
+}
+
+// Pantau menyegarkan bundel secara berkala.
+//
+// POLLING, bukan inotify — dan itu disengaja, bertentangan dengan diagram
+// versi lama. Kubernetes memasang Secret lewat direktori bersimbol (`..data`)
+// yang DITUKAR saat pembaruan; berkas yang Anda pantau tidak pernah
+// benar-benar ditulisi, sehingga watcher inotify pada path berkas sering
+// tidak pernah menyala sama sekali. Membandingkan sidik isi setiap beberapa
+// detik jauh lebih sederhana dan tidak pernah meleset.
+func (m *ManajerBundel) Pantau(ctx context.Context, tiap time.Duration) {
+	t := time.NewTicker(tiap)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			baru, err := MuatBundel(m.pathCert, m.pathKey, m.pathCA)
+			if err != nil {
+				// Bundel lama DIPERTAHANKAN. Berkas yang tertangkap di tengah
+				// penulisan tidak boleh menjatuhkan layanan yang sedang sehat.
+				slog.ErrorContext(ctx, "gagal memuat bundel, tetap memakai yang lama", "galat", err)
+				continue
+			}
+			if lama := m.bundel.Load(); lama != nil && lama.sidik == baru.sidik {
+				continue
+			}
+			m.bundel.Store(baru)
+			slog.InfoContext(ctx, "bundel sertifikat dirotasi", "kedaluwarsa", baru.NotAfter)
+		}
 	}
 }
 
-func TestMTLSCertificateRotation_HotSwap(t *testing.T) {
-	initialCert := tls.Certificate{Certificate: [][]byte{[]byte("cert_V1")}}
-	manager := NewDynamicCertManager(initialCert)
-	
-	updatedCert := tls.Certificate{Certificate: [][]byte{[]byte("cert_V2")}}
-	manager.UpdateCert(updatedCert)
-	
-	scNew, err := manager.GetServerCertificate(nil)
-	if err != nil || string(scNew.Certificate[0]) != "cert_V2" {
-		t.Fatalf("Hot-Swap Failed. Expected V2 got %s", scNew.Certificate[0])
+// SisaBerlaku dipasang sebagai metrik. Baris pertama tabel deteksi menanyakan
+// persis ini, dan sebelumnya tidak ada cara menjawabnya dari dalam proses.
+func (m *ManajerBundel) SisaBerlaku() (time.Duration, error) {
+	b := m.bundel.Load()
+	if b == nil {
+		return 0, ErrBundelBelumDimuat
+	}
+	return time.Until(b.NotAfter), nil
+}
+
+// KonfigServer memakai GetConfigForClient, bukan tls.Config statis.
+//
+// Inilah satu-satunya cara ClientCAs ikut berotasi: konfigurasi dibangun
+// ulang per koneksi masuk dari bundel terkini.
+func (m *ManajerBundel) KonfigServer() *tls.Config {
+	return &tls.Config{
+		MinVersion: tls.VersionTLS13,
+		GetConfigForClient: func(*tls.ClientHelloInfo) (*tls.Config, error) {
+			b := m.bundel.Load()
+			if b == nil {
+				return nil, ErrBundelBelumDimuat // fail-secure: putuskan koneksi
+			}
+			return &tls.Config{
+				MinVersion:   tls.VersionTLS13,
+				Certificates: []tls.Certificate{*b.Sertifikat},
+				ClientAuth:   tls.RequireAndVerifyClientCert,
+				ClientCAs:    b.CAPool,
+			}, nil
+		},
 	}
 }
 
-func TestMTLSCertificateRotation_FailSecure(t *testing.T) {
-	emptyManager := &DynamicCertManager{} // Tidak diinit Store()
-	_, err := emptyManager.GetServerCertificate(nil)
-	if err != ErrCertNotLoaded {
-		t.Fatalf("Expected fail-secure drop (ErrCertNotLoaded) but got: %v", err)
+// TransportKlien membangun konfigurasi TLS BARU pada setiap dial.
+//
+// Sisi klien sebelumnya tidak ada sama sekali, padahal §1 butir 4 dan diagram
+// §2 keduanya menyebutnya. Perhatikan konfigurasi dirakit DI DALAM dial:
+// tls.Config yang disimpan sekali di Transport membekukan RootCAs-nya,
+// sehingga rotasi CA tidak pernah sampai ke sisi klien.
+func (m *ManajerBundel) TransportKlien() *http.Transport {
+	return &http.Transport{
+		DialTLSContext: func(ctx context.Context, jaringan, alamat string) (net.Conn, error) {
+			b := m.bundel.Load()
+			if b == nil {
+				return nil, ErrBundelBelumDimuat
+			}
+			host, _, err := net.SplitHostPort(alamat)
+			if err != nil {
+				return nil, fmt.Errorf("alamat tujuan: %w", err)
+			}
+			d := &tls.Dialer{Config: &tls.Config{
+				MinVersion:   tls.VersionTLS13,
+				ServerName:   host,
+				RootCAs:      b.CAPool,
+				Certificates: []tls.Certificate{*b.Sertifikat},
+			}}
+			return d.DialContext(ctx, jaringan, alamat)
+		},
+		MaxIdleConnsPerHost: 100,
+		IdleConnTimeout:     90 * time.Second,
+	}
+}
+```
+
+Uji memakai sertifikat X.509 SUNGGUHAN dan handshake sungguhan. Uji versi sebelumnya memasukkan `[]byte("cert_V1")` sebagai "sertifikat" — ia membuktikan pertukaran pointer atomik berhasil, dan tidak satu pun klaim mTLS di berkas ini:
+
+```go
+package security
+
+import (
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"io"
+	"math/big"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+)
+
+type otoritas struct {
+	sert *x509.Certificate
+	kunci *ecdsa.PrivateKey
+	pem  []byte
+}
+
+func buatCA(t *testing.T) otoritas {
+	t.Helper()
+	k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("kunci CA: %v", err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "uji-ca"},
+		NotBefore:             time.Now().Add(-time.Minute),
+		NotAfter:              time.Now().Add(time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &k.PublicKey, k)
+	if err != nil {
+		t.Fatalf("buat CA: %v", err)
+	}
+	sert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatalf("parse CA: %v", err)
+	}
+	return otoritas{sert: sert, kunci: k, pem: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})}
+}
+
+// tulisBundel menerbitkan sertifikat daun dan menuliskannya sebagai berkas,
+// meniru apa yang dilakukan cert-manager di dalam pod.
+func tulisBundel(t *testing.T, dir string, ca otoritas, cn string) (pathCert, pathKey, pathCA string) {
+	t.Helper()
+	k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("kunci daun: %v", err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(time.Now().UnixNano()),
+		Subject:      pkix.Name{CommonName: cn},
+		NotBefore:    time.Now().Add(-time.Minute),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
+		DNSNames:     []string{cn},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, ca.sert, &k.PublicKey, ca.kunci)
+	if err != nil {
+		t.Fatalf("terbitkan daun: %v", err)
+	}
+	kDER, err := x509.MarshalECPrivateKey(k)
+	if err != nil {
+		t.Fatalf("marshal kunci: %v", err)
+	}
+
+	pathCert = filepath.Join(dir, "tls.crt")
+	pathKey = filepath.Join(dir, "tls.key")
+	pathCA = filepath.Join(dir, "ca.crt")
+	tulis := func(p string, b []byte) {
+		if err := os.WriteFile(p, b, 0o600); err != nil {
+			t.Fatalf("tulis %s: %v", p, err)
+		}
+	}
+	tulis(pathCert, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+	tulis(pathKey, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: kDER}))
+	tulis(pathCA, ca.pem)
+	return
+}
+
+// mTLS yang benar-benar menolak klien tanpa sertifikat. Inilah klaim inti
+// berkas ini, dan sebelumnya tidak diuji sama sekali.
+func TestServerMenolakKlienTanpaSertifikat(t *testing.T) {
+	dir := t.TempDir()
+	ca := buatCA(t)
+	m, err := NewManajerBundel(tulisBundel(t, dir, ca, "127.0.0.1"))
+	if err != nil {
+		t.Fatalf("NewManajerBundel: %v", err)
+	}
+
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, "ok")
+	}))
+	srv.TLS = m.KonfigServer()
+	srv.StartTLS()
+	defer srv.Close()
+
+	// Klien TANPA sertifikat: hanya mempercayai CA, tidak menyajikan identitas.
+	tanpaSertifikat := &http.Client{Transport: &http.Transport{
+		TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: poolDari(t, ca.pem)},
+	}}
+	resp, err := tanpaSertifikat.Get(srv.URL)
+	if err == nil {
+		resp.Body.Close()
+		t.Fatal("klien tanpa sertifikat diterima — ClientAuth tidak ditegakkan")
+	}
+
+	// Klien DENGAN sertifikat dari CA yang sama: harus lolos.
+	dengan := &http.Client{Transport: m.TransportKlien()}
+	resp, err = dengan.Get(srv.URL)
+	if err != nil {
+		t.Fatalf("klien ber-sertifikat ditolak: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("kode = %d, mau 200", resp.StatusCode)
 	}
 }
 
-func TestMTLSCertificateRotation_InvalidCA(t *testing.T) {
-	ctx := context.Background()
-	initialCert := tls.Certificate{Certificate: [][]byte{[]byte("cert_V1")}}
-	manager := NewDynamicCertManager(initialCert)
-
-	_, err := CreateMTLSServerConfig(ctx, manager, []byte("MALFORMED_PEM_FILE_CONTENTS"))
-	if err != ErrInvalidRootCA {
-		t.Fatalf("Expected failure on invalid CA format, got: %v", err)
+// Berkas rusak di tengah penulisan TIDAK boleh menjatuhkan layanan sehat.
+func TestBundelRusakTidakMenggantikanYangSehat(t *testing.T) {
+	dir := t.TempDir()
+	ca := buatCA(t)
+	pathCert, pathKey, pathCA := tulisBundel(t, dir, ca, "127.0.0.1")
+	m, err := NewManajerBundel(pathCert, pathKey, pathCA)
+	if err != nil {
+		t.Fatalf("NewManajerBundel: %v", err)
 	}
+	sebelum := m.bundel.Load()
+
+	// Tulis PEM terpotong, persis seperti pembacaan di tengah penulisan.
+	isi, _ := os.ReadFile(pathCert)
+	if err := os.WriteFile(pathCert, isi[:len(isi)/2], 0o600); err != nil {
+		t.Fatalf("potong berkas: %v", err)
+	}
+	if _, err := MuatBundel(pathCert, pathKey, pathCA); err == nil {
+		t.Fatal("PEM terpotong diterima MuatBundel")
+	}
+
+	ctx, batal := context.WithCancel(context.Background())
+	go m.Pantau(ctx, 10*time.Millisecond)
+	time.Sleep(60 * time.Millisecond)
+	batal()
+
+	if m.bundel.Load() != sebelum {
+		t.Fatal("bundel rusak menggantikan bundel yang sehat")
+	}
+}
+
+func TestSisaBerlakuTerbaca(t *testing.T) {
+	dir := t.TempDir()
+	ca := buatCA(t)
+	m, err := NewManajerBundel(tulisBundel(t, dir, ca, "127.0.0.1"))
+	if err != nil {
+		t.Fatalf("NewManajerBundel: %v", err)
+	}
+	sisa, err := m.SisaBerlaku()
+	if err != nil {
+		t.Fatalf("SisaBerlaku: %v", err)
+	}
+	if sisa <= 0 || sisa > time.Hour {
+		t.Fatalf("sisa berlaku = %s, di luar rentang yang diharapkan", sisa)
+	}
+}
+
+func poolDari(t *testing.T, caPEM []byte) *x509.CertPool {
+	t.Helper()
+	p := x509.NewCertPool()
+	if !p.AppendCertsFromPEM(caPEM) {
+		t.Fatal("CA PEM tidak dapat dimuat")
+	}
+	return p
 }
 ```
 
@@ -243,7 +547,9 @@ func TestMTLSCertificateRotation_InvalidCA(t *testing.T) {
 | Rotasi tidak berlaku sampai pod di-restart | apakah `GetCertificate` dipakai | Sertifikat dimuat sekali saat start |
 | `InsecureSkipVerify` ditemukan di kode produksi | konfigurasi TLS | Verifikasi dimatikan; mTLS jadi teater |
 | Layanan bisa memanggil apa saja setelah autentikasi | kebijakan otorisasi | Identitas disamakan dengan izin |
-| Klien lama gagal setelah CA berganti | rantai kepercayaan yang dipasang | Rotasi CA tanpa periode tumpang tindih |
+| Klien lama gagal setelah CA berganti | apakah `ClientCAs` ikut dirotasi | `tls.Config` statis membekukan kumpulan CA; butuh `GetConfigForClient` |
+| Berkas cert berubah tapi proses tidak melihatnya | mekanisme deteksi perubahan | inotify tidak menyala pada penukaran symlink Kubernetes |
+| Handshake gagal serentak sesaat setelah rotasi | validasi sebelum pemasangan | PEM terbaca di tengah penulisan lalu langsung dipasang |
 
 ```bash
 # Kedaluwarsa dan penerbit sertifikat yang benar-benar disajikan

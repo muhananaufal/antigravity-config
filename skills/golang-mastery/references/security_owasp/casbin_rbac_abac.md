@@ -70,25 +70,41 @@ func deleteDocVulnerable(w http.ResponseWriter, r *http.Request) {
 ```
 
 ```go
-// ✅ GOOD: Pindahkan 100% logika tersebut ke file Casbin Policy dan Enforcer
+// ✅ GOOD: seluruh logika akses pindah ke kebijakan Casbin
 func deleteDocSafe(w http.ResponseWriter, r *http.Request) {
-	sub := r.Context().Value("userID").(string)
-	obj := r.URL.Path
-	act := r.Method
-
-	// Engine yang akan menentukan apakah sub diizinkan act terhadap obj
-	ok, _ := enforcer.Enforce(sub, obj, act)
-	if !ok {
-		http.Error(w, "Forbidden", 403)
+	// Bentuk comma-ok, dan kunci context BERTIPE, bukan string telanjang.
+	// `r.Context().Value("userID").(string)` panic bila nilainya tidak ada —
+	// di jalur otorisasi, itu berarti satu middleware yang lupa terpasang
+	// menjatuhkan handler alih-alih menolak permintaan.
+	sub, ok := r.Context().Value(kunciUserID).(string)
+	if !ok || sub == "" {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	// delete doc...
+	dom, _ := r.Context().Value(kunciTenant).(string)
+
+	izin, err := authz.CheckPermission(r.Context(), sub, dom, r.URL.Path, r.Method)
+	if err != nil {
+		// Galat penegakan BUKAN "tolak diam-diam": ia menandakan mesin
+		// otorisasi sedang tidak berfungsi, dan itu harus terlihat.
+		http.Error(w, "internal", http.StatusInternalServerError)
+		return
+	}
+	if !izin {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	// hapus dokumen...
 }
 ```
 
+> `r.URL.Path` diteruskan apa adanya di sini **hanya karena** `CheckPermission` menormalkannya di dalam (lihat §5). Bila Anda memanggil `enforcer.Enforce` langsung, normalkan sendiri — memberi izin atas satu bentuk path lalu bertindak atas bentuk lain adalah salah satu bypass otorisasi yang paling sering lolos review.
+
 ### ❌ Anti-Pattern 2: Permissive Default (Fail-Open)
 
-**Mengapa berbahaya (Exploit Vector)**: Policy Effect di Casbin disetel untuk membolehkan segala sesuatu kecuali jika dilarang. Ini bertentangan dengan prinsip Zero Trust. Attacker akan mencari resource tersembunyi yang "lupa" dilindungi rule spesifik. 
+**Mengapa berbahaya:** effect `!some(where (p.eft == deny))` mengizinkan apa pun yang tidak dilarang secara eksplisit, sehingga setiap resource baru lahir dalam keadaan terbuka sampai ada yang ingat menulis aturan larangannya. Penyerang cukup mencari yang terlupakan.
+
+Satu koreksi yang penting agar tidak salah paham: ini **bukan** perilaku bawaan Casbin. Model standar Casbin memakai `e = some(where (p.eft == allow))` — fail-closed. Efek permisif hanya muncul bila seseorang menuliskannya sendiri, biasanya untuk "sementara" saat migrasi dari sistem lama. Yang perlu Anda periksa karena itu bukan pustakanya, melainkan berkas model di repositori Anda.
 
 ```text
 // ❌ BAD: Default Effect - mengizinkan akses jika tidak dilarang
@@ -106,7 +122,9 @@ e = some(where (p.eft == allow))
 
 ## 4. Edge Cases & Defensive Programming Khusus Go
 
-1. **Role Explosion**: Aplikasi multi-tenant B2B memiliki TenantA dan TenantB. Alice adalah "admin" di TenantA. Jika ia meminta `/tenantB/data`, role `admin`-nya tidak berlaku. Jangan menumpuk role `admin_tenantA`, `admin_tenantB` (Role Explosion). Gunakan ekstensi *Domain* RBAC pada casbin model: `r = sub, dom, obj, act` dimana *dom* adalah TenantID.
+1. **Role Explosion — dan konsekuensi yang lebih tajam daripada sekadar "banyak peran"**: Alice adalah admin di TenantA; saat ia meminta data TenantB, perannya tidak boleh berlaku. Menumpuk `admin_tenantA`, `admin_tenantB` menghasilkan ledakan peran; jawabannya dimensi *domain*: `r = sub, dom, obj, act` dengan `dom` sebagai TenantID, dan `g = _, _, _` agar penugasan peran pun terikat domain.
+
+   Yang perlu ditegaskan: model tanpa `dom` **bukan** sekadar kurang praktis. Pada aplikasi multi-tenant ia berarti setiap "editor" adalah editor di seluruh tenant — Broken Access Control, kerentanan yang berkas ini sendiri sebut sebagai peringkat #1 OWASP di kalimat pembukanya. Perbedaannya satu kolom di model, dan akibatnya seluruh isolasi tenant.
 2. **Kinerja Sinkronisasi Database (Watcher)**: Jika server melakukan query SQL untuk tiap evaluasi `.Enforce()`, latency API turun ke bawah tanah. Casbin menyimpan *rules* di memori RAM via *Trie*. Anda WAJIB memakai Redis Watcher (`casbin/redis-watcher`) agar jika instans Go merubah tabel via `AddPolicy()`, instans Go lain mendapat ping *event* untuk mereload dari DB.
 3. **Pengecekan Objek Dinamis (ABAC JSON)**: Kadang kita tidak bisa memodelkan aturan dalam String. "Pengguna boleh Approve jika transaksi.Amount < 50000". Anda dapat mempassing *Struct golang pointer* ke dalam `Enforce()`, dan menggunakan built-in `eval()` pada model Casbin untuk mengakses `r.obj.Amount`.
 
@@ -120,42 +138,66 @@ package authz
 import (
 	"context"
 	"fmt"
-	"testing"
+	"log/slog"
+	"path"
+	"strings"
 
 	"github.com/casbin/casbin/v2"
 	"github.com/casbin/casbin/v2/model"
 	fileadapter "github.com/casbin/casbin/v2/persist/file-adapter"
 )
 
-// CasbinModel mengadopsi model PERM (Policy, Effect, Request, Matcher)
-// Mendukung RBAC via fungsi "g" dan pattern matching via "keyMatch2"
+// Model PERM dengan dimensi DOMAIN (tenant).
+//
+// Tiga perbedaan dari bentuk yang biasa ditulis, dan ketiganya penting:
+//
+//  1. `dom` ada di request, policy, dan grouping. Kasus Tepi 1 di berkas ini
+//     menuntutnya, tetapi versi sebelumnya memakai `r = sub, obj, act` — yang
+//     berarti "editor" adalah editor di SELURUH tenant. Untuk aplikasi
+//     multi-tenant itu bukan kekurangan fitur, melainkan Broken Access
+//     Control, kerentanan yang berkas ini sebut sendiri sebagai OWASP #1.
+//
+//  2. TIDAK ADA `|| r.sub == "root"` di matcher. Superuser yang ditanam di
+//     dalam matcher persis merupakan Anti-Pattern 1 yang dikutuk berkas ini:
+//     logika akses di tempat yang bukan kebijakan — tidak bisa diubah tanpa
+//     deploy, tidak muncul di audit perubahan kebijakan, dan tidak bisa
+//     dicabut dengan menghapus satu baris. Ia juga menjadi pengambilalihan
+//     total bila ada pengguna yang bisa memakai ID "root". Kekuasaan penuh
+//     tetap bisa diberikan — lewat BARIS KEBIJAKAN, sehingga terhitung,
+//     terlihat, dan bisa dicabut.
+//
+//  3. Pola aksi DIJANGKARKAN. `regexMatch` casbin memakai regexp.MatchString
+//     yang mencocokkan SUBSTRING: pola `GET` juga cocok dengan `XGETX`, dan
+//     pola `read` cocok dengan `read-write`. Tanpa `^...$`, izin sempit
+//     diam-diam melebar.
 const modelConf = `
 [request_definition]
-r = sub, obj, act
+r = sub, dom, obj, act
 
 [policy_definition]
-p = sub, obj, act
+p = sub, dom, obj, act
 
 [role_definition]
-g = _, _
+g = _, _, _
 
 [policy_effect]
 e = some(where (p.eft == allow))
 
 [matchers]
-# Kondisi: Jika user cocok secara Role (g), ATAU dia adalah Root admin
-# DAN target objek HTTP url cocok pola restful (keyMatch2 /api/docs/* == /api/docs/1)
-m = g(r.sub, p.sub) && keyMatch2(r.obj, p.obj) && regexMatch(r.act, p.act) || r.sub == "root"
+m = g(r.sub, p.sub, r.dom) && r.dom == p.dom && keyMatch2(r.obj, p.obj) && regexMatch(r.act, p.act)
 `
 
-// DefaultPolicies (Biasanya ditarik dari DB/Gorm, tapi kita simulasikan string Adapter)
+// Kebijakan (di produksi ditarik dari DB lewat adapter; di sini string).
 const policyCSV = `
-p, role:editor, /articles/*, (GET|POST|PUT)
-p, role:viewer, /articles/*, GET
-p, role:editor, /admin/*, GET
+p, role:editor, tenant-a, /articles/*, ^(GET|POST|PUT)$
+p, role:viewer, tenant-a, /articles/*, ^GET$
+p, role:admin,  tenant-a, /admin/*,    ^(GET|POST)$
+p, role:editor, tenant-b, /articles/*, ^(GET|POST|PUT)$
 
-g, alice, role:editor
-g, bob, role:viewer
+g, alice, role:editor, tenant-a
+g, bob,   role:viewer, tenant-a
+g, carol, role:editor, tenant-b
+g, dana,  role:admin,  tenant-a
 `
 
 type Authorizer struct {
@@ -176,88 +218,154 @@ func NewAuthorizer(ctx context.Context) (*Authorizer, error) {
 		return nil, fmt.Errorf("failed creating casbin enforcer: %w", err)
 	}
 
-	// Wajib dilakukan di aplikasi production multi-node:
+	// Wajib di produksi multi-node:
 	// watcher := rediswatcher.NewWatcher("redis:6379")
 	// enforcer.SetWatcher(watcher)
-
-	// Pastikan sinkronisasi awal
-	if err := enforcer.LoadPolicy(); err != nil {
-		return nil, fmt.Errorf("failed to load policy: %w", err)
-	}
+	//
+	// Catatan: casbin.NewEnforcer SUDAH memuat kebijakan dari adapter.
+	// Memanggil LoadPolicy() lagi di sini — seperti versi sebelumnya — tidak
+	// salah, tetapi menyiratkan sebuah keharusan yang tidak ada.
 
 	return &Authorizer{enforcer: enforcer}, nil
 }
 
-// CheckPermission adalah proxy helper mengeksekusi Otorisasi
-func (auth *Authorizer) CheckPermission(ctx context.Context, userID, resource, action string) (bool, error) {
+// CheckPermission mengevaluasi satu keputusan otorisasi.
+//
+// Perhatikan `domain` sebagai parameter tersendiri: tanpa itu, peran seorang
+// pengguna berlaku di seluruh tenant.
+func (auth *Authorizer) CheckPermission(ctx context.Context, userID, domain, resource, action string) (bool, error) {
 	if err := ctx.Err(); err != nil {
-		return false, fmt.Errorf("context timeout: %w", err)
+		return false, fmt.Errorf("context batal: %w", err)
 	}
 
-	// Gunakan enforcer internal untuk validasi model
-	ok, err := auth.enforcer.Enforce(userID, resource, action)
+	// Objek DINORMALKAN sebelum dievaluasi.
+	//
+	// Ini bukan kerapian, melainkan penutup celah: `r.URL.Path` sudah
+	// ter-decode, sehingga permintaan ke `/articles/%2e%2e/admin/settings`
+	// tiba di sini sebagai `/articles/../admin/settings`. Pola `/articles/*`
+	// mencocokkannya dan otorisasi MENGIZINKAN, lalu lapisan berikutnya
+	// menormalkannya menjadi `/admin/settings` dan bertindak di situ.
+	// Memberi izin atas satu bentuk path lalu bertindak atas bentuk lain
+	// adalah pintu belakang yang tidak terlihat di kebijakan mana pun.
+	objek := path.Clean("/" + strings.TrimPrefix(resource, "/"))
+
+	izin, err := auth.enforcer.Enforce(userID, domain, objek, action)
 	if err != nil {
-		return false, fmt.Errorf("casbin enforcement error: %w", err)
+		// Mesin otorisasi yang bermasalah harus TERLIHAT. Yang diam-diam
+		// menolak semua orang adalah pemadaman; yang diam-diam mengizinkan
+		// adalah pelanggaran. Keduanya tidak boleh sunyi.
+		slog.ErrorContext(ctx, "penegakan otorisasi gagal", "galat", err,
+			"subjek", userID, "domain", domain, "objek", objek, "aksi", action)
+		return false, fmt.Errorf("penegakan casbin: %w", err)
 	}
 
-	return ok, nil
+	// Setiap keputusan dicatat. Tabel deteksi di berkas ini menanyakan "siapa
+	// mengakses apa", dan perintah bash-nya menyaring event "otorisasi" —
+	// event yang sebelumnya tidak pernah dipancarkan kode mana pun.
+	//
+	// Ya, ini menambah satu baris log per pemeriksaan. Untuk keputusan
+	// otorisasi, itu memang jejak auditnya: yang diizinkan sama pentingnya
+	// dengan yang ditolak. Kalau volumenya jadi masalah, kurangi jumlah
+	// PEMERIKSAAN yang berlebihan, jangan kurangi catatannya.
+	hasil := "tolak"
+	if izin {
+		hasil = "izinkan"
+	}
+	slog.InfoContext(ctx, "keputusan otorisasi", "event", "otorisasi",
+		"hasil", hasil, "subjek", userID, "domain", domain, "objek", objek, "aksi", action)
+
+	return izin, nil
+}
+```
+
+```go
+package authz
+
+import (
+	"context"
+	"testing"
+)
+
+func authzUji(t *testing.T) *Authorizer {
+	t.Helper()
+	// Galat konstruktor TIDAK dibuang. Versi sebelumnya menulis
+	// `authz, _ := NewAuthorizer(ctx)` di tiga uji: bila konstruksi gagal,
+	// authz bernilai nil dan ujinya panic dengan nil pointer, bukan gagal
+	// dengan pesan yang menjelaskan apa pun.
+	a, err := NewAuthorizer(context.Background())
+	if err != nil {
+		t.Fatalf("NewAuthorizer: %v", err)
+	}
+	return a
 }
 
-// ==========================================
-// Unit Tests (Testing Security Boundaries)
-// ==========================================
+func TestKeputusanOtorisasi(t *testing.T) {
+	a, ctx := authzUji(t), context.Background()
 
-func TestCasbinRBACBoundaries_HappyPath(t *testing.T) {
-	ctx := context.Background()
-	authz, _ := NewAuthorizer(ctx)
-
-	tests := []struct {
-		sub string
-		obj string
-		act string
+	kasus := []struct {
+		nama              string
+		sub, dom, obj, act string
+		mauIzin           bool
 	}{
-		{"alice", "/articles/10", "GET"},
-		{"alice", "/articles/10", "PUT"},
-		{"bob", "/articles/10", "GET"},
+		{"editor membaca artikel di tenant sendiri", "alice", "tenant-a", "/articles/10", "GET", true},
+		{"editor mengubah artikel di tenant sendiri", "alice", "tenant-a", "/articles/10", "PUT", true},
+		{"viewer membaca", "bob", "tenant-a", "/articles/10", "GET", true},
+		{"viewer mengubah", "bob", "tenant-a", "/articles/10", "PUT", false},
+		{"editor menyentuh area admin", "alice", "tenant-a", "/admin/settings", "POST", false},
+		{"admin di area admin", "dana", "tenant-a", "/admin/settings", "POST", true},
+		{"pengguna tak dikenal", "charlie", "tenant-a", "/articles/10", "GET", false},
+
+		// Baris ini yang membuktikan dimensi domain benar-benar bekerja.
+		// Dengan model lama (r = sub, obj, act) carol DIIZINKAN — perannya
+		// berlaku di seluruh tenant, dan itulah Broken Access Control.
+		{"editor tenant lain menyeberang", "carol", "tenant-a", "/articles/10", "PUT", false},
+		{"editor tenant lain di tenant sendiri", "carol", "tenant-b", "/articles/10", "PUT", true},
+
+		// Tidak ada lagi jalan pintas "root" yang ditanam di matcher.
+		{"root bukan lagi kata sakti", "root", "tenant-a", "/admin/settings", "POST", false},
 	}
 
-	for _, tt := range tests {
-		ok, err := authz.CheckPermission(ctx, tt.sub, tt.obj, tt.act)
-		if err != nil || !ok {
-			t.Errorf("Expected allow for %s on %s %s", tt.sub, tt.obj, tt.act)
-		}
-	}
-}
-
-func TestCasbinRBACBoundaries_FailSecure(t *testing.T) {
-	ctx := context.Background()
-	authz, _ := NewAuthorizer(ctx)
-
-	tests := []struct {
-		sub string
-		obj string
-		act string
-	}{
-		{"bob", "/articles/10", "PUT"},
-		{"alice", "/admin/settings", "POST"},
-		{"charlie", "/articles/10", "GET"},
-	}
-
-	for _, tt := range tests {
-		ok, _ := authz.CheckPermission(ctx, tt.sub, tt.obj, tt.act)
-		if ok {
-			t.Errorf("Expected deny for %s on %s %s", tt.sub, tt.obj, tt.act)
-		}
+	for _, k := range kasus {
+		t.Run(k.nama, func(t *testing.T) {
+			izin, err := a.CheckPermission(ctx, k.sub, k.dom, k.obj, k.act)
+			if err != nil {
+				t.Fatalf("CheckPermission: %v", err)
+			}
+			if izin != k.mauIzin {
+				t.Fatalf("izin = %v, mau %v", izin, k.mauIzin)
+			}
+		})
 	}
 }
 
-func TestCasbinRBACBoundaries_RootBypass(t *testing.T) {
-	ctx := context.Background()
-	authz, _ := NewAuthorizer(ctx)
+// Path ter-encode yang menormalkan menjadi area terlarang WAJIB ditolak.
+// Tanpa normalisasi sebelum evaluasi, pola /articles/* mencocokkannya dan
+// otorisasi mengizinkan sesuatu yang kemudian dieksekusi sebagai /admin/*.
+func TestPathTernormalkanSebelumDievaluasi(t *testing.T) {
+	a, ctx := authzUji(t), context.Background()
 
-	ok, err := authz.CheckPermission(ctx, "root", "/secret/vault", "DELETE")
-	if err != nil || !ok {
-		t.Errorf("Expected root to bypass all rules")
+	izin, err := a.CheckPermission(ctx, "alice", "tenant-a", "/articles/../admin/settings", "POST")
+	if err != nil {
+		t.Fatalf("CheckPermission: %v", err)
+	}
+	if izin {
+		t.Fatal("path traversal lolos otorisasi — dievaluasi sebelum dinormalkan")
+	}
+}
+
+// Pola aksi WAJIB berjangkar. regexMatch casbin mencocokkan substring, jadi
+// pola tak berjangkar diam-diam melebarkan izin.
+func TestPolaAksiBerjangkar(t *testing.T) {
+	a, ctx := authzUji(t), context.Background()
+
+	for _, aksi := range []string{"XGET", "GETX", "XGETX"} {
+		izin, err := a.CheckPermission(ctx, "bob", "tenant-a", "/articles/10", aksi)
+		if err != nil {
+			t.Fatalf("CheckPermission: %v", err)
+		}
+		if izin {
+			t.Fatalf("aksi %q diterima — pola aksi tidak berjangkar", aksi)
+		}
 	}
 }
 ```
@@ -279,6 +387,10 @@ func TestCasbinRBACBoundaries_RootBypass(t *testing.T) {
 | Tidak bisa menjawab "siapa mengakses apa" | log keputusan otorisasi | Keputusan tidak dicatat |
 | Kebijakan berubah tanpa jejak | audit perubahan kebijakan | Kebijakan diubah langsung di database |
 | Aturan saling bertumpuk dan sulit dinalar | jumlah dimensi atribut | ABAC ditambahkan sebelum RBAC stabil |
+| Pengguna satu tenant melihat data tenant lain | ada tidaknya `dom` di request & policy | Peran berlaku lintas tenant |
+| Ada akun yang bisa apa saja tanpa baris kebijakan | pintasan di dalam matcher | Superuser ditanam di model, bukan di kebijakan |
+| Izin terasa lebih luas dari yang tertulis | jangkar `^...$` pada pola aksi | `regexMatch` mencocokkan substring |
+| Akses lolos lewat URL ter-encode | normalisasi path sebelum evaluasi | Diizinkan atas satu bentuk path, dieksekusi atas bentuk lain |
 
 ```bash
 # Rasio kasar endpoint terhadap pemanggilan penegakan: selisih besar layak dicurigai
