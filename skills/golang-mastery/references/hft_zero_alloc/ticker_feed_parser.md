@@ -1,5 +1,7 @@
 # Ticker Feed Parser (Zero Allocation)
 
+> **Berlaku:** Go 1.21+ · **Lihat juga:** `hft_zero_alloc/limit_orderbook_matching.md` · `hft_zero_alloc/zero_allocation_patterns.md` · `system_programming_linux/syscall_epoll_nonblocking.md` · `testing_quality/fuzz_testing_go.md`
+
 ## Konsep Utama
 High-Frequency Trading melibatkan komunikasi dengan pertukaran bursa secara konstan. Pertukaran ini (seperti NASDAQ OUCH, CME iLink, atau Protokol FIX HFT) mengirimkan aliran informasi buku pesanan dan harga menggunakan format khusus biner ringkas (*Custom Binary Protocols*) atau, sesekali, ASCII berpemisah karakter.
 
@@ -213,3 +215,34 @@ func ParseGoodManual(payload []byte, out *MarketEvent) {
 3. **Ketidaksesuaian Endianness Silikon (Big Endian vs Little Endian)**:
    *Edge Case*: Anda membuat kode penggeser (*shift* dan *OR*) Little Endian di atas dan meluncurkannya. Tiba-tiba perusahaan memindahkan server bot ke mesin superkomputer Arsitektur *Big Endian* (seperti mesin lawas IBM PowerPC yang masih dipakai bursa aneh dunia ketiga).
    *Defensive*: Hasil harga *Price* yang tadinya 1000 akan menjadi nilai hancur triliunan yang gila, lalu HFT Engine Anda akan mengajukan beli (*Buy Order*) saham perusahaan permen seharga satu triliun dolar. Sangat tragis! Tambahkan perlindungan uji pra-rilis (*Init Check* atau *Build Tags*). Go memungkinkan fitur kompilasi khusus per-arsitektur dengan komentar di awal file (contoh: `//go:build amd64 || arm64`).
+
+## Kapan JANGAN Pakai Ini
+
+- **`encoding/json` di jalur feed berlatensi rendah.** Refleksi dan alokasi per pesan mendominasi seluruh anggaran waktu. Untuk feed berkecepatan tinggi, parser yang dihasilkan kode atau ditulis tangan adalah keharusan, bukan optimasi.
+- **Parsing di goroutine yang sama dengan pembacaan soket.** Satu pesan yang lambat diproses menahan pembacaan berikutnya, dan buffer kernel mulai penuh — kelambatan berubah menjadi kehilangan data.
+- **Tanpa menangani pesan yang tiba tidak lengkap.** TCP tidak menjamin batas pesan. Parser WAJIB menangani pembacaan parsial dan pesan yang terbelah antar paket.
+- **Tanpa deteksi celah nomor urut.** Feed yang kehilangan pesan tanpa disadari menghasilkan keadaan pasar yang salah **tanpa satu pun galat muncul** — dan keputusan dagang dibuat di atasnya.
+- **Mengasumsikan feed selalu tiba berurutan.** Feed multicast bisa tiba tidak berurutan. Butuh buffer penyusun ulang dengan batas waktu yang jelas.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Keadaan pasar menyimpang dari sumber | celah nomor urut | Pesan hilang tanpa terdeteksi |
+| Buffer soket penuh saat volume tinggi | pemisahan baca dan parse | Parsing menahan pembacaan |
+| Panic pada pesan tertentu | apakah parser di-fuzz | Bentuk pesan yang belum pernah dicoba |
+| Latensi naik seiring volume | alokasi per pesan | Parser mengalokasikan di jalur panas |
+| Nilai aneh setelah paket terbelah | penanganan pembacaan parsial | Batas pesan diasumsikan sama dengan batas paket |
+
+```bash
+# Celah nomor urut -- metrik paling penting untuk feed apa pun
+curl -s localhost:9090/metrics | grep -E 'feed_(gap|seq|dropped|reorder)'
+
+# Buffer soket yang penuh berarti pembacaan tertinggal
+ss -tin | grep -A1 ':9001' | head
+cat /proc/net/udp | head -3
+
+# Parser WAJIB di-fuzz: feed adalah input dari luar
+go test -fuzz=FuzzParseTick -fuzztime=5m ./...
+go test -bench=BenchmarkParseTick -benchmem -count=10 -run='^$' ./...
+```

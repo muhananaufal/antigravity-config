@@ -1,5 +1,7 @@
 # SIMD Assembly Intrinsics in Go
 
+> **Berlaku:** Go 1.21+ · Plan 9 assembly · `golang.org/x/sys/cpu` · **Lihat juga:** `hft_zero_alloc/cpu_cache_optimization.md` · `runtime_internals/build_system_linker.md` · `testing_quality/fuzz_testing_go.md` · `hft_zero_alloc/zero_allocation_patterns.md`
+
 ## Konsep Utama
 Bahasa Go merupakan bahasa turunan C yang dikompilasi ke *machine code*, namun kompilator Go (walaupun terus disempurnakan) kadang kurang agresif dibandingkan GCC atau Clang/LLVM C++ dalam memvektorisasi (menerapkan instruksi SIMD) operasi loop secara otomatis.
 
@@ -400,3 +402,36 @@ func BenchmarkSoA_vs_AoS(b *testing.B) {
 5. **Stop-The-World (STW) Garbage Collection Mengganggu SIMD Throughput**:
    *Edge Case*: Fungsi agregasi SIMD Anda tereksekusi mulus 40ns. Namun tiba-tiba lonjakan STW (Pause Time GC Go) terjadi selama 250 mikrosekon di tengah iterasi loop karena banyaknya pointer yang bocor di sistem sekitarnya.
    *Defensive*: Optimasi SIMD sia-sia jika runtime menangguhkan *thread*. Kombinasikan SIMD dengan `sync.Pool` dan `Off-heap Memory Arena` (melalui mmap `syscall`). Objek *slice* `int64` yang sangat besar tanpa referensi pointer (*pointer-free types*) tidak di-scan secara *deep-scan* oleh GC Golang, mengurangi durasi GC STW secara signifikan.
+
+## Kapan JANGAN Pakai Ini
+
+- **Sebelum versi Go murni dioptimalkan dan diukur.** Kompilator sering menghasilkan kode yang cukup baik, dan menulis assembly justru **menghapus** inlining, escape analysis, dan bounds-check elimination di sekitarnya.
+- **Tanpa jalur cadangan Go murni.** Assembly mengikat kode ke satu arsitektur. Build untuk `arm64`, `wasm`, atau lingkungan pengembangan orang lain akan gagal, dan kegagalannya tidak jelas.
+- **Tanpa deteksi fitur CPU saat runtime.** Instruksi AVX-512 di CPU yang tidak mendukungnya berarti `SIGILL` — proses mati tanpa pesan yang berguna. Pakai `golang.org/x/sys/cpu` dan pilih jalur saat start.
+- **Untuk fungsi yang jarang dipanggil.** Ongkos pemeliharaan assembly berlaku selamanya, dan orang yang memeliharanya nanti mungkin bukan Anda.
+- **Tanpa uji diferensial terhadap versi Go murni.** Assembly yang salah menghasilkan **angka yang salah tanpa crash** — kelas bug paling berbahaya yang bisa Anda tambahkan ke sistem.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| `SIGILL` di sebagian mesin saja | deteksi fitur CPU | Instruksi dipakai tanpa memeriksa dukungan |
+| Hasil berbeda antara dua lingkungan | uji diferensial | Jalur assembly dan jalur Go tidak setara |
+| Build gagal di arsitektur lain | file dengan build tag arsitektur | Tidak ada jalur cadangan Go murni |
+| Assembly tidak lebih cepat | benchmark tandingan | Kompilator sudah menghasilkan kode setara |
+| Fungsi sekitarnya jadi lebih lambat | inlining di sekitar panggilan | Batas assembly memutus optimasi kompilator |
+
+```bash
+# Kode yang benar-benar dihasilkan kompilator untuk versi Go murni
+go build -gcflags='-S' ./pkg/hitung 2>&1 | head -40
+
+# Uji diferensial: assembly WAJIB setara dengan versi Go murni
+go test -run=TestSamaDenganMurni -count=5 ./...
+go test -fuzz=FuzzSamaDenganMurni -fuzztime=5m ./...
+
+# Build lintas arsitektur membuktikan jalur cadangan benar-benar ada
+GOARCH=arm64 go build ./... && GOARCH=amd64 go build ./...
+
+# Fitur CPU yang tersedia di mesin target
+grep -o -m1 'avx[0-9_]*\|sse[0-9_]*' /proc/cpuinfo | sort -u | head
+```

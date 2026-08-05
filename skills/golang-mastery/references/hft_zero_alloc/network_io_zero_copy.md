@@ -1,5 +1,7 @@
 # Network I/O Zero Copy (Kernel Bypass)
 
+> **Berlaku:** Go 1.21+ · Linux `sendfile`/`splice` · **Lihat juga:** `system_programming_linux/syscall_epoll_nonblocking.md` · `hft_zero_alloc/zero_allocation_patterns.md` · `microservices_grpc/http_client_production.md` · `system_programming_linux/unix_domain_socket.md`
+
 ## Konsep Utama
 Dalam ekosistem High-Frequency Trading (HFT), jaringan berbasis standar (*Standard TCP/IP Socket API*) adalah sebuah malapetaka latensi. Saat Anda membaca dari socket UDP/TCP Go konvensional (`net.Conn`), data jaringan melakukan perjalanan mahal:
 1. Kartu Jaringan (NIC) menyalin (*copy*) paket ke Ring Buffer Memori Kernel via DMA.
@@ -365,4 +367,34 @@ func BenchmarkZeroCopy_UMEM_Simulation(b *testing.B) {
 		}
 	}
 }
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **Sebelum membuktikan penyalinan adalah penyempitan.** Pada sebagian besar layanan, waktu habis di TLS, parsing, dan logika aplikasi — bukan di `memcpy`. Zero-copy yang menghemat 2% dari 5% waktu tidak berarti apa-apa.
+- **`sendfile`/`splice` untuk data yang perlu diproses.** Zero-copy berarti data **tidak pernah** masuk ruang pengguna. Bila Anda harus memodifikasi, memfilter, atau memeriksanya, tidak ada yang bisa dihemat.
+- **Bersamaan dengan TLS di jalur yang sama.** Enkripsi menuntut menyentuh setiap byte. kTLS bisa membantu, tetapi menambah ketergantungan pada versi kernel dan konfigurasi yang tidak selalu Anda kendalikan.
+- **Buffer bersama tanpa kepemilikan yang tegas.** Zero-copy berarti dua pihak melihat memori yang sama. Siapa boleh menulis kapan harus jelas — kalau tidak, ini menjadi data race di lapisan yang paling sulit didebug.
+- **Di platform yang tidak mendukungnya secara seragam.** `splice` adalah Linux. Kode yang bergantung padanya tidak portabel; sediakan jalur cadangan yang diuji, bukan yang hanya ada di kode.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| CPU tinggi di `runtime.memmove` | profil CPU | Penyalinan memang mendominasi — di sini zero-copy layak |
+| Zero-copy dipasang, CPU tidak turun | apakah TLS aktif di jalur itu | Enkripsi tetap menyentuh setiap byte |
+| Data korup pada beban tinggi | kepemilikan buffer | Dua pihak menulis ke memori yang sama |
+| Gagal build atau jalan di arsitektur lain | jalur cadangan | Kode Linux-only tanpa fallback teruji |
+| Throughput naik tapi latensi ikut naik | ukuran buffer | Batching terlalu besar demi throughput |
+
+```bash
+# Apakah penyalinan benar-benar mendominasi?
+go tool pprof -top 'http://localhost:6060/debug/pprof/profile?seconds=30' | grep -iE 'memmove|copy'
+
+# Syscall yang benar-benar dipakai -- sendfile/splice akan terlihat di sini
+strace -c -f -p $(pgrep app) 2>&1 | head -20
+
+# Throughput dan CPU per byte
+cat /proc/$(pgrep app)/net/dev 2>/dev/null | head
+perf stat -e cycles,instructions ./app
 ```

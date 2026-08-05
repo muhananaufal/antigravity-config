@@ -1,5 +1,7 @@
 # CPU Cache Optimization (Struct Layout)
 
+> **Berlaku:** Go 1.21+ · x86-64 / arm64 · **Lihat juga:** `concurrency/atomic_lockfree_patterns.md` · `hft_zero_alloc/lock_free_ring_buffer.md` · `runtime_internals/memory_allocator_arenas.md` · `testing_quality/benchmarking_pprof.md`
+
 ## Konsep Utama
 Dalam mikrokontroler dan High-Frequency Trading (HFT), memori RAM beroperasi jauh lebih lambat (ratusan siklus CPU) dibandingkan dengan Cache L1/L2 milik CPU (1-4 siklus). CPU tidak pernah mengambil data dari RAM dalam satuan byte individual, melainkan dalam bongkahan 64-byte yang disebut **Cache Line**.
 
@@ -428,3 +430,35 @@ func BenchmarkRingBufferHFT_ZeroAlloc(b *testing.B) {
 6. **False Sharing dari GC Scavenger**:
    *Edge Case*: Anda mengoptimalkan struct Anda dari False Sharing terhadap goroutine HFT lainnya. Tetapi tiba-tiba pada persentil 99.9%, latensi Anda hancur (tail latency spikes). 
    *Defensive*: Proses *Background Scavenger* (pengembalian memori ke OS) atau *Garbage Collector Marker* Go berjalan di latar, menyapu halaman memori yang bersebelahan dengan struct penting Anda. Inilah mengapa alokasi *Ring Buffer* besar pada awal peluncuran (pre-allocation) harus sangat besar atau sepenuhnya dipisahkan (isolated pages) menggunakan syscall `mmap` langsung, mem-bypass GC sepenuhnya (Off-heap Memory).
+
+## Kapan JANGAN Pakai Ini
+
+- **Sebelum mengukur cache miss.** Menata ulang struct tanpa data adalah tebakan yang membuat kode lebih sulit dibaca dan belum tentu lebih cepat.
+- **Pada beban yang didominasi I/O.** Cache miss tidak relevan bila 99% waktu dihabiskan menunggu jaringan atau disk. Optimasi ini hanya berarti ketika CPU benar-benar menjadi batas.
+- **Struct-of-arrays untuk data yang selalu diakses per-objek.** SoA menang ketika Anda memindai **satu field lintas banyak objek**. Untuk akses per objek, ia justru memperburuk lokalitas dan menambah kerumitan.
+- **Padding di setiap struct.** Padding menaikkan konsumsi memori dan bisa memperburuk hal lain. Pakai hanya pada variabel yang benar-benar diperebutkan antar core, dan buktikan dengan pengukuran.
+- **Mengasumsikan cache line selalu 64 byte.** Apple Silicon memakai 128 byte. Padding yang dihitung untuk 64 tidak menyelesaikan false sharing di sana.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Throughput datar saat core ditambah | `perf c2c` | Beberapa core memperebutkan cache line yang sama |
+| Rasio cache-miss tinggi | `perf stat` | Pola akses memori tidak ramah cache |
+| Latensi berayun tanpa perubahan beban | migrasi antar core | Data tidak lagi di cache lokal setelah goroutine berpindah |
+| Struct besar disalin sering | profil CPU pada `runtime.memmove` | Nilai besar dilewatkan by-value |
+| Optimasi tidak berefek di arm64 | ukuran cache line arsitektur | Padding dihitung untuk 64 byte saja |
+
+```bash
+# Rasio cache-miss: ini angka pertama yang harus dilihat
+perf stat -e cache-misses,cache-references,L1-dcache-load-misses,LLC-load-misses ./app
+
+# Cache line mana yang benar-benar diperebutkan, dan oleh fungsi apa
+perf c2c record -- ./app && perf c2c report --stdio | head -40
+
+# Ukuran dan tata letak struct
+go build -gcflags='-m' ./... 2>&1 | grep -i 'moved to heap' | head
+go vet -structtag ./...
+
+go test -bench=. -benchmem -count=10 -cpu=1,2,4,8 -run='^$' ./...
+```

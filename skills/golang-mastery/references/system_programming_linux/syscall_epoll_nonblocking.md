@@ -1,5 +1,7 @@
 # System Programming Linux: Epoll (Non-blocking I/O) di Go
 
+> **Berlaku:** Go 1.21+ · Linux · `golang.org/x/sys/unix` · **Lihat juga:** `system_programming_linux/unix_domain_socket.md` · `hft_zero_alloc/network_io_zero_copy.md` · `runtime_internals/gmp_scheduler.md` · `system_programming_linux/signal_handling_posix.md`
+
 ## 1. Konsep dan Internals
 
 `epoll` adalah mekanisme I/O event notification paling efisien di Linux. Berbeda dengan mekanisme usang seperti `select` atau `poll` yang memaksa aplikasi untuk memindai (scan) seluruh *File Descriptor* (FD) setiap saat untuk mencari perubahan (kompleksitas memindai state adalah O(N), yang menyebabkan CPU memuncak pada idle connections skala besar), `epoll` menggunakan arsitektur *event-driven* murni di dalam kernel dengan kompleksitas O(1) berdasarkan antrian (queue) yang di-trigger perangkat keras.
@@ -364,4 +366,36 @@ func TestEpoll_RootRequired_PrivilegedPort(t *testing.T) {
 		t.Fatalf("Epoll add failed: %v", err)
 	}
 }
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **Menulis loop epoll sendiri untuk soket biasa di Go.** Runtime Go sudah memakai netpoller berbasis epoll dan mengintegrasikannya dengan penjadwal. Menambah lapisan sendiri biasanya **lebih lambat**, dan goroutine Anda kehilangan integrasi dengan penjadwalan runtime.
+- **epoll untuk jumlah koneksi yang tidak besar.** Model goroutine-per-koneksi lebih sederhana, lebih mudah didebug, dan cukup sampai puluhan ribu koneksi pada perangkat keras biasa.
+- **Mencampur level-triggered dan edge-triggered tanpa memahami bedanya.** ET yang tidak dibaca sampai `EAGAIN` akan menggantung selamanya — tidak akan ada notifikasi berikutnya untuk data yang sudah ada di buffer.
+- **Tanpa menangani `EINTR`.** Syscall bisa terganggu sinyal. Kode yang tidak mengulangi panggilan akan gagal secara acak, dan frekuensinya naik justru saat sistem sibuk.
+- **Di platform selain Linux.** `epoll` tidak ada di macOS (`kqueue`) maupun Windows (IOCP). Kode yang memakainya butuh abstraksi dan jalur alternatif yang benar-benar diuji.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Koneksi menggantung tanpa aktivitas | mode trigger yang dipakai | ET tanpa membaca sampai `EAGAIN` |
+| Galat acak yang naik saat sistem sibuk | penanganan `EINTR` | Syscall terganggu sinyal tidak diulang |
+| File descriptor habis | apakah fd ditutup di semua jalur | Kebocoran fd pada jalur galat |
+| Lebih lambat dari `net` bawaan | benchmark tandingan | Lapisan epoll sendiri melawan netpoller runtime |
+| Gagal build atau jalan di macOS | build tag per platform | Kode Linux-only tanpa abstraksi |
+
+```bash
+# File descriptor yang dipakai proses vs batasnya
+ls /proc/$(pgrep app)/fd | wc -l
+cat /proc/$(pgrep app)/limits | grep 'open files'
+
+# Syscall yang benar-benar dipanggil, dan berapa yang gagal
+strace -c -f -p $(pgrep app) 2>&1 | head -25
+strace -f -e trace=epoll_wait,epoll_ctl -p $(pgrep app) 2>&1 | head -20
+
+# Antrean soket yang menumpuk berarti pembacaan tertinggal
+ss -tln | head
+ss -tin state established | grep -c .
 ```

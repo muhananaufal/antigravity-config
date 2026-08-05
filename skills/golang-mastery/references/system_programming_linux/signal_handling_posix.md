@@ -1,5 +1,7 @@
 # System Programming Linux: Signal Handling (POSIX) di Go
 
+> **Berlaku:** Go 1.21+ · POSIX · **Lihat juga:** `observability_resilience/graceful_shutdown_drain.md` · `system_programming_linux/process_management_exec.md` · `concurrency/context_cancellation_timeout.md` · `system_programming_linux/syscall_epoll_nonblocking.md`
+
 ## 1. Konsep dan Internals
 
 Sinyal (Signals) adalah bentuk Inter-Process Communication (IPC) tertua dan paling dasar di Linux/UNIX. Sinyal digunakan kernel untuk memberitahu sebuah proses tentang *asynchronous events*. 
@@ -316,4 +318,35 @@ func TestSignalToOtherProcess_RootOnly(t *testing.T) {
 		t.Logf("Proses child berhasil diterminate, Exit Code: %d (tergantung implementasi shell/sleep)", state.ExitCode())
 	}
 }
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **`signal.Notify` dengan channel tanpa buffer.** Sinyal yang tiba ketika tidak ada penerima siap akan **hilang tanpa jejak**. Channel WAJIB berbuffer minimal satu.
+- **Berharap menangani `SIGKILL` atau `SIGSTOP`.** Keduanya tidak bisa ditangkap, diblokir, maupun diabaikan. Desain apa pun yang bergantung pada penanganannya salah sejak awal.
+- **Melakukan pekerjaan berat setelah menerima sinyal terminasi.** Di Go penanganannya berjalan di goroutine biasa, tetapi menahan shutdown lebih lama daripada grace period tetap berakhir dengan `SIGKILL` — dan pekerjaannya tetap tidak selesai.
+- **Mengabaikan `SIGPIPE`.** Go menanganinya untuk file descriptor standar, **tidak** untuk fd lain. Menulis ke pipe yang sudah tertutup akan mematikan proses tanpa penjelasan yang jelas di log.
+- **Bergantung pada sinyal untuk menjaga konsistensi data.** Pod bisa mati karena OOM, node hilang, atau kernel panic — tanpa sinyal sama sekali. Konsistensi harus dijamin desain.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Shutdown kadang tidak berjalan | kapasitas channel sinyal | Sinyal hilang karena channel tanpa buffer |
+| Proses mati tanpa pesan apa pun | `SIGPIPE` pada fd non-standar | Menulis ke pipe yang sudah tertutup |
+| Pod selalu berakhir `SIGKILL` | durasi shutdown vs grace period | Pekerjaan shutdown terlalu lama |
+| Data tidak konsisten setelah node hilang | asumsi tentang sinyal | Konsistensi bergantung pada shutdown yang sopan |
+| Anak proses tetap hidup setelah induk mati | penerusan sinyal ke anak | Sinyal tidak diteruskan ke proses grup |
+
+```bash
+# Sinyal yang diblokir, ditangkap, dan diabaikan proses (format bitmask heksadesimal)
+grep -E 'SigBlk|SigIgn|SigCgt' /proc/$(pgrep app)/status
+
+# Pod yang berakhir dengan SIGKILL, bukan shutdown bersih
+kubectl get events --field-selector reason=Killing --sort-by=.lastTimestamp | tail
+kubectl get pod <pod> -o jsonpath='{.status.containerStatuses[0].lastState.terminated.exitCode}'
+# exit code 137 = 128+9 (SIGKILL), 143 = 128+15 (SIGTERM)
+
+# Waktu dari SIGTERM sampai proses benar-benar keluar
+kubectl logs <pod> --previous | grep -iE 'sigterm|shutdown'
 ```

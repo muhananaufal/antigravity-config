@@ -1,5 +1,7 @@
 # System Programming Linux: Cgroups v2 & Namespaces di Go
 
+> **Berlaku:** Go 1.21+ · Linux cgroup v2 · **Lihat juga:** `runtime_internals/gmp_scheduler.md` · `runtime_internals/gc_mark_sweep_internals.md` · `devops_control_planes/docker_container_go.md` · `system_programming_linux/seccomp_bpf_sandbox.md`
+
 ## 1. Konsep dan Internals
 
 Container (seperti Docker atau Podman) sebenarnya bukanlah entitas kelas satu (first-class citizen) di dalam kernel Linux. Container dibangun dari dua pilar utama kernel: **Namespaces** (untuk isolasi visibilitas) dan **Control Groups / Cgroups** (untuk pembatasan sumber daya).
@@ -341,4 +343,41 @@ func TestCgroupManager_InvalidWrite(t *testing.T) {
 		t.Error("Diharapkan gagal memasukkan PID karena write permissions mock, tapi sukses")
 	}
 }
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **Membaca `/proc/meminfo` atau `runtime.NumCPU()` di dalam container.** Keduanya melaporkan angka **host**, bukan limit container. Ini penyebab paling umum `GOMAXPROCS` yang salah dan `OOMKilled` yang membingungkan.
+- **Menulis ke cgroup langsung dari aplikasi.** Itu wilayah orkestrator. Perubahan yang Anda tulis akan ditimpa pada rekonsiliasi berikutnya, dan sementara itu perilakunya tidak bisa direproduksi.
+- **Mengasumsikan cgroup v1.** Distribusi modern memakai v2 dengan hierarki, path, dan nama berkas yang berbeda (`cpu.max`, bukan `cpu.cfs_quota_us`). Kode yang membaca satu format akan diam-diam gagal di format lain.
+- **Namespace sebagai batas keamanan yang memadai.** Container bukan mesin virtual. Tanpa seccomp, AppArmor/SELinux, dan pembatasan kapabilitas, permukaan serangannya adalah seluruh antarmuka kernel.
+- **Menyetel limit memori tanpa `GOMEMLIMIT`.** Limit cgroup membunuh proses; `GOMEMLIMIT` membuat GC bekerja lebih keras sebelum itu terjadi. Keduanya diperlukan, dan `GOMEMLIMIT` harus di bawah limit cgroup.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| p99 melonjak padahal CPU tidak penuh | `cpu.stat` `nr_throttled` | Container di-throttle oleh kuota cgroup |
+| `OOMKilled` tanpa kebocoran memori | `memory.max` vs `GOMEMLIMIT` | GC tidak tahu batasnya |
+| `GOMAXPROCS` jauh di atas kuota | jumlah CPU host vs `cpu.max` | Angka dibaca dari host |
+| Perilaku berbeda antar node | versi cgroup di tiap node | Campuran v1 dan v2 |
+| Container bisa melakukan hal tak terduga | kapabilitas dan profil seccomp | Namespace dianggap cukup sebagai isolasi |
+
+```bash
+# Limit yang SEBENARNYA berlaku untuk container ini
+cat /sys/fs/cgroup/cpu.max        # format: "kuota periode", atau "max"
+cat /sys/fs/cgroup/memory.max
+cat /sys/fs/cgroup/memory.current
+
+# Throttling: nr_throttled yang naik menjelaskan "lambat padahal CPU tidak penuh"
+grep -E 'nr_periods|nr_throttled|throttled_usec' /sys/fs/cgroup/cpu.stat
+
+# Peristiwa OOM di level cgroup
+grep -E 'oom_kill|oom' /sys/fs/cgroup/memory.events
+
+# Versi cgroup yang dipakai node
+stat -fc %T /sys/fs/cgroup    # cgroup2fs = v2, tmpfs = v1
+
+# Nilai yang benar-benar dipakai runtime Go
+kubectl exec <pod> -- env | grep -E 'GOMAXPROCS|GOMEMLIMIT'
 ```

@@ -1,5 +1,7 @@
 # Lock-Free Ring Buffer (MPSC / SPSC)
 
+> **Berlaku:** Go 1.21+ · `sync/atomic` · **Lihat juga:** `concurrency/atomic_lockfree_patterns.md` · `hft_zero_alloc/cpu_cache_optimization.md` · `concurrency/channel_patterns_pipelines.md` · `concurrency/data_race_detection.md`
+
 ## Konsep Utama
 Dalam sistem berbasis peristiwa dengan latensi rendah (seperti pemrosesan paket jaringan HFT atau aliran kursor *Orderbook*), penggunaan `channel` bawaan Go dan `sync.Mutex` merupakan ancaman serius. `Channel` Go menggunakan *locking* berbiaya tinggi di bawah permukaannya dan memicu penundaan penjadwalan OS (*context switching*) tatkala Goroutine terblokir (*blocked*).
 
@@ -478,3 +480,32 @@ func TestMPSCRingBuffer_SlowConsumer(t *testing.T) {
    *Edge Case*: Menggunakan tipe boolean (1 byte) atau `int32` (4 byte) tak teratur di dalam struct `TickEvent` memicu *compiler padding* tersembunyi (bytes kosong di antara field) dan penalti siklus baca/tulis memori.
    *Defensive*: Kelompokkan *fields* dengan ukuran dari yang paling besar (8 byte) ke yang terkecil, memastikan ukuran struct adalah kelipatan pasti 8 byte (atau 64 byte jika memungkinkan), yang akan mereduksi kemungkinan False Sharing pada elemen array secara dramatis.
 
+## Kapan JANGAN Pakai Ini
+
+- **Bila channel sudah cukup.** Channel Go sudah dioptimalkan dengan baik dan terintegrasi dengan penjadwal. Ring buffer lock-free hanya menang pada jalur mikrodetik yang benar-benar terukur — dan Anda harus punya angkanya sebelum memulai.
+- **Menulis implementasi sendiri tanpa uji stres dan pemahaman model memori Go.** Bug lock-free tidak deterministik: ia muncul sekali dalam sejuta iterasi, di mesin produksi, dan tidak bisa direproduksi di laptop.
+- **Tanpa memutuskan perilaku saat penuh.** Menjatuhkan, memblokir, atau menimpa adalah tiga perilaku dengan konsekuensi bisnis yang sama sekali berbeda. Memilihnya secara implisit adalah kesalahan desain, bukan detail implementasi.
+- **Multi-producer multi-consumer padahal single-producer cukup.** SPSC jauh lebih sederhana, lebih cepat, dan jauh lebih mudah dibuktikan benar.
+- **Tanpa padding cache line antara indeks baca dan tulis.** False sharing bisa membuat ring buffer lock-free **lebih lambat** daripada mutex biasa.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Throughput tidak naik saat core ditambah | rasio cache-miss | False sharing antara indeks baca dan tulis |
+| Data hilang tanpa jejak | perilaku saat buffer penuh | Strategi penuh adalah "jatuhkan" tanpa metrik |
+| Kerusakan data yang tidak bisa direproduksi | jumlah produser/konsumen nyata | Implementasi SPSC dipakai untuk MPMC |
+| CPU tinggi tanpa kemajuan | profil CPU pada `atomic` | Spin loop tanpa backoff |
+| Lebih lambat daripada channel | benchmark tandingan | Kompleksitas tanpa manfaat pada beban ini |
+
+```bash
+go test -race -count=50 -cpu=1,2,4,8 ./...
+go test -bench='BenchmarkRing|BenchmarkChannel' -benchmem -count=10 -run='^$' ./...
+
+# False sharing terlihat sebagai rasio cache-miss yang tinggi (Linux)
+perf stat -e cache-misses,cache-references,LLC-load-misses ./app
+perf c2c record -- ./app && perf c2c report --stdio | head -40
+
+# Berapa banyak yang dijatuhkan saat penuh -- WAJIB jadi metrik
+curl -s localhost:9090/metrics | grep -E 'ring_(dropped|full|depth)'
+```

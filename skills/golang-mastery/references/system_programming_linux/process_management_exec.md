@@ -1,5 +1,7 @@
 # System Programming Linux: Process Management (Exec/Fork Patterns) di Go
 
+> **Berlaku:** Go 1.21+ · `os/exec` · **Lihat juga:** `system_programming_linux/signal_handling_posix.md` · `security_owasp/owasp_input_validation.md` · `system_programming_linux/cgroups_v2_namespaces.md` · `cli_tooling/cobra_command_architecture.md`
+
 ## 1. Konsep dan Internals
 
 Manajemen proses di Linux berakar pada dua *system call* historis: `fork()` dan `execve()`.
@@ -344,4 +346,36 @@ func TestRunCommand_OOMScore(t *testing.T) {
 	cmd.Process.Kill()
 	cmd.Wait()
 }
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **`exec.Command("sh", "-c", ...)` dengan string yang disusun dari input.** Itu command injection, tanpa pengecualian. Pakai `exec.Command(biner, arg1, arg2)` yang tidak melewati shell sama sekali.
+- **Menjalankan proses anak tanpa `context` dan timeout.** Anak yang menggantung menahan file descriptor, memori, dan slot proses selamanya — dan tidak akan ada yang menyadarinya sampai batasnya habis.
+- **Tanpa membaca stdout/stderr anak.** Pipe yang penuh membuat proses anak **terblokir menulis**, dan dari luar itu tampak seperti anak yang menggantung tanpa sebab.
+- **Tanpa memastikan anak mati ketika induk mati.** Proses yatim akan terus berjalan setelah pod dianggap selesai. Di Linux, `Pdeathsig` atau proses grup yang menjawabnya.
+- **Menjalankan biner dari path yang bisa ditulis pihak lain.** Itu jalur eskalasi hak akses yang lengkap: siapa pun yang bisa menulis ke direktori itu bisa menjalankan kode sebagai proses Anda.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Proses anak menumpuk | jumlah proses per pod | Anak tidak pernah di-reap atau tidak punya timeout |
+| Anak tampak menggantung tanpa sebab | apakah stdout/stderr dibaca | Pipe penuh; anak terblokir menulis |
+| Proses zombie di `ps` | apakah `Wait()` dipanggil | Status anak tidak pernah diambil |
+| Proses tetap hidup setelah pod dihapus | `Pdeathsig` atau proses grup | Anak menjadi yatim |
+| Perintah dijalankan dengan argumen tak terduga | apakah lewat `sh -c` | Command injection |
+
+```bash
+# Proses anak dan yang zombie
+ps -ef --forest | grep -A5 "$(pgrep -o app)"
+ps -eo pid,ppid,stat,cmd | awk '$3 ~ /^Z/' | head
+
+# Penggunaan shell dan perintah eksternal di kode
+grep -rn 'exec.Command' --include='*.go' . | grep -v '_test.go'
+grep -rn '"sh", "-c"\|"bash", "-c"' --include='*.go' .
+gosec -include=G204 ./...
+
+# Berapa banyak proses berjalan di dalam container
+kubectl exec <pod> -- ps -ef | wc -l
 ```

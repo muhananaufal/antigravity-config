@@ -1,5 +1,7 @@
 # Limit Orderbook Matching Engine
 
+> **Berlaku:** Go 1.21+ · **Lihat juga:** `hft_zero_alloc/ticker_feed_parser.md` · `hft_zero_alloc/zero_allocation_patterns.md` · `db_sqlc/acid_transactions_isolation.md` · `distributed_patterns_resilience/idempotency_key_engine.md`
+
 ## Konsep Utama
 Dalam High-Frequency Trading (HFT), *Limit Orderbook* (LOB) harus beroperasi dengan latensi deterministik, umumnya dalam hitungan mikrodetik (µs) hingga nanodetik (ns). Alokasi memori dinamis di *heap* (menggunakan `new` atau `make` saat runtime) sangat dihindari karena akan memicu *Garbage Collection* (GC) pauses yang menghancurkan latensi.
 
@@ -423,3 +425,34 @@ type Order struct {
 3. **Crossed Orderbook State**:
    *Edge Case*: Terkadang, akibat race condition dari multiple feed, mesin mungkin menerima State di mana `BestBid >= BestAsk`. Ini disebut "Crossed Book" dan tidak mungkin terjadi pada pasar kontinu.
    *Defensive*: Engine harus mendeteksi secara implisit jika order bersilang, ia segera mengawali fase `Trade/Execution`. Namun, jika buku *resting* diinisialisasi secara silang, sistem harus memasuki fase *Auction/Halt* dan tidak menyiarkannya sebagai *Live Orders*.
+
+## Kapan JANGAN Pakai Ini
+
+- **Order book di memori tanpa jurnal yang durabel.** Restart berarti kehilangan seluruh keadaan pasar. Setiap perubahan WAJIB tercatat sebelum diakui, dan pemulihan harus diuji secara berkala — bukan diasumsikan berhasil.
+- **Matching engine multi-goroutine untuk satu instrumen.** Determinisme dan urutan adalah syarat kebenaran di sini. Satu goroutine per instrumen jauh lebih mudah dibuktikan benar, dan paralelisme diperoleh dari jumlah instrumen.
+- **Floating point untuk harga dan kuantitas.** Kesalahan pembulatan pada uang tidak bisa diterima dan tidak bisa dijelaskan ke regulator. Integer dengan skala tetap yang benar.
+- **Struktur data generik untuk price level.** Peta tersortir generik menambah alokasi dan indireksi di jalur paling panas. Di sini struktur khusus memang layak ditulis sendiri.
+- **Tanpa uji replay deterministik.** Bug matching hanya bisa dibuktikan dan diperbaiki dengan memutar ulang urutan pesanan yang persis sama. Tanpa itu, setiap laporan bug menjadi perdebatan.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Keadaan hilang setelah restart | jurnal dan prosedur pemulihan | Tidak ada durabilitas, atau pemulihan tidak pernah diuji |
+| Hasil matching berbeda saat diputar ulang | jumlah goroutine per instrumen | Nondeterminisme masuk lewat konkurensi |
+| Selisih pembulatan pada penyelesaian | tipe data harga | Floating point dipakai untuk uang |
+| Latensi p99 melonjak saat kedalaman book tinggi | struktur data price level | Kompleksitas operasi tidak konstan |
+| Pesanan diproses di luar urutan | jaminan urutan feed masuk | Urutan tidak ditegakkan sebelum matching |
+
+```bash
+# Replay deterministik: hasil dua kali putar WAJIB identik
+./engine --replay jurnal.log --out hasil1.json
+./engine --replay jurnal.log --out hasil2.json
+diff hasil1.json hasil2.json && echo "deterministik"
+
+# Latensi matching per tahap
+curl -s localhost:9090/metrics | grep -E 'match_(latency|depth|orders)'
+
+go test -bench=BenchmarkMatch -benchmem -count=10 -run='^$' ./...
+go test -race -count=10 ./...
+```

@@ -1,5 +1,7 @@
 # System Programming Linux: Inotify (File System Watcher) di Go
 
+> **Berlaku:** Go 1.21+ · Linux inotify · `fsnotify/fsnotify` · **Lihat juga:** `arch_patterns/config_management.md` · `cli_tooling/config_precedence_viper.md` · `system_programming_linux/syscall_epoll_nonblocking.md` · `system_programming_linux/unix_domain_socket.md`
+
 ## 1. Konsep dan Internals
 
 `inotify` adalah subsistem kernel Linux yang memantau sistem file dan mengirimkan notifikasi (event) ke aplikasi setiap kali terjadi perubahan (seperti file dibuat, diubah, dihapus, atau dipindah). Di Go, library standar standar yang menjadi *de-facto* adalah `github.com/fsnotify/fsnotify`, yang merupakan *wrapper* lintas *platform* (menggunakan `inotify` di Linux, `kqueue` di BSD/macOS, dan `ReadDirectoryChangesW` di Windows). 
@@ -268,4 +270,34 @@ func TestDebouncedWatcher(t *testing.T) {
 		t.Errorf("Expected debounce to yield 1 event callback, got %d", finalCount)
 	}
 }
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **Untuk direktori dengan sangat banyak berkas.** Setiap watch memakan memori kernel dan tunduk pada `fs.inotify.max_user_watches`. Melewatinya menghasilkan galat yang tidak jelas, biasanya di lingkungan yang berbeda dari tempat Anda mengujinya.
+- **Mengandalkan inotify untuk keandalan.** Antrean event bisa meluap (`IN_Q_OVERFLOW`) dan event **hilang**. Pemindaian periodik sebagai cadangan bukan opsional bila kebenarannya penting.
+- **Pada berkas yang diganti secara atomik.** Editor dan orkestrator menulis ke berkas sementara lalu `rename`. Watch pada inode lama tetap menunjuk ke berkas yang sudah tidak dipakai — dan tidak ada event berikutnya yang datang. Pantau **direktorinya**.
+- **Melewati NFS atau mount jaringan.** Perubahan yang dilakukan dari host lain tidak menghasilkan event sama sekali.
+- **Sebagai mekanisme muat-ulang konfigurasi tanpa validasi.** Berkas yang sedang setengah tertulis akan terbaca. Validasi dulu, terapkan hanya bila valid, dan pertahankan konfigurasi lama bila tidak.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Perubahan berkas tidak terdeteksi | apakah watch pada berkas atau direktori | Berkas diganti atomik; inode lama sudah tidak dipakai |
+| Watch gagal dibuat | `max_user_watches` vs jumlah watch | Batas kernel terlampaui |
+| Sebagian event hilang saat perubahan massal | `IN_Q_OVERFLOW` | Antrean meluap; butuh pemindaian cadangan |
+| Konfigurasi rusak setelah muat ulang | validasi sebelum penerapan | Berkas terbaca saat setengah tertulis |
+| Bekerja lokal, gagal di produksi | jenis mount | inotify tidak bekerja lintas mount jaringan |
+
+```bash
+# Batas dan pemakaian watch
+cat /proc/sys/fs/inotify/max_user_watches
+find /proc/*/fd -lname anon_inode:inotify 2>/dev/null | wc -l
+
+# ConfigMap di Kubernetes diganti lewat symlink -- pantau direktorinya
+kubectl exec <pod> -- ls -la /etc/config/
+
+# Muat ulang yang gagal validasi harus terlihat di log, bukan diam
+kubectl logs -l app=api --since=1h | grep -iE 'muat ulang|reload|config invalid'
 ```

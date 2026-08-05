@@ -1,5 +1,7 @@
 # System Programming Linux: Seccomp-BPF Sandboxing di Go
 
+> **Berlaku:** Go 1.21+ · Linux seccomp-bpf · **Lihat juga:** `system_programming_linux/cgroups_v2_namespaces.md` · `cybersecurity_zerotrust/network_security_scanning.md` · `system_programming_linux/process_management_exec.md` · `devops_control_planes/docker_container_go.md`
+
 ## 1. Konsep dan Internals
 
 **Seccomp (Secure Computing Mode)** adalah fitur kemanan krusial di kernel Linux yang membatasi *system calls* (syscalls) apa saja yang boleh dieksekusi oleh sebuah proses. Jika proses (*attacker* atau kode rawan) mencoba memanggil syscall yang diblokir, kernel akan langsung membunuhnya (`SIGSYS`).
@@ -286,4 +288,35 @@ func TestSeccomp_ContextCancellation(t *testing.T) {
 		t.Errorf("Unexpected error message: %v", err)
 	}
 }
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **Profil yang disusun manual tanpa merekam syscall yang benar-benar dipakai.** Satu syscall yang terlewat berarti crash di jalur yang jarang dilewati — dan jalur yang jarang dilewati biasanya adalah jalur penanganan galat, yang justru dipakai saat keadaan sedang buruk.
+- **Seccomp sebagai satu-satunya lapisan.** Ia membatasi **syscall mana** yang boleh dipanggil, bukan **apa** yang bisa dilakukan dengan syscall yang diizinkan. `open` yang diizinkan tetap bisa membuka berkas apa pun yang izinnya memungkinkan.
+- **Satu profil untuk semua layanan.** Syscall yang dibutuhkan berbeda per layanan. Profil yang cukup longgar untuk semuanya tidak melindungi satu pun secara berarti.
+- **Menambahkan seccomp tanpa uji beban.** Beberapa syscall hanya muncul di bawah tekanan — `madvise`, `membarrier`, `futex` dengan operasi tertentu. Profil yang lolos uji fungsional bisa gagal di produksi.
+- **`SCMP_ACT_KILL` tanpa periode audit lebih dulu.** Jalankan dengan `SCMP_ACT_LOG` untuk mengumpulkan syscall nyata dari trafik nyata, baru perketat.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Proses mati di jalur yang jarang dipakai | log audit seccomp | Ada syscall yang tidak masuk profil |
+| Crash muncul hanya di bawah beban tinggi | syscall yang dipanggil saat sibuk | Profil disusun dari uji fungsional saja |
+| Profil sama untuk semua layanan | daftar syscall per layanan | Profil terlalu longgar untuk melindungi |
+| Tidak ada temuan seccomp sama sekali | apakah profil benar-benar terpasang | Profil tidak aktif |
+| Container tetap bisa melakukan hal berbahaya | kapabilitas dan mount | Seccomp dianggap cukup sendirian |
+
+```bash
+# Profil seccomp yang BENAR-BENAR terpasang pada pod
+kubectl get pod <pod> -o jsonpath='{.spec.securityContext.seccompProfile}{"\n"}'
+grep Seccomp /proc/$(pgrep app)/status   # 0=nonaktif 1=strict 2=filter
+
+# Syscall yang ditolak (butuh audit log kernel)
+journalctl -k --since '1 hour ago' | grep -i seccomp | head -20
+ausearch -m SECCOMP -ts recent 2>/dev/null | head -20
+
+# Rekam syscall nyata sebagai dasar penyusunan profil
+strace -c -f -p $(pgrep app) 2>&1 | tail -40
 ```

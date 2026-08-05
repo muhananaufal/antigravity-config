@@ -1,5 +1,7 @@
 # Memory Arena & Batch Allocation
 
+> **Berlaku:** Go 1.21+ · **Lihat juga:** `runtime_internals/memory_allocator_arenas.md` · `hft_zero_alloc/zero_allocation_patterns.md` · `runtime_internals/gc_mark_sweep_internals.md` · `concurrency/sync_primitives_deep.md`
+
 ## Konsep Utama
 Dalam ekosistem Go, pembuatan objek berumur sangat pendek (seperti *Network Packets*, *Trade Events*, atau *Order Book Deltas*) secara persisten menciptakan tekanan (*pressure*) pada *Garbage Collector* (GC). Solusi standar Go seperti `sync.Pool` dapat mengurangi alokasi, namun `sync.Pool` memiliki kelemahan bagi High-Frequency Trading (HFT): ia tunduk pada belas kasihan GC. Saat GC menembakkan pembersihan (*mark and sweep*), setiap elemen tak terpakai di `sync.Pool` dapat dihapus paksa. Akibatnya, pada puncak aktivitas *trading* (ketika Anda paling membutuhkannya), *pool* bisa saja menjadi kosong dan terpaksa memohon memori baru ke OS kernel secara mendadak.
 
@@ -345,3 +347,32 @@ func (a *TransactionArena) FreeCrossThread(tx *TradeTransaction) {
 5. **Garbage Collector Scanning Pointers (The Silent Killer)**:
    *Edge Case*: Meski Anda sudah Zero Alloc dengan Array of Struct, jika di dalam Struct tersebut terdapat elemen pointer (contoh: `TraderName *string`, `[]byte`, atau Interface), GC Go *tetap* akan melakukan pemindaian (Scan) memori secara rekursif ke dalam Array berukuran raksasa itu setiap kali siklus GC berjalan.
    *Defensive*: Gunakan struct murni **tanpa pointer** (100% Value Types / Value Semantics). Konversikan tipe `string` ke array statis `[32]byte`, atau kelola object string terpisah menggunakan Integer Offset/ID. Jika struct 100% bebas pointer, GC Go secara cerdas menandai *slice backing array* Arena ini sebagai `noscan` dan mengabaikannya sepenuhnya dalam fase *mark*, membuat GC *pause time* hampir nihil!
+
+## Kapan JANGAN Pakai Ini
+
+- **Untuk objek yang umurnya tidak seragam.** Seluruh arena dibebaskan sekaligus. Satu objek yang hidup lebih lama menahan seluruh arena — dan itu tampak sebagai kebocoran memori yang membingungkan.
+- **Mengembalikan pointer ke memori arena keluar dari cakupan hidupnya.** Itu use-after-free dengan nama yang lebih sopan. Kerusakannya tidak deterministik dan muncul jauh dari penyebabnya.
+- **Paket `arena` eksperimental Go di produksi.** Ia di balik `GOEXPERIMENT`, tidak tercakup jaminan kompatibilitas Go 1, dan bisa dihapus tanpa jalur migrasi.
+- **Bila `sync.Pool` sudah cukup.** Pool memberi sebagian besar manfaatnya tanpa manajemen umur manual dan tanpa kelas bug baru.
+- **Arena berukuran tetap untuk beban yang ukurannya tidak diketahui.** Ia akan terlalu besar (memori terbuang) atau terlalu kecil (jatuh ke heap tanpa ada yang menyadari, sehingga optimasinya diam-diam tidak berlaku).
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Memori naik dan tidak turun setelah batch selesai | umur objek di arena | Satu objek menahan seluruh arena |
+| Crash acak jauh dari kode arena | pointer yang keluar dari cakupan | Use-after-free |
+| Alokasi heap tetap tinggi meski arena dipakai | apakah arena kehabisan ruang | Fallback ke heap terjadi diam-diam |
+| Manfaat hilang setelah upgrade Go | status `GOEXPERIMENT` | Fitur eksperimental berubah atau dihapus |
+| Arena tidak lebih cepat dari `sync.Pool` | benchmark tandingan | Kompleksitas tanpa keuntungan |
+
+```bash
+go test -bench='BenchmarkArena|BenchmarkPool' -benchmem -count=10 -run='^$' ./...
+
+go tool pprof -sample_index=inuse_space -top http://localhost:6060/debug/pprof/heap
+go tool pprof -sample_index=alloc_space -top 'http://localhost:6060/debug/pprof/allocs?seconds=30'
+
+# Kalau alokasi heap tetap tinggi, arena diam-diam tidak dipakai
+GODEBUG=gctrace=1 ./app 2>&1 | head -20
+go env GOEXPERIMENT
+```

@@ -1,5 +1,7 @@
 # System Programming Linux: Unix Domain Sockets di Go
 
+> **Berlaku:** Go 1.21+ · Linux/Unix · **Lihat juga:** `system_programming_linux/syscall_epoll_nonblocking.md` · `hft_zero_alloc/network_io_zero_copy.md` · `devops_control_planes/docker_container_go.md` · `cybersecurity_zerotrust/spiffe_spire_workload.md`
+
 ## 1. Konsep dan Internals
 
 Unix Domain Sockets (UDS) adalah mekanisme Inter-Process Communication (IPC) standar POSIX yang memungkinkan proses-proses di dalam satu sistem operasi (host yang sama) untuk saling berkomunikasi. Secara konseptual, UDS beroperasi layaknya *network sockets* (TCP/UDP), namun melewati keseluruhan lapisan protokol jaringan (network stack) seperti IP routing, TCP checksum, dan packet header serialization. Hal ini membuat UDS jauh lebih efisien, memiliki latensi lebih rendah, dan *throughput* lebih tinggi dibandingkan menggunakan koneksi `localhost` (127.0.0.1).
@@ -270,4 +272,35 @@ func TestUnixDomainSocketCommunication(t *testing.T) {
 		t.Errorf("Expected '%s', got '%s'", expected, actual)
 	}
 }
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **Untuk komunikasi antar host.** UDS hanya bekerja di mesin yang sama. Setiap desain yang mungkin dipisah ke node berbeda nanti akan memaksa penulisan ulang lapisan transport.
+- **Tanpa memperhatikan izin berkas socket.** Socket dengan izin `0777` bisa dihubungi proses mana pun di host itu — termasuk proses yang bukan milik Anda. Izin berkas **adalah** kontrol aksesnya.
+- **Di direktori yang tidak dibersihkan.** Berkas socket yang tertinggal setelah crash membuat `bind` berikutnya gagal dengan "address already in use" yang membingungkan karena tidak ada proses yang memakainya.
+- **Di container tanpa volume bersama yang direncanakan.** Socket harus berada di volume yang dilihat kedua container. Ini keputusan manifest, bukan keputusan kode, dan mudah terlewat.
+- **Mengasumsikan `SOCK_DGRAM` punya jaminan sama dengan `SOCK_STREAM`.** Datagram UDS bisa **menjatuhkan pesan** ketika buffer penerima penuh, tanpa galat di sisi pengirim.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| `bind: address already in use` tanpa proses pemakai | berkas socket yang tertinggal | Tidak dibersihkan saat start atau shutdown |
+| Proses lain bisa menghubungi socket | izin berkas socket | Izin terlalu longgar |
+| Pesan hilang tanpa galat | tipe socket | `SOCK_DGRAM` menjatuhkan saat buffer penuh |
+| Sidecar tidak bisa terhubung | volume mount di manifest | Socket tidak berada di volume bersama |
+| Perlu dipindah ke host lain | jenis transport | UDS mengunci komunikasi ke satu mesin |
+
+```bash
+# Socket yang ada beserta izinnya -- izin ADALAH kontrol aksesnya
+ls -la /run/app/
+ss -xl | head -20
+
+# Siapa yang benar-benar terhubung ke socket ini
+ss -xp | grep '/run/app/api.sock'
+lsof /run/app/api.sock 2>/dev/null
+
+# Volume bersama di manifest -- socket harus terlihat kedua container
+kubectl get pod <pod> -o jsonpath='{.spec.containers[*].volumeMounts}' | jq
 ```

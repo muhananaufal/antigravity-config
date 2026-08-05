@@ -1,5 +1,7 @@
 # Zero-Allocation Patterns in Go
 
+> **Berlaku:** Go 1.21+ · **Lihat juga:** `runtime_internals/escape_analysis_pprof.md` · `runtime_internals/gc_mark_sweep_internals.md` · `testing_quality/benchmarking_pprof.md` · `hft_zero_alloc/memory_arena_batch_alloc.md`
+
 ## Konsep Utama
 Dalam pemrograman Go untuk sistem High-Frequency Trading (HFT), *Garbage Collector* (GC) adalah musuh terbesar. Setiap objek yang lolos analisis kompilator (*escape analysis*) dan dialokasikan ke *heap* (melalui `new`, `make`, atau mengambil alamat pointer dari nilai lokal) pada akhirnya harus dipindai dan dibebaskan oleh GC. Proses ini menghentikan sementara eksekusi kode ("Stop The World" phase 1 & 2), yang dapat memakan waktu puluhan hingga ratusan mikrodetik, sebuah jeda yang berakibat hilangnya peluang *trading*.
 
@@ -381,3 +383,29 @@ func ProcessBatchFast(events []TickerEvent) {
    *Edge Case*: Mengukur latensi mikrodetik di *hot path* dengan memanggil `time.Now()` sering sekali. Setiap panggilan `time.Now()` bisa memicu *vDSO* atau *syscall* yang memakan puluhan nanodetik.
    *Defensive*: Panggil waktu OS sesedikit mungkin. Gunakan pembacaan siklus CPU perangkat keras langsung melalui Assembly `RDTSC` (Time Stamp Counter) untuk pengukuran *micro-benchmarking* dengan akurasi subsiklus tanpa memanggil fungsi penunjuk waktu standar milik OS.
 
+## Kapan JANGAN Pakai Ini
+
+- **Di kode yang bukan jalur panas.** Nol alokasi dibayar dengan keterbacaan dan risiko bug. Fungsi yang berjalan sepuluh kali per menit tidak akan berubah latensinya sedikit pun.
+- **Sebelum profil menunjukkan alokasi sebagai penyebab.** Bila penyempitannya I/O, lock, atau syscall, nol alokasi tidak mengubah apa pun — dan Anda sudah membayar seluruh ongkos keterbacaannya.
+- **Dengan `sync.Pool` untuk objek berukuran sangat beragam.** Satu buffer besar yang pernah masuk pool akan tertahan di sana dan membuat RSS tinggi permanen. Buang objek yang melewati ambang ukuran, jangan kembalikan.
+- **Memakai `unsafe` untuk menghindari satu salinan tanpa angka benchmark.** Ia menghapus jaminan keamanan memori Go demi keuntungan yang belum terbukti ada.
+- **Mengejar nol alokasi sementara jalur yang sama masih memakai `interface{}`.** Setiap nilai yang masuk interface bisa memaksa alokasi, dan satu titik itu sering menghapus seluruh usaha di sekitarnya.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| CPU terpakai di `runtime.mallocgc` | profil CPU | Laju alokasi tinggi di jalur panas |
+| GC berjalan sangat sering | `gctrace` | Sampah dihasilkan lebih cepat daripada dibersihkan |
+| RSS tinggi meski heap live kecil | ukuran objek di `sync.Pool` | Pool menahan objek besar |
+| Benchmark nol alokasi, produksi tetap lambat | kontribusi fungsi itu ke total | Yang dioptimalkan bukan penyempitan |
+| Alokasi muncul di tempat tak terduga | `-gcflags=-m` pada jalur itu | Nilai escape lewat interface atau closure |
+
+```bash
+go test -bench=. -benchmem -count=10 -run='^$' ./... > baru.txt
+benchstat lama.txt baru.txt
+
+go build -gcflags='-m' ./... 2>&1 | grep 'escapes to heap' | head -30
+go tool pprof -sample_index=alloc_objects -top 'http://localhost:6060/debug/pprof/allocs?seconds=30'
+GODEBUG=gctrace=1 ./app 2>&1 | head -20
+```
