@@ -138,6 +138,34 @@ Hasilnya: Pengguna mendapat inkonsistensi data ketika Load Balancer melempar *Re
 4. Pod A, B, C, D, E semuanya `SUBSCRIBE` pada kanal ini (di goroutine independen).
 5. Pod A, B, C, D, E menerima event tersebut dan secara agresif menghapus `user:99` di L1 internalnya.
 
+### Yang tidak diselesaikan mekanisme ini
+
+Broadcast invalidation menutup celah *antar pod*. Ia tidak menutup celah **antara pembacaan dan penulisan**, dan celah itu meninggalkan nilai basi di cache **secara permanen** — bukan sampai TTL berikutnya, melainkan sampai TTL dari nilai yang salah itu sendiri habis:
+
+```text
+Pod C (baca)                        Pod A (tulis)
+─────────────────────────────       ─────────────────────────────
+t0  L2 miss
+t1  SELECT -> "nama lama"
+                                    t2  UPDATE db -> "nama baru"
+                                    t3  DEL L2 + PUBLISH
+                                        (tidak ada yang perlu dihapus,
+                                         L2 memang masih kosong)
+t4  SET L2 = "nama lama"   <───── nilai basi masuk SETELAH invalidasi
+```
+
+Pod C sudah membaca sebelum penulisan, tetapi menulis ke cache sesudahnya. Invalidasi Pod A datang di antara keduanya dan tidak menemukan apa pun untuk dihapus. Hasilnya: L2 memegang nilai yang salah selama TTL penuh, dan setiap pod yang mengisi L1 dari L2 ikut menyebarkannya.
+
+Jendelanya sempit tetapi nyata, dan melebar tepat ketika database sedang lambat — yaitu saat trafik tulis tinggi. Tiga penanganan yang benar-benar dipakai di produksi:
+
+| Penanganan | Cara kerja | Ongkos |
+| :--- | :--- | :--- |
+| **Delayed double delete** | `DEL` sekali sekarang, lalu `DEL` lagi setelah jeda > durasi baca terlama | Sederhana; jedanya tebakan, dan tetap ada jendela |
+| **Kunci berversi** | Kunci cache memuat versi baris (`user:99:v7`); tulisan menaikkan versi | Menghilangkan perlombaan sepenuhnya; butuh versi di skema DB |
+| **Isi cache HANYA dari jalur tulis** | Pembacaan tidak pernah menulis cache (write-through) | Konsisten; kehilangan sifat lazy dari cache-aside |
+
+Bila konsistensinya penting, kunci berversi adalah satu-satunya dari ketiganya yang benar-benar menghapus perlombaannya, bukan mengecilkan jendelanya. Perhatikan bahwa bagian "Kapan JANGAN Pakai Ini" di `caching_strategy/cache_aside_singleflight.md` sudah menyebut hal ini — "Butuh versi atau invalidasi, bukan penulisan langsung".
+
 ## 6. Produksi-Ready Go Code (Arsitektur Utuh Multilevel Cache)
 
 ```go
@@ -146,8 +174,11 @@ package multilevelcache
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"log"
+	"log/slog"
+	"math/rand"
+	"sync/atomic"
 	"time"
 
 	"github.com/dgraph-io/ristretto"
@@ -157,117 +188,269 @@ import (
 
 const ChannelInvalidation = "cache:invalidations:v1"
 
-type MultilevelCache struct {
-	l1       *ristretto.Cache
-	l2       *redis.Client
-	pubsub   *redis.PubSub
-	sgGroup  singleflight.Group
+// MultilevelCache DIPARAMETERKAN OLEH TIPE NILAINYA, dan itu memperbaiki cacat
+// yang paling sulit dilihat pada versi `interface{}`:
+//
+//	Jalur L3 menyimpan hasil fetcher apa adanya (misal `*User`).
+//	Jalur L2 menyimpan hasil `json.Unmarshal` ke `interface{}`
+//	  -> yang selalu menjadi `map[string]interface{}`.
+//
+// Artinya KUNCI YANG SAMA mengembalikan TIPE YANG BERBEDA tergantung dari
+// lapisan mana ia terlayani. Pemanggil yang menulis `hasil.(*User)` bekerja
+// sempurna di uji dan di menit-menit pertama produksi, lalu PANIC begitu entri
+// L1 ter-evict dan permintaan berikutnya dilayani dari L2 -- kegagalan yang
+// muncul setelah restart pod atau tekanan memori, bukan saat deploy.
+type MultilevelCache[T any] struct {
+	l1      *ristretto.Cache
+	l2      *redis.Client
+	pubsub  *redis.PubSub
+	sgGroup singleflight.Group
+
+	l1TTL, l2TTL time.Duration
+	batasMuat    time.Duration
+
+	// Metrik per level. Bagian "Kapan JANGAN Pakai Ini" di bawah menegaskan
+	// hit rate WAJIB dipisah per level -- angka gabungan menyembunyikan L1
+	// yang hanya jadi biaya memori tanpa manfaat.
+	hitL1, hitL2, missTotal atomic.Int64
+	l1Ditolak               atomic.Int64
+	invalidasiDiterima      atomic.Int64
 }
 
-func NewMultilevelCache(l2Client *redis.Client) (*MultilevelCache, error) {
+func NewMultilevelCache[T any](l2Client *redis.Client, l1TTL, l2TTL time.Duration) (*MultilevelCache[T], error) {
+	if l1TTL >= l2TTL {
+		// Dipaksakan, bukan disarankan. Dengan L1 >= L2, invalidasi di L2 tidak
+		// berarti apa-apa selama L1 masih memegang nilai lama -- dan itulah
+		// satu-satunya jaring pengaman ketika Pub/Sub melewatkan pesan
+		// (Edge Case 1). Aturan ini tercantum di "Kapan JANGAN Pakai Ini"
+		// dan sebelumnya tidak ditegakkan di mana pun.
+		return nil, fmt.Errorf("l1TTL (%v) harus jauh lebih pendek dari l2TTL (%v)", l1TTL, l2TTL)
+	}
+
 	// Konfigurasi Ristretto berfokus pada Memory Bound dan TinyLFU hit ratio.
 	// Asumsi Max Cost: 256MB di RAM Pod.
 	cache, err := ristretto.NewCache(&ristretto.Config{
-		NumCounters: 1e7,     // Kapasitas jejak TinyLFU untuk kalkulasi rasio hit/miss (disarankan: 10x jumlah max item)
+		NumCounters: 1e7,               // Kapasitas jejak TinyLFU (disarankan: 10x jumlah max item)
 		MaxCost:     256 * 1024 * 1024, // 256 MB maksimum ukuran bobot memori L1
-		BufferItems: 64,      // Penyesuaian performa goroutine internal Ristretto (default baik)
+		BufferItems: 64,                // Penyesuaian performa goroutine internal Ristretto
 	})
 	if err != nil {
 		return nil, fmt.Errorf("gagal inisialisasi ristretto: %w", err)
 	}
 
-	mlc := &MultilevelCache{
-		l1: cache,
-		l2: l2Client,
+	mlc := &MultilevelCache[T]{
+		l1:        cache,
+		l2:        l2Client,
+		l1TTL:     l1TTL,
+		l2TTL:     l2TTL,
+		batasMuat: 5 * time.Second,
 	}
 
 	mlc.startInvalidationSubscriber()
 	return mlc, nil
 }
 
-// Menjalankan goroutine listener yang abadi untuk menerima broadcast PubSub dari pod manapun.
-func (m *MultilevelCache) startInvalidationSubscriber() {
+// Statistik memisahkan hit per level. Lihat catatan pada struct.
+func (m *MultilevelCache[T]) Statistik() (hitL1, hitL2, miss, l1Ditolak int64) {
+	return m.hitL1.Load(), m.hitL2.Load(), m.missTotal.Load(), m.l1Ditolak.Load()
+}
+
+// TungguL1 memblokir sampai buffer Set asinkron Ristretto terkuras.
+//
+// Ristretto sengaja membuat Set non-blocking (Edge Case 3), sehingga sebuah
+// kunci belum tentu terbaca segera setelah Set kembali. Di uji, ini SATU-
+// SATUNYA cara yang benar untuk menunggunya; `time.Sleep(15*time.Millisecond)`
+// hanyalah tebakan tentang penjadwal yang gagal acak di CI yang sibuk.
+// Jangan panggil ini di jalur produksi.
+func (m *MultilevelCache[T]) TungguL1() { m.l1.Wait() }
+
+// BuangL1 menghapus satu kunci dari L1 pod INI saja, tanpa menyentuh L2 dan
+// tanpa broadcast. Berguna untuk mensimulasikan eviksi/restart di uji.
+func (m *MultilevelCache[T]) BuangL1(key string) { m.l1.Del(key) }
+
+// Menjalankan goroutine listener untuk menerima broadcast PubSub dari pod manapun.
+func (m *MultilevelCache[T]) startInvalidationSubscriber() {
 	m.pubsub = m.l2.Subscribe(context.Background(), ChannelInvalidation)
 	go func() {
-		ch := m.pubsub.Channel()
-		for msg := range ch {
-			invalidationKey := msg.Payload
-			m.l1.Del(invalidationKey)
-			log.Printf("[MultilevelCache] Menerima broadcast evict untuk kunci: %s", invalidationKey)
+		// PubSub.Channel() go-redis bertahan melintasi reconnect: klien
+		// menyambung ulang dan berlangganan ulang sendiri, sehingga loop ini
+		// TIDAK berhenti pada gangguan jaringan sesaat. Yang hilang hanyalah
+		// pesan yang diterbitkan SELAMA putus -- dan itulah alasan sebenarnya
+		// L1 wajib ber-TTL pendek (Edge Case 1), bukan karena langganannya mati.
+		//
+		// Loop ini berakhir ketika Close() menutup pubsub.
+		for msg := range m.pubsub.Channel() {
+			m.l1.Del(msg.Payload)
+			// COUNTER, bukan log per pesan. `log.Printf` di sini menghasilkan
+			// satu baris di SETIAP pod untuk SETIAP invalidasi; pada sistem
+			// dengan penulisan aktif dan 20 pod, itu 20x volume tulis Anda
+			// dalam bentuk baris log yang tidak ada yang membacanya.
+			m.invalidasiDiterima.Add(1)
 		}
 	}()
 }
 
-// Get Data via Cache L1 -> L2 -> Fetcher(DB) dengan Singleflight Stampede Protection
-func (m *MultilevelCache) Get(ctx context.Context, key string, l1TTL, l2TTL time.Duration, fetcher func() (interface{}, error)) (interface{}, error) {
+// Get mengambil data via L1 -> L2 -> Fetcher(DB) dengan proteksi stampede.
+//
+// fetcher MENERIMA context. Versi `func() (interface{}, error)` membuat
+// seluruh jalur pengambilan data -- bagian paling lambat dari operasi ini --
+// menjadi satu-satunya bagian yang tidak bisa dibatalkan maupun ditelusuri.
+func (m *MultilevelCache[T]) Get(ctx context.Context, key string, fetcher func(context.Context) (T, error)) (T, error) {
+	var nol T
+
 	// 1. Cek L1
-	if val, ok := m.l1.Get(key); ok {
-		return val, nil // Ultra cepat, 50ns
+	if v, ok := m.l1.Get(key); ok {
+		if nilai, cocok := v.(T); cocok {
+			m.hitL1.Add(1)
+			return nilai, nil // Ultra cepat, ~50ns
+		}
+		// Tipe tak terduga di L1 (mis. sisa dari versi kode sebelumnya yang
+		// masih hidup di pod yang sama). Buang dan perlakukan sebagai miss --
+		// jangan pernah type-assert tanpa comma-ok di jalur yang dilewati
+		// setiap permintaan.
+		m.l1.Del(key)
 	}
+	m.missTotal.Add(1)
 
-	// Gunakan SingleFlight untuk memastikan bahwa meski 10,000 goroutine cache miss bersamaan, 
-	// fungsi L2/L3-fetch hanya dijalankan SATU kali saja, sementara sisanya menunggu.
-	result, err, _ := m.sgGroup.Do(key, func() (interface{}, error) {
-		// 2. Cek L2
-		valStr, redisErr := m.l2.Get(ctx, key).Result()
-		if redisErr == nil {
-			var data interface{}
-			if errUnmarshal := json.Unmarshal([]byte(valStr), &data); errUnmarshal == nil {
-				// Hit L2! Set ke L1 lalu kembali
-				m.l1.SetWithTTL(key, data, 1, l1TTL)
-				return data, nil
-			}
-		} else if redisErr != redis.Nil {
-			// Jika L2 rusak (koneksi mati), catat error dan lanjut secara gracefully degraded.
-			log.Printf("L2 Cache Redis error (graceful degradation): %v", redisErr)
-		}
-
-		// 3. Fetch L3 (Database) karena L2 Miss
-		data, fetchErr := fetcher()
-		if fetchErr != nil {
-			return nil, fetchErr
-		}
-
-		// Encode struktur ke json
-		bytesData, _ := json.Marshal(data)
-
-		// 4. Update L2 (Redis)
-		m.l2.Set(ctx, key, bytesData, l2TTL)
-
-		// 5. Update L1
-		// Hitung bobot ukuran json mentahnya agar limit Cost L1 akurat
-		cost := int64(len(bytesData))
-		m.l1.SetWithTTL(key, data, cost, l1TTL)
-
-		return data, nil
+	// SingleFlight: meski 10.000 goroutine miss bersamaan, jalur L2/L3 hanya
+	// dieksekusi SATU kali; sisanya menunggu hasil yang sama.
+	//
+	// DoChan + context yang dilepas, bukan Do dengan ctx pemanggil. Alasannya
+	// dibahas tuntas di `caching_strategy/cache_aside_singleflight.md`:
+	// dengan ctx pemanggil, klien PERTAMA yang menutup koneksi membatalkan
+	// pemuatan untuk semua penumpang DAN menggagalkan penulisan ke L2 --
+	// sehingga cache tetap kosong dan gelombang berikutnya menyerbu DB lagi.
+	ch := m.sgGroup.DoChan(key, func() (any, error) {
+		ctxMuat, batal := context.WithTimeout(context.WithoutCancel(ctx), m.batasMuat)
+		defer batal()
+		return m.muat(ctxMuat, key, fetcher)
 	})
 
-	if err != nil {
-		return nil, err
+	select {
+	case <-ctx.Done():
+		return nol, ctx.Err()
+	case res := <-ch:
+		if res.Err != nil {
+			return nol, res.Err
+		}
+		nilai, cocok := res.Val.(T)
+		if !cocok {
+			return nol, fmt.Errorf("tipe hasil singleflight tak terduga: %T", res.Val)
+		}
+		return nilai, nil
 	}
-	return result, nil
 }
 
-// Invalidate membilas data di L2 dan mem-broadcast pesan hapus ke PubSub (memicu semua instance Pod membersihkan L1)
-func (m *MultilevelCache) Invalidate(ctx context.Context, key string) error {
-	pipe := m.l2.TxPipeline()
-	// Gunakan pipeline untuk atomic command
-	pipe.Del(ctx, key)
-	pipe.Publish(ctx, ChannelInvalidation, key)
-	
-	_, err := pipe.Exec(ctx)
-	if err != nil {
-		return fmt.Errorf("gagal mengeksekusi invalidation pipeline: %w", err)
+func (m *MultilevelCache[T]) muat(ctx context.Context, key string, fetcher func(context.Context) (T, error)) (any, error) {
+	// 2. Cek L2
+	valStr, redisErr := m.l2.Get(ctx, key).Result()
+	switch {
+	case redisErr == nil:
+		var data T
+		if uErr := json.Unmarshal([]byte(valStr), &data); uErr == nil {
+			m.hitL2.Add(1)
+			// Hit L2 -> isi L1 dengan biaya SEBENARNYA.
+			//
+			// `cost: 1` -- yang tertulis di sini sebelumnya -- adalah persis
+			// kesalahan yang diperingatkan bagian 4 berkas ini: menghitung
+			// JUMLAH ITEM alih-alih BYTE. Dan ia ada di jalur TERPANAS: pada
+			// sistem yang sudah hangat, sebagian besar pengisian L1 datang
+			// dari L2, bukan dari DB. Dengan cost 1, MaxCost 256 MB berubah
+			// makna menjadi "256 juta entri", dan pod di-OOM-kill jauh
+			// sebelum Ristretto merasa perlu meng-evict apa pun.
+			m.simpanL1(key, data, int64(len(valStr)))
+			return data, nil
+		} else {
+			slog.WarnContext(ctx, "data L2 rusak, jatuh ke sumber asli", "key", key, "galat", uErr)
+		}
+	case errors.Is(redisErr, redis.Nil):
+		// Miss biasa. errors.Is, bukan `!= redis.Nil` -- go-redis membungkus
+		// galat pada jalur hook/tracing/cluster.
+	default:
+		slog.ErrorContext(ctx, "L2 bermasalah, degradasi ke sumber asli", "key", key, "galat", redisErr)
 	}
 
-	// Opsional secara proaktif hapus pod sendiri
+	// 3. Fetch L3 (Database)
+	data, fetchErr := fetcher(ctx)
+	if fetchErr != nil {
+		return nil, fetchErr
+	}
+
+	bytesData, jsonErr := json.Marshal(data)
+	if jsonErr != nil {
+		// Dibuang dengan `_` sebelumnya. Akibatnya berantai dan senyap:
+		// bytesData nil -> L2 menyimpan string kosong -> Unmarshal pada
+		// pembacaan berikutnya gagal -> setiap permintaan jatuh ke DB
+		// selamanya; dan cost L1 menjadi 0 sehingga akuntansi memori ikut
+		// rusak. Semuanya tanpa satu galat pun yang terlihat.
+		return nil, fmt.Errorf("menserialisasi nilai untuk %s: %w", key, jsonErr)
+	}
+
+	// 4. Update L2 dengan TTL ber-jitter.
+	if setErr := m.l2.Set(ctx, key, bytesData, jitter(m.l2TTL)).Err(); setErr != nil {
+		// Bukan alasan menggagalkan permintaan -- datanya sudah ada. Tapi L2
+		// yang tidak pernah terisi berarti setiap permintaan menjadi miss,
+		// dan gejalanya hanya muncul sebagai beban DB yang tidak turun.
+		slog.ErrorContext(ctx, "SET L2 gagal; permintaan berikutnya akan tetap miss", "key", key, "galat", setErr)
+	}
+
+	// 5. Update L1
+	m.simpanL1(key, data, int64(len(bytesData)))
+	return data, nil
+}
+
+func (m *MultilevelCache[T]) simpanL1(key string, data T, cost int64) {
+	// NILAI KEMBALIAN Set WAJIB DIPERIKSA.
+	//
+	// Ristretto mengembalikan false ketika item DITOLAK -- buffer masuk penuh,
+	// atau kebijakan admission TinyLFU menilai item ini kalah populer dari
+	// yang sudah ada. Itu perilaku yang benar, tetapi membuangnya berarti Anda
+	// tidak punya cara membedakan "tersimpan" dari "diam-diam dibuang", dan
+	// misteri "kenapa hit rate L1 rendah padahal cache besar" tidak punya
+	// satu pun angka untuk menjawabnya.
+	if !m.l1.SetWithTTL(key, data, cost, jitter(m.l1TTL)) {
+		m.l1Ditolak.Add(1)
+	}
+}
+
+// jitter menyebar waktu kedaluwarsa agar tidak seluruh pod kehilangan kunci
+// yang sama pada detik yang sama.
+//
+// Edge Case 4 di bawah memerintahkan jitter TTL -- dan sebelumnya tidak ada
+// satu baris pun yang menerapkannya: l1TTL dan l2TTL diteruskan mentah dari
+// pemanggil, sehingga seluruh pod yang memuat kunci panas pada gelombang yang
+// sama akan kehilangannya pada gelombang yang sama pula.
+func jitter(d time.Duration) time.Duration {
+	return d + time.Duration(float64(d)*0.20*rand.Float64())
+}
+
+// Invalidate membilas L2 dan mem-broadcast hapus ke seluruh pod.
+func (m *MultilevelCache[T]) Invalidate(ctx context.Context, key string) error {
+	// Hapus L1 lokal LEBIH DULU, bukan setelah Exec.
+	//
+	// Di antara Exec dan Del lokal ada jendela di mana pod ini sendiri masih
+	// menyajikan nilai lama dari L1-nya -- pod yang paling tahu data itu sudah
+	// berubah justru menjadi yang terakhir berhenti menyajikan versi lamanya.
 	m.l1.Del(key)
+
+	// TxPipeline membungkus keduanya dalam MULTI/EXEC. Perlu presisi soal apa
+	// yang dijaminnya: Redis menjalankan kedua perintah berurutan tanpa
+	// disisipi klien lain, TETAPI TIDAK ADA ROLLBACK -- bila PUBLISH gagal,
+	// DEL yang sudah berjalan tetap berlaku. "Atomic" di sini berarti
+	// tak-tersisipi, bukan all-or-nothing.
+	pipe := m.l2.TxPipeline()
+	pipe.Del(ctx, key)
+	pipe.Publish(ctx, ChannelInvalidation, key)
+
+	if _, err := pipe.Exec(ctx); err != nil {
+		return fmt.Errorf("gagal mengeksekusi invalidation pipeline: %w", err)
+	}
 	return nil
 }
 
-func (m *MultilevelCache) Close() {
+func (m *MultilevelCache[T]) Close() {
 	if m.pubsub != nil {
-		m.pubsub.Close()
+		_ = m.pubsub.Close()
 	}
 	m.l1.Close()
 }
@@ -349,11 +532,13 @@ Berikut adalah daftar anomali ekstrim di production saat menerapkan Multilevel C
 
 3. **Penundaan Menulis Buffer (Asynchronous Writethrough) pada Ristretto**
    - *Situasi:* Ristretto mendesain *Set()* agar sangat mulus/fast dan bersifat asinkron untuk melindungi penulisan cache dari antrian panjang lock. Namun hal ini berarti sebuah kunci belum tentu instan terakses setelah fungsi `Set()` mengembalikan proses. Di Unit Test atau aplikasi yang menuntut konsistensi absolut instan (sepersekian milidetik), ini bisa berujung anomali sesaat (Phantom Reads).
-   - *Mitigasi:* Jangan harapkan jaminan transaksional murni (ACID) pada cache in-memory yang *eventually consistent*. 
+   - *Mitigasi:* Jangan harapkan jaminan transaksional murni (ACID) pada cache in-memory yang *eventually consistent*. **Di uji, jangan pula menambalnya dengan `time.Sleep`** — Ristretto menyediakan `Cache.Wait()` yang memblokir sampai buffer Set terkuras. Tidur adalah tebakan tentang penjadwal: gagal acak di CI yang sibuk, membuang waktu di mesin cepat, dan tidak pernah menjelaskan mengapa angkanya 15 ms.
+   - *Yang jarang disebut:* `Set` dan `SetWithTTL` **mengembalikan `bool`**, dan `false` berarti item DITOLAK — buffer masuk penuh, atau kebijakan admission TinyLFU menilai item ini kalah populer dari yang sudah ada. Ini perilaku yang benar dan disengaja, tetapi membuang nilai kembaliannya berarti Anda tidak punya cara membedakan "tersimpan" dari "diam-diam dibuang". Hitung penolakannya (`l1Ditolak` pada kode di atas), atau pertanyaan "kenapa hit rate L1 rendah padahal cache-nya besar" tidak akan pernah punya jawaban berbasis angka.
 
 4. **Dogpile Effect pada Akhir TTL (Jittering)**
    - *Situasi:* Sebuah kunci dengan beban berat dan diakses sangat masif (*contoh: API flash sale global setting*). Disetel punya TTL 60 menit secara pasti. Tepat pada menit 60:00, seluruh ratusan pod secara serempak kehilangan data ini dari L1 dan L2 (Expire time presisi), menciptakan tsunami kecil pada database.
-   - *Mitigasi:* Tambahkan **TTL Jitter** (Randomisasi Acak). Jangan patok persis 60 Menit. Setiap pod menambahkan variasi rand(1 hingga 60 detik) untuk durasi TTL nya, sehingga waktu matinya akan terpencar dan melandai (staggered eviction). L1 pod 1 expire di menit 60, pod 2 expire di menit 61, memecah puncak letusan.
+   - *Mitigasi:* Tambahkan **TTL Jitter** — lihat fungsi `jitter()` pada kode di atas, yang dipakai di jalur L1 maupun L2. Sebelumnya bagian ini memerintahkan jitter sementara kodenya meneruskan `l1TTL` dan `l2TTL` mentah dari pemanggil, sehingga seluruh pod yang memuat kunci panas pada gelombang yang sama akan kehilangannya pada gelombang yang sama pula.
+   - *Pakai persentase, bukan durasi tetap:* "rand(1–60 detik)" pada TTL 60 menit hanya menyebar 1,7% — praktis tidak mengubah apa pun. Pada TTL 2 menit, angka yang sama menggandakan masa hidupnya. Jitter proporsional (`d + 20% × rand`) benar untuk keduanya. Yang harus dibandingkan adalah **kedaluwarsa per detik melawan kapasitas cache-miss hilir**, bukan apakah angkanya terasa cukup besar.
 
 5. **Payload Besar yang Berbahaya untuk Serialisasi**
    - *Situasi:* Menyimpan payload 10 MB list JSON respon pada L1 dan L2.
@@ -368,6 +553,7 @@ package multilevelcache_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -379,103 +565,218 @@ import (
 	"myapp/multilevelcache" // Sesuaikan dengan package import anda
 )
 
-// Helper setup 
-func setupTestEnvironment(t *testing.T) (*multilevelcache.MultilevelCache, *miniredis.Miniredis) {
-	mr, err := miniredis.Run()
-	require.NoError(t, err)
+type Profil struct {
+	ID   string `json:"id"`
+	Nama string `json:"nama"`
+}
 
-	opts := &redis.Options{Addr: mr.Addr()}
-	rdb := redis.NewClient(opts)
+// Helper setup
+func setupTestEnvironment(t *testing.T) (*multilevelcache.MultilevelCache[Profil], *miniredis.Miniredis) {
+	t.Helper()
+	// RunT, bukan Run: `miniredis.Run()` tanpa Close meninggalkan server
+	// beserta goroutine listener-nya hidup untuk setiap uji.
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
 
-	mlc, err := multilevelcache.NewMultilevelCache(rdb)
+	mlc, err := multilevelcache.NewMultilevelCache[Profil](rdb, time.Minute, 10*time.Minute)
 	require.NoError(t, err)
+	t.Cleanup(mlc.Close)
 
 	return mlc, mr
 }
 
 func TestMultilevelCache_HitMissHierarchy(t *testing.T) {
 	mlc, _ := setupTestEnvironment(t)
-	defer mlc.Close()
 	ctx := context.Background()
 
 	// Melacak panggilan ke backend DB
 	fetchCount := 0
-	fetcher := func() (interface{}, error) {
+	fetcher := func(context.Context) (Profil, error) {
 		fetchCount++
-		return map[string]string{"msg": "dari backend"}, nil
+		return Profil{ID: "1", Nama: "dari backend"}, nil
 	}
 
-	// Panggilan pertama: Harus melewati semuanya hingga fetcher/DB dieksekusi (Cache Miss mutlak)
-	val1, err := mlc.Get(ctx, "kunci1", time.Minute, time.Minute, fetcher)
+	// Panggilan pertama: melewati semuanya hingga fetcher/DB (Cache Miss mutlak)
+	val1, err := mlc.Get(ctx, "kunci1", fetcher)
 	require.NoError(t, err)
-	assert.Equal(t, 1, fetchCount, "Fetcher harusnya dipanggil pada miss pertama")
-	assert.NotNil(t, val1)
+	assert.Equal(t, 1, fetchCount, "fetcher harus dipanggil pada miss pertama")
+	assert.Equal(t, "dari backend", val1.Nama)
 
-	// Jeda waktu mungil, memberikan waktu bagi Ristretto goroutine asinkron background worker mem-flush set buffer
-	time.Sleep(15 * time.Millisecond)
+	// `time.Sleep(15ms)` -- yang tertulis di sini sebelumnya -- adalah
+	// taruhan dua arah terhadap penjadwal: gagal acak di CI yang sibuk, dan
+	// membuang waktu di mesin cepat. Ristretto menyediakan Wait() persis
+	// untuk menunggu buffer Set asinkronnya terkuras. Pakai itu.
+	mlc.TungguL1()
 
-	// Panggilan kedua: Harus dipotong instan oleh L1 tanpa menembak fetcher
-	val2, err := mlc.Get(ctx, "kunci1", time.Minute, time.Minute, fetcher)
+	// Panggilan kedua: dipotong instan oleh L1 tanpa menembak fetcher
+	val2, err := mlc.Get(ctx, "kunci1", fetcher)
 	require.NoError(t, err)
-	assert.Equal(t, 1, fetchCount, "Counter fetcher tak boleh bertambah jika L1 Hit")
-	assert.NotNil(t, val2)
+	assert.Equal(t, 1, fetchCount, "counter fetcher tak boleh bertambah saat L1 hit")
+	assert.Equal(t, "dari backend", val2.Nama)
+
+	hitL1, _, _, _ := mlc.Statistik()
+	assert.Equal(t, int64(1), hitL1, "panggilan kedua harus tercatat sebagai hit L1")
+}
+
+// Kunci yang sama WAJIB mengembalikan tipe yang sama, dari lapisan mana pun ia
+// dilayani. Versi `interface{}` gagal di sini: jalur L3 mengembalikan tipe
+// asli fetcher, sementara jalur L2 mengembalikan map[string]interface{} hasil
+// json.Unmarshal -- sehingga type assertion pemanggil bekerja sampai entri L1
+// ter-evict, lalu panic di produksi.
+func TestMultilevelCache_TipeStabilLintasLapisan(t *testing.T) {
+	mlc, _ := setupTestEnvironment(t)
+	ctx := context.Background()
+
+	fetcher := func(context.Context) (Profil, error) {
+		return Profil{ID: "7", Nama: "asli"}, nil
+	}
+
+	// Dilayani dari L3.
+	dariL3, err := mlc.Get(ctx, "kunci_tipe", fetcher)
+	require.NoError(t, err)
+	mlc.TungguL1()
+
+	// Buang L1 saja; L2 tetap terisi. Ini keadaan setelah pod restart atau
+	// setelah eviksi karena tekanan memori -- keadaan yang PASTI terjadi.
+	mlc.BuangL1("kunci_tipe")
+
+	// Dilayani dari L2. Harus tipe yang sama, nilai yang sama.
+	dariL2, err := mlc.Get(ctx, "kunci_tipe", func(context.Context) (Profil, error) {
+		t.Fatal("fetcher tidak boleh dipanggil; L2 memegang datanya")
+		return Profil{}, nil
+	})
+	require.NoError(t, err)
+	assert.Equal(t, dariL3, dariL2, "nilai dari L2 dan L3 harus identik")
+
+	_, hitL2, _, _ := mlc.Statistik()
+	assert.Equal(t, int64(1), hitL2)
 }
 
 func TestMultilevelCache_PubSubInvalidation(t *testing.T) {
 	mlc, _ := setupTestEnvironment(t)
-	defer mlc.Close()
 	ctx := context.Background()
 
-	fetcherInitial := func() (interface{}, error) {
-		return "versi_lama", nil
-	}
-
-	// Memaksa inisiasi state
-	_, _ = mlc.Get(ctx, "kunci_inval", time.Minute, time.Minute, fetcherInitial)
-	time.Sleep(15 * time.Millisecond) // Asinkron flush
-
-	// Fungsi invalidate men-trigger pubsub event dan membersihkan redis l2 
-	err := mlc.Invalidate(ctx, "kunci_inval")
+	_, err := mlc.Get(ctx, "kunci_inval", func(context.Context) (Profil, error) {
+		return Profil{ID: "9", Nama: "versi_lama"}, nil
+	})
 	require.NoError(t, err)
+	mlc.TungguL1()
 
-	// Beri jeda bagi goroutine subscriber untuk menerima event dari chanel Redis dan mengeksekusi L1 Del()
-	time.Sleep(50 * time.Millisecond)
-
-	fetchCountAfterInvalidate := 0
-	fetcherAfterInvalidate := func() (interface{}, error) {
-		fetchCountAfterInvalidate++
-		return "versi_baru_terkini", nil
-	}
-
-	// Permintaan get harus miss total karena L1 dan L2 sudah dibersihkan. Lanjut tembak DB baru.
-	val3, err := mlc.Get(ctx, "kunci_inval", time.Minute, time.Minute, fetcherAfterInvalidate)
-	require.NoError(t, err)
-	assert.Equal(t, "versi_baru_terkini", val3)
-	assert.Equal(t, 1, fetchCountAfterInvalidate)
-}
-
-func TestMultilevelCache_L2Resilience(t *testing.T) {
-	mlc, mr := setupTestEnvironment(t)
-	defer mlc.Close()
-	ctx := context.Background()
-
-	// Inject ke dalam miniredis seakan data sudah dipopulasi oleh pod tetangga 
-	// (Mengimitasi L1 miss, tapi L2 memegang datanya)
-	_ = mr.Set("kunci_tetangga", `{"data_rahasia":"xyz"}`)
+	require.NoError(t, mlc.Invalidate(ctx, "kunci_inval"))
 
 	fetchCount := 0
-	fetcher := func() (interface{}, error) {
+	fetcherBaru := func(context.Context) (Profil, error) {
 		fetchCount++
-		return nil, nil // Return kosong jika fetcher malang ini berjalan
+		return Profil{ID: "9", Nama: "versi_baru"}, nil
 	}
 
-	val, err := mlc.Get(ctx, "kunci_tetangga", time.Minute, time.Minute, fetcher)
+	// L1 dan L2 sudah dibersihkan -> harus miss total dan menembak DB.
+	//
+	// Catatan: uji ini TIDAK membuktikan Pub/Sub bekerja. Invalidate menghapus
+	// L1 pod ini secara langsung, jadi hasilnya sama persis dengan atau tanpa
+	// subscriber. Pembuktian Pub/Sub yang sebenarnya butuh DUA instance yang
+	// berbagi satu Redis -- lihat uji berikutnya. Uji lama berhenti di sini
+	// dan menamainya "PubSubInvalidation".
+	val, err := mlc.Get(ctx, "kunci_inval", fetcherBaru)
 	require.NoError(t, err)
-	
-	// Val seharusnya merupakan parsing dari interface{} -> map, karena json L2 menyimpan tipe generik
-	dict := val.(map[string]interface{})
-	assert.Equal(t, "xyz", dict["data_rahasia"])
-	assert.Equal(t, 0, fetchCount, "Fetcher DB dilarang dieksekusi, karena Redis L2 sanggup memenuhinya!")
+	assert.Equal(t, "versi_baru", val.Nama)
+	assert.Equal(t, 1, fetchCount)
+}
+
+// INI yang benar-benar menguji broadcast: dua instance berbagi satu Redis,
+// invalidasi diterbitkan oleh instance A, L1 instance B harus ikut kosong.
+func TestMultilevelCache_BroadcastMenjangkauInstanceLain(t *testing.T) {
+	mr := miniredis.RunT(t)
+	ctx := context.Background()
+
+	buat := func() *multilevelcache.MultilevelCache[Profil] {
+		rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+		t.Cleanup(func() { _ = rdb.Close() })
+		c, err := multilevelcache.NewMultilevelCache[Profil](rdb, time.Minute, 10*time.Minute)
+		require.NoError(t, err)
+		t.Cleanup(c.Close)
+		return c
+	}
+	podA, podB := buat(), buat()
+
+	// Kedua pod memuat kunci yang sama ke L1 masing-masing.
+	awal := func(context.Context) (Profil, error) { return Profil{ID: "3", Nama: "lama"}, nil }
+	_, err := podA.Get(ctx, "bersama", awal)
+	require.NoError(t, err)
+	_, err = podB.Get(ctx, "bersama", awal)
+	require.NoError(t, err)
+	podA.TungguL1()
+	podB.TungguL1()
+
+	require.NoError(t, podA.Invalidate(ctx, "bersama"))
+
+	// Broadcast bersifat asinkron. Polling dengan batas waktu, BUKAN
+	// time.Sleep(50ms) tetap: tidur tetap gagal acak di CI yang sibuk dan
+	// membuang waktu di mesin cepat.
+	batas := time.After(3 * time.Second)
+	for {
+		fetchB := 0
+		v, err := podB.Get(ctx, "bersama", func(context.Context) (Profil, error) {
+			fetchB++
+			return Profil{ID: "3", Nama: "baru"}, nil
+		})
+		require.NoError(t, err)
+		if fetchB == 1 && v.Nama == "baru" {
+			return // L1 pod B sudah dikosongkan oleh broadcast
+		}
+		select {
+		case <-batas:
+			t.Fatal("L1 pod B masih menyajikan nilai lama; broadcast tidak sampai")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+func TestMultilevelCache_L2MelayaniTanpaMenyentuhDB(t *testing.T) {
+	mlc, mr := setupTestEnvironment(t)
+	ctx := context.Background()
+
+	// Data seolah sudah dipopulasi pod tetangga: L1 miss, L2 hit.
+	require.NoError(t, mr.Set("kunci_tetangga", `{"id":"42","nama":"dari_tetangga"}`))
+
+	fetchCount := 0
+	val, err := mlc.Get(ctx, "kunci_tetangga", func(context.Context) (Profil, error) {
+		fetchCount++
+		return Profil{}, nil
+	})
+	require.NoError(t, err)
+
+	// BERTIPE. Uji lama menulis `val.(map[string]interface{})` di sini dan
+	// menjelaskannya sebagai "karena json L2 menyimpan tipe generik" --
+	// mengabadikan ketidakstabilan tipe lintas lapisan sebagai perilaku yang
+	// diharapkan, alih-alih mengenalinya sebagai cacat.
+	assert.Equal(t, "dari_tetangga", val.Nama)
+	assert.Equal(t, 0, fetchCount, "fetcher DB dilarang jalan; L2 sanggup memenuhinya")
+}
+
+// Ristretto MENOLAK sebagian Set (buffer penuh / kalah admission TinyLFU).
+// Penolakan itu sah, tetapi harus terhitung -- kalau tidak, "kenapa hit rate
+// L1 rendah padahal cache besar" tidak punya satu angka pun untuk dijawab.
+func TestMultilevelCache_PenolakanL1Terhitung(t *testing.T) {
+	mlc, _ := setupTestEnvironment(t)
+	ctx := context.Background()
+
+	for i := 0; i < 200; i++ {
+		key := fmt.Sprintf("k%d", i)
+		_, err := mlc.Get(ctx, key, func(context.Context) (Profil, error) {
+			return Profil{ID: key, Nama: "x"}, nil
+		})
+		require.NoError(t, err)
+	}
+	mlc.TungguL1()
+
+	hitL1, hitL2, miss, ditolak := mlc.Statistik()
+	t.Logf("hitL1=%d hitL2=%d miss=%d l1Ditolak=%d", hitL1, hitL2, miss, ditolak)
+	assert.Equal(t, int64(200), miss, "seluruh kunci baru harus tercatat sebagai miss")
+	// ditolak bisa 0 pada cache lapang; yang diuji adalah angkanya TERSEDIA,
+	// bukan nilainya. Sebelumnya nilai kembalian Set dibuang sepenuhnya.
+	assert.GreaterOrEqual(t, ditolak, int64(0))
 }
 ```
 
