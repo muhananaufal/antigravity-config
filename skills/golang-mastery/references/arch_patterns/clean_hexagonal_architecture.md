@@ -58,6 +58,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 )
@@ -81,13 +82,25 @@ type User struct {
 }
 
 // Deactivate berisi business logic murni dalam entity.
-// Memisahkan logic mutasi state ke entity mencegah Anemic Domain Model.
-func (u *User) Deactivate() error {
+//
+// `sekarang` DISUNTIKKAN, tidak diambil dari time.Now() di dalam entity.
+//
+// Ini persoalan yang sama dengan memanggil database dari domain, hanya lebih
+// mudah luput karena `time` adalah pustaka standar. Lapisan ini dinyatakan
+// "SANGAT MURNI" beberapa baris di atas — tetapi entity yang membaca jam
+// dinding punya ketergantungan tersembunyi pada dunia luar: hasilnya berbeda
+// tiap pemanggilan, tidak bisa diuji tanpa menerima apa pun yang dikembalikan
+// jam, dan uji terhadap perilaku yang bergantung waktu (kedaluwarsa, jeda,
+// batas hari) menjadi mustahil ditulis secara deterministik.
+//
+// Jam adalah dependensi INFRASTRUKTUR. Ia masuk lewat pintu yang sama dengan
+// repository — dari luar ke dalam, bukan diambil diam-diam dari dalam.
+func (u *User) Deactivate(sekarang time.Time) error {
 	if !u.IsActive {
-		return fmt.Errorf("%w: user is already inactive", ErrInvalidState)
+		return fmt.Errorf("%w: pengguna sudah nonaktif", ErrInvalidState)
 	}
 	u.IsActive = false
-	u.UpdatedAt = time.Now().UTC()
+	u.UpdatedAt = sekarang.UTC()
 	return nil
 }
 
@@ -101,17 +114,29 @@ type UserRepository interface {
 	Save(ctx context.Context, u *User) error
 }
 
+// Jam adalah Port keluar, sejajar dengan UserRepository.
+type Jam interface{ Sekarang() time.Time }
+
+// JamSistem adalah Adapter-nya; di uji, gantikan dengan jam beku.
+type JamSistem struct{}
+
+func (JamSistem) Sekarang() time.Time { return time.Now() }
+
 // UserUsecase mengorkestrasi alur aplikasi.
 type UserUsecase struct {
 	repo UserRepository
+	jam  Jam
 }
 
 // NewUserUsecase adalah konstruktor untuk Dependency Injection.
-func NewUserUsecase(repo UserRepository) *UserUsecase {
+func NewUserUsecase(repo UserRepository, jam Jam) *UserUsecase {
 	if repo == nil {
-		panic("UserRepository cannot be nil")
+		panic("UserRepository tidak boleh nil")
 	}
-	return &UserUsecase{repo: repo}
+	if jam == nil {
+		panic("Jam tidak boleh nil")
+	}
+	return &UserUsecase{repo: repo, jam: jam}
 }
 
 // DeactivateUser mengorkestrasi pengambilan data, mutasi entity, dan persistensi.
@@ -125,8 +150,8 @@ func (uc *UserUsecase) DeactivateUser(ctx context.Context, id string) error {
 		return fmt.Errorf("failed to fetch user for deactivation: %w", err)
 	}
 
-	// 2. Eksekusi Business Logic di Entity
-	if err := user.Deactivate(); err != nil {
+	// 2. Eksekusi Business Logic di Entity — waktu diteruskan dari luar
+	if err := user.Deactivate(uc.jam.Sekarang()); err != nil {
 		return fmt.Errorf("cannot deactivate user %s: %w", id, err)
 	}
 
@@ -146,6 +171,11 @@ func (uc *UserUsecase) DeactivateUser(ctx context.Context, id string) error {
 // InMemoryUserRepository adalah contoh adapter untuk repository.
 // Dalam production nyata, struct ini bernama postgres.UserRepository (menggunakan pgx).
 type InMemoryUserRepository struct {
+	// Mutex WAJIB: tanpa ini, dua permintaan HTTP yang bersamaan memanggil
+	// GetByID dan Save membuat runtime Go panic dengan "concurrent map read
+	// and map write". Adapter repository adalah komponen yang paling pasti
+	// diakses banyak goroutine sekaligus.
+	mu   sync.RWMutex
 	data map[string]*User
 }
 
@@ -166,14 +196,24 @@ func (r *InMemoryUserRepository) GetByID(ctx context.Context, id string) (*User,
 	default:
 	}
 
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
 	u, exists := r.data[id]
 	if !exists {
 		// Mengembalikan error domain agar Usecase bisa menangani secara semantik
 		return nil, ErrUserNotFound
 	}
-	// Selalu kembalikan deep copy agar pointer tidak termutasi di luar repo tanpa Save()
-	copyOfUser := *u
-	return &copyOfUser, nil
+	// Selalu kembalikan salinan agar pointer tidak termutasi di luar repo tanpa Save().
+	//
+	// `*u` adalah salinan DANGKAL, dan itu cukup HANYA karena setiap field
+	// User bertipe nilai (string, bool, time.Time). Begitu ada yang menambah
+	// `Roles []string` atau `Metadata map[string]string`, baris ini diam-diam
+	// berhenti mengisolasi: array pendukung slice/map tetap dibagi, pemanggil
+	// bisa menulis ke dalamnya, dan gejalanya baru muncul jauh dari sini.
+	// Menambah field referensi ke User BERARTI menambah penyalinannya di sini.
+	salinan := *u
+	return &salinan, nil
 }
 
 func (r *InMemoryUserRepository) Save(ctx context.Context, u *User) error {
@@ -182,10 +222,12 @@ func (r *InMemoryUserRepository) Save(ctx context.Context, u *User) error {
 		return ctx.Err()
 	default:
 	}
-	
-	// Deep copy saat menyimpan
-	copyOfUser := *u
-	r.data[u.ID] = &copyOfUser
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	salinan := *u
+	r.data[u.ID] = &salinan
 	return nil
 }
 
@@ -193,50 +235,113 @@ func (r *InMemoryUserRepository) Save(ctx context.Context, u *User) error {
 // 4. UNIT TEST
 // ==========================================
 
+// jamBeku adalah Adapter uji untuk Port Jam. Inilah imbalan konkret dari
+// menyuntikkan jam: waktu jadi nilai yang bisa DIASERSI, bukan sesuatu yang
+// hanya bisa dicek "kira-kira sekitar sekarang" dengan toleransi.
+type jamBeku struct{ t time.Time }
+
+func (j jamBeku) Sekarang() time.Time { return j.t }
+
 func TestUserUsecase_DeactivateUser(t *testing.T) {
 	ctx := context.Background()
+	// Sengaja bukan UTC: membuktikan Deactivate menormalkan zona waktu.
+	beku := jamBeku{t: time.Date(2024, 3, 1, 10, 30, 0, 0, time.FixedZone("WIB", 7*3600))}
 
 	t.Run("Success Deactivation", func(t *testing.T) {
 		repo := NewInMemoryUserRepository()
-		uc := NewUserUsecase(repo)
+		uc := NewUserUsecase(repo, beku)
 
 		// Eksekusi
 		err := uc.DeactivateUser(ctx, "u-123")
 		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
+			t.Fatalf("galat tak terduga: %v", err)
 		}
 
 		// Verifikasi State di Repo
-		u, _ := repo.GetByID(ctx, "u-123")
+		u, err := repo.GetByID(ctx, "u-123")
+		if err != nil {
+			t.Fatalf("GetByID setelah Save: %v", err)
+		}
 		if u.IsActive {
-			t.Errorf("expected user to be inactive")
+			t.Errorf("pengguna seharusnya nonaktif")
+		}
+		// Assersi eksak — mustahil ditulis kalau entity memanggil time.Now().
+		if want := beku.t.UTC(); !u.UpdatedAt.Equal(want) {
+			t.Errorf("UpdatedAt = %v, mau %v", u.UpdatedAt, want)
 		}
 	})
 
 	t.Run("Fails When Already Inactive", func(t *testing.T) {
 		repo := NewInMemoryUserRepository()
-		uc := NewUserUsecase(repo)
+		uc := NewUserUsecase(repo, beku)
 
 		err := uc.DeactivateUser(ctx, "u-456")
 		if err == nil {
-			t.Fatal("expected error, got nil")
+			t.Fatal("mengharapkan galat, dapat nil")
 		}
 		if !errors.Is(err, ErrInvalidState) {
-			t.Errorf("expected ErrInvalidState, got %v", err)
+			t.Errorf("mengharapkan ErrInvalidState, dapat %v", err)
 		}
 	})
 
 	t.Run("Fails When User Not Found", func(t *testing.T) {
 		repo := NewInMemoryUserRepository()
-		uc := NewUserUsecase(repo)
+		uc := NewUserUsecase(repo, beku)
 
 		err := uc.DeactivateUser(ctx, "u-999")
 		if err == nil {
-			t.Fatal("expected error, got nil")
+			t.Fatal("mengharapkan galat, dapat nil")
 		}
 		if !errors.Is(err, ErrUserNotFound) {
-			t.Errorf("expected ErrUserNotFound, got %v", err)
+			t.Errorf("mengharapkan ErrUserNotFound, dapat %v", err)
 		}
+	})
+
+	// Uji ini membuktikan klaim "deep copy" di Edge Case 2. Tanpa salinan,
+	// mutasi pada objek hasil GetByID akan bocor ke penyimpanan meski Save
+	// tidak pernah dipanggil — persis bug aliasing yang dibahas di bawah.
+	t.Run("GetByID Mengembalikan Salinan", func(t *testing.T) {
+		repo := NewInMemoryUserRepository()
+
+		u1, err := repo.GetByID(ctx, "u-123")
+		if err != nil {
+			t.Fatalf("GetByID: %v", err)
+		}
+		u1.Email = "diretas@example.com"
+
+		u2, err := repo.GetByID(ctx, "u-123")
+		if err != nil {
+			t.Fatalf("GetByID kedua: %v", err)
+		}
+		if u2.Email == "diretas@example.com" {
+			t.Error("mutasi pada hasil GetByID bocor ke penyimpanan")
+		}
+	})
+
+	// Uji ini gagal dengan "concurrent map read and map write" bila mutex
+	// di InMemoryUserRepository dilepas. Jalankan dengan -race.
+	//
+	// Perhatikan batas yang dijaga mutex: ia melindungi PETA, bukan invarian
+	// bisnis. Urutan GetByID -> Deactivate -> Save di Usecase tetap
+	// read-modify-write yang tidak atomik, jadi banyak goroutine bisa
+	// sama-sama membaca IsActive=true dan sama-sama lolos. Untuk menutup
+	// celah itu perlu optimistic locking di tingkat aggregate — lihat
+	// `arch_patterns/ddd_aggregate_repository.md`.
+	t.Run("Akses Serentak Aman", func(t *testing.T) {
+		repo := NewInMemoryUserRepository()
+		uc := NewUserUsecase(repo, beku)
+
+		var wg sync.WaitGroup
+		for i := 0; i < 50; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				// Galat diabaikan dengan sengaja: hanya satu goroutine yang
+				// menang menonaktifkan, sisanya wajar mendapat ErrInvalidState.
+				_ = uc.DeactivateUser(ctx, "u-123")
+			}()
+		}
+		wg.Wait()
 	})
 }
 ```
@@ -304,7 +409,8 @@ type CreateUserInput struct {
 
 2. **Pointer Mutation (Aliasing Bug) Lintas Layer:**
    Jika `UserRepository.GetByID` mengembalikan pointer (`*User`) ke objek internal di dalam memori (seperti di *in-memory cache* atau objek reference GORM yang di-cache), dan Usecase mengubah `user.IsActive = false`, maka *state* tersebut berubah di seluruh aplikasi *sebelum* `Save()` dipanggil, atau parahnya tetap termutasi jika transaksi di-rollback.
-   *Defensive:* Adapter **wajib** melakukan *deep copy* (membuat struct baru) sebelum mengembalikan pointer Entity, atau layer Domain mendefinisikan Entity sebagai *immutable struct* (di-*passing by value*) apabila ukurannya cukup ringan (beberapa field saja).
+   *Defensive:* Adapter **wajib** menyalin Entity sebelum mengembalikan pointernya, atau layer Domain mendefinisikan Entity sebagai *immutable struct* (di-*passing by value*) apabila ukurannya cukup ringan (beberapa field saja).
+   *Yang sering terlewat:* `salinan := *u` adalah salinan **dangkal**. Ia hanya setara *deep copy* selama seluruh field bertipe nilai. Satu field `[]string`, `map[string]X`, atau pointer bersarang membuat array pendukungnya tetap dibagi — isolasinya bocor tanpa satu pun baris berubah di adapter. Karena itu penyalinan entity adalah kode yang **wajib ikut diperbarui setiap kali entity bertambah field referensi**, dan lebih aman ditulis sebagai method eksplisit (`func (u *User) Salin() *User`) di domain daripada dereference satu baris yang tampak selalu benar.
 
 3. **Transaction / Unit of Work Across Multiple Repositories:**
    Dalam Clean Architecture, Usecase tidak boleh mengimpor objek database (seperti `sql.Tx` atau `pgx.Tx`). Bagaimana jika `OrderUsecase.Checkout()` harus memanggil `OrderRepo.Save()`, `InventoryRepo.Deduct()`, dan `WalletRepo.Charge()` dalam satu transaksi ACID? Mengoper `*sql.Tx` ke dalam argumen method Usecase adalah pelanggaran berat terhadap isolasi layer.
