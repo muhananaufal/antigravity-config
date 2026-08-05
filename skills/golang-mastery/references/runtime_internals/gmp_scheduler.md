@@ -1,5 +1,7 @@
 # Goroutine Scheduler (GMP Model) Internals
 
+> **Berlaku:** Go 1.21+ · **Lihat juga:** `runtime_internals/goroutine_stack_growth.md` · `concurrency/worker_pool_errgroup.md` · `runtime_internals/cgo_abi_boundaries.md` · `devops_control_planes/docker_container_go.md`
+
 ## 1. Konsep dan Arsitektur Internal (Technical Depth)
 
 Go *runtime scheduler* beroperasi sepenuhnya di *user-space* dan menggunakan model penjadwalan *M:N* di mana ribuan hingga jutaan *logical threads* (Goroutine) di-multiplex ke atas sejumlah *OS threads* yang jauh lebih sedikit. Di balik layar, scheduler ini menggunakan arsitektur yang dikenal dengan model **GMP**.
@@ -335,3 +337,37 @@ for i := 0; i < 1_000_000_000_000; i++ {
 **Masalah:** Operasi seperti `time.Sleep` atau timer diatur oleh *min-heap* di dalam struct `P`. Pengembalian (`wakeup`) Goroutine dari *sleep* di dalam timer bergantung pada sysmon dan *timer interrupt*. Di sistem operasi seperti Windows lama, resolusi timer mungkin tertahan pada kelipatan 15.6ms, menyebabkan `time.Sleep(1 * time.Millisecond)` menjadi meleset secara masif dan tidur sejauh 15ms.
 **Dampak Spesifik:** Saat merancang *High-Frequency Trading System* atau poller yang memerlukan presisi sub-milidetik, mengandalkan scheduler Go secara naif akan gagal akibat granularitas tick dari M dan sysmon.
 **Solusi Defensif:** Untuk *spin-wait* mikrodetik (ultra-low latency), *JANGAN* menggunakan `time.Sleep()`. Gunakan perulangan sibuk (busy wait) dengan kombinasi `runtime.Gosched()` bila menarget durasi super kecil (misalnya di bawah < 50us), dan siapkan `GOMAXPROCS` ekstra.
+
+## Kapan JANGAN Pakai Ini
+
+- **Menyetel `GOMAXPROCS` manual tanpa alasan spesifik.** Sejak Go 1.25 runtime membaca batas CPU cgroup sendiri; pada Go 1.21–1.24 pakai `go.uber.org/automaxprocs`. Angka yang dipatok tangan akan salah begitu limit container diubah, dan tidak ada yang mengingatkan.
+- **`runtime.Gosched()` sebagai obat.** Ia nyaris tidak pernah menjadi solusi. Bila sebuah goroutine perlu "diberi kesempatan", biasanya ada busy-wait yang seharusnya dihapus, bukan dijinakkan.
+- **`runtime.LockOSThread` tanpa kebutuhan nyata.** Ia sah untuk OpenGL, beberapa API berbasis thread, dan penanganan sinyal tertentu. Di luar itu ia mengikat goroutine ke satu thread OS dan membuang keuntungan penjadwal.
+- **Menambah goroutine melebihi jumlah core untuk pekerjaan CPU-bound.** Tidak ada tambahan paralelisme yang diperoleh — hanya tambahan context switch dan tekanan cache.
+- **Menganggap goroutine gratis.** Murah bukan berarti gratis: tiap goroutine menahan stack dan menempati run queue. Pada ratusan ribu goroutine, penjadwalannya sendiri menjadi beban yang terukur.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| p99 melonjak walau CPU jauh dari penuh | `cpu.stat` cgroup | Container di-throttle; `GOMAXPROCS` lebih besar dari kuota |
+| Jumlah thread OS ribuan | `pprof/threadcreate` | Syscall blocking atau CGO menahan M |
+| `runqueue` terus tumbuh di `schedtrace` | rasio goroutine runnable vs P | Goroutine dibuat lebih cepat daripada bisa dijalankan |
+| Latensi tidak turun setelah pod ditambah | limit CPU per pod | Batasnya kuota cgroup, bukan jumlah pod |
+| Timer meleset puluhan milidetik | beban penjadwal saat itu | Resolusi timer mengikuti kesehatan penjadwal |
+
+```bash
+# Ringkasan penjadwal tiap detik: idleprocs, runqueue, jumlah M dan G
+GODEBUG=schedtrace=1000 ./app 2>&1 | head -20
+GODEBUG=schedtrace=1000,scheddetail=1 ./app 2>&1 | head -40
+
+# Throttling cgroup -- penyebab paling sering "lambat padahal CPU tidak penuh"
+cat /sys/fs/cgroup/cpu.max
+grep -E 'nr_throttled|throttled_usec' /sys/fs/cgroup/cpu.stat
+
+# Thread OS yang membengkak
+curl -s 'localhost:6060/debug/pprof/threadcreate?debug=1' | head -5
+
+# GOMAXPROCS yang benar-benar dipakai proses
+curl -s localhost:6060/debug/vars | jq '.cmdline'   # bila expvar diekspos
+```

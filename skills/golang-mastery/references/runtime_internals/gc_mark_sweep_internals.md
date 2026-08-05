@@ -1,5 +1,7 @@
 # Golang GC & Tri-Color Mark-and-Sweep Internals
 
+> **Berlaku:** Go 1.21+ (`GOMEMLIMIT` sejak 1.19) · **Lihat juga:** `runtime_internals/escape_analysis_pprof.md` · `runtime_internals/memory_allocator_arenas.md` · `concurrency/sync_primitives_deep.md` · `devops_control_planes/docker_container_go.md`
+
 ## 1. Konsep dan Arsitektur Internal (Technical Depth)
 
 Go menggunakan *Concurrent Mark-and-Sweep Garbage Collector* yang berbasis pada algoritma *Tri-color abstraction*. Tujuan utamanya adalah latensi super rendah (*sub-millisecond pause times*) sehingga cocok untuk layanan jaringan *real-time*, dengan sedikit mengorbankan *throughput* CPU (sekitar 25% CPU dialokasikan untuk worker GC saat siklus berjalan).
@@ -257,3 +259,46 @@ func init() {
    *Kasus:* Anda meng-assign *struct* raksasa sebesar 50MB (contoh model ML ke *cache* atau data sesi TCP). Goroutine yang menangani TCP terputus mati mendadak dari blok fungsi utama, tetapi ia masih memegang *channel* atau *timer* yang *blocked*.
    *Edge Case:* Seluruh hirarki 50MB tersebut dipertahankan (menjadi Grey lalu Black) secara berulang kali tiap siklus GC berjalan karena Goroutine berstatus `waiting` tetap dianggap sebagai *Root*. Memori RAM perlahan terkuras habis (*Memory Leak* logis, bukan sistem).
    *Solusi Spesifik:* Analisis `pprof` di bagian `goroutine` dan `heap`. Cari Goroutine yang menggantung dengan dependensi *channels*. Pasang `defer cancel()` dengan `context.Context` eksplisit untuk membersihkan tuntas *Root pointer* saat aliran sistem terhenti.
+
+## Kapan JANGAN Pakai Ini
+
+- **Menyetel `GOGC` tanpa `GOMEMLIMIT` di container.** `GOGC` mengendalikan **rasio**, bukan batas. Lonjakan alokasi tetap bisa menembus limit memori pod dan berakhir `OOMKilled`. `GOMEMLIMIT` (Go 1.19+) adalah alat yang menjawab pertanyaan "jangan lewati sekian megabyte".
+- **`GOGC=off`.** Heap tumbuh sampai OOM. Ini hanya masuk akal untuk proses batch berumur sangat pendek yang dipastikan selesai sebelum memori habis — dan bahkan di situ, `GOMEMLIMIT` lebih aman.
+- **Menurunkan `GOGC` drastis demi hemat memori.** `GOGC=20` memperbanyak siklus GC dan membakar CPU untuk pekerjaan yang sama. Mengurangi laju alokasi hampir selalu lebih efektif daripada memaksa GC bekerja lebih sering.
+- **`runtime.GC()` manual di jalur produksi.** Ia memaksa siklus penuh, mengacaukan pacing yang sudah dihitung runtime, dan menambahkan jeda yang justru ingin dihindari.
+- **Menyalahkan GC sebelum melihat profil alokasi.** Sebagian besar "masalah GC" sebenarnya masalah alokasi berlebihan. GC hanya membersihkan sampah yang kode Anda hasilkan.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| p99 bergerigi dengan pola periodik | `gctrace` vs waktu lonjakan | Jeda GC atau assist yang membebani goroutine pemanggil |
+| CPU tinggi di `runtime.gcBgMarkWorker` | laju alokasi | Alokasi terlalu cepat; GC tidak pernah sempat istirahat |
+| `OOMKilled` meski `GOGC` sudah disetel | apakah `GOMEMLIMIT` dipasang | Rasio tidak bisa menjadi batas |
+| RSS tidak turun setelah beban reda | `/memory/classes/heap/released:bytes` | Memori dikembalikan ke OS bertahap; belum tentu bocor |
+| Heap target membengkak tiap siklus | kolom `->` pada `gctrace` | Objek hidup memang bertambah — kandidat kebocoran sesungguhnya |
+
+```bash
+# Satu baris per siklus GC: fase, durasi, dan heap sebelum->sesudah->target
+GODEBUG=gctrace=1 ./app 2>&1 | head -20
+
+# Apa yang paling banyak dialokasikan (bukan yang paling banyak dipakai)
+go tool pprof -sample_index=alloc_space  -top 'http://localhost:6060/debug/pprof/allocs?seconds=30'
+go tool pprof -sample_index=alloc_objects -top 'http://localhost:6060/debug/pprof/allocs?seconds=30'
+
+# Apa yang masih hidup sekarang -- ini yang menentukan target GC
+go tool pprof -sample_index=inuse_space -top http://localhost:6060/debug/pprof/heap
+
+# Riwayat OOMKilled di cluster
+kubectl get pods -o json \
+  | jq -r '.items[] | select(.status.containerStatuses[]?.lastState.terminated.reason=="OOMKilled") | .metadata.name'
+```
+
+```go
+// runtime/metrics lebih presisi daripada MemStats dan tidak memicu stop-the-world.
+// Ekspor minimal empat ini sebagai gauge:
+//   /gc/heap/live:bytes              objek hidup setelah mark
+//   /gc/pauses:seconds               histogram jeda stop-the-world
+//   /memory/classes/total:bytes      total yang dipegang runtime (bandingkan dengan GOMEMLIMIT)
+//   /sched/latencies:seconds         berapa lama goroutine menunggu giliran
+```

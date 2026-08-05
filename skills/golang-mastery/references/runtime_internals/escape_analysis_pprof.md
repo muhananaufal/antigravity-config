@@ -1,5 +1,7 @@
 # Golang Escape Analysis & Memory Profiling (pprof)
 
+> **Berlaku:** Go 1.21+ · **Lihat juga:** `runtime_internals/gc_mark_sweep_internals.md` · `runtime_internals/goroutine_stack_growth.md` · `hft_zero_alloc/zero_allocation_patterns.md` · `testing_quality/benchmarking_pprof.md`
+
 ## 1. Konsep dan Arsitektur Internal (Technical Depth)
 
 Salah satu alasan mengapa bahasa Go bisa sangat cepat secara operasional (sebanding dengan bahasa tanpa GC seperti C/Rust di banyak beban kerja I/O) adalah efisiensi algoritma kompilernya dalam meletakkan data variabel di memori. Ini diatur oleh *Escape Analysis*.
@@ -233,3 +235,37 @@ func extractIDs(data []User) []int {
    `header := imageBytes[:50]`. Anda kemudian menyimpan variabel `header` ini ke *global cache* jangka panjang.
    *Edge Case:* Di Go, slice (potongan) mewarisi (*share*) *underlying base array* yang sama. Meskipun `header` panjangnya 50 byte, variabel ini menahan **seluruh sisa 10MB RAM array induk** dari jangkauan *Garbage Collector*! GC tidak dapat memilah "oh, dia hanya butuh 50 byte", karena *GC tracing pointer* melihat satu bongkah utuh.
    *Solusi Spesifik:* Lakukan `copy` byte array data krusial tersebut ke struktur *array slice* yang sungguh-sungguh baru dengan kapasitas persis 50 byte: `clone := bytes.Clone(header)`. Lalu simpan *clone* tersebut dan biarkan *pointer* array asal gugur ditelan GC.
+
+## Kapan JANGAN Pakai Ini
+
+- **Mengejar nol alokasi di kode yang bukan hot path.** Fungsi yang berjalan sepuluh kali per menit tidak akan berubah latensinya, tetapi menjadi jauh lebih sulit dibaca dan lebih mudah salah.
+- **Memakai `-gcflags=-m` sebagai vonis.** Keluarannya menunjukkan **keputusan kompilator**, bukan dampaknya terhadap latensi. Yang memutuskan tetap `-benchmem` dan `benchstat`.
+- **Mengubah nilai menjadi pointer "supaya tidak menyalin".** Pointer sering justru memaksa objek escape ke heap. Untuk struct kecil, menyalin di stack lebih murah daripada satu alokasi heap.
+- **Menaruh buffer besar di `sync.Pool` karena benchmark mikro membaik.** Ukur juga RSS-nya: pool yang menahan buffer besar membuat memori tinggi permanen.
+- **Mengoptimalkan alokasi sebelum profil menunjukkannya sebagai penyebab.** Bila penyempitannya I/O atau lock, nol alokasi tidak mengubah apa pun.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| CPU banyak terpakai di `runtime.mallocgc` | profil CPU | Laju alokasi tinggi; cari sumbernya di profil alokasi |
+| GC berjalan sangat sering | `gctrace` | Sampah dihasilkan lebih cepat daripada bisa dibersihkan |
+| Latensi naik seiring ukuran payload | alokasi per permintaan | Buffer dialokasikan ulang per permintaan alih-alih dipakai ulang |
+| `interface{}`/`any` mendominasi profil alokasi | boxing nilai | Setiap nilai yang masuk interface bisa memaksa alokasi |
+| Slice tumbuh berulang di profil | `append` tanpa kapasitas awal | Realokasi berkali-kali; pakai `make([]T, 0, n)` |
+
+```bash
+# Keputusan kompilator, per baris. Cari yang benar-benar ada di hot path.
+go build -gcflags='-m -m' ./... 2>&1 | grep 'escapes to heap' | head -30
+
+# Bukti dampaknya -- ini yang menentukan, bukan keluaran -m
+go test -bench=. -benchmem -run='^$' ./...
+go test -bench=BenchmarkParse -benchmem -memprofile=mem.out -run='^$' ./...
+go tool pprof -top mem.out
+
+# Membuktikan perbaikan alih-alih menebaknya
+go test -bench=. -benchmem -count=10 -run='^$' ./... > lama.txt
+# ... ubah kode ...
+go test -bench=. -benchmem -count=10 -run='^$' ./... > baru.txt
+benchstat lama.txt baru.txt
+```

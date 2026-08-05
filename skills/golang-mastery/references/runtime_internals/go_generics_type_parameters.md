@@ -1,5 +1,7 @@
 # Golang Generics (Type Parameters) Internals
 
+> **Berlaku:** Go 1.21+ (generics sejak 1.18) · **Lihat juga:** `runtime_internals/stdlib_modern_slices_maps_sync.md` · `runtime_internals/iterators_range_over_func.md` · `runtime_internals/escape_analysis_pprof.md` · `arch_patterns/clean_hexagonal_architecture.md`
+
 ## 1. Konsep dan Arsitektur Internal (Technical Depth)
 
 Generik (diperkenalkan pada Go 1.18) akhirnya memecahkan kutukan *boilerplate* kodifikasi fungsi berulang (misal `MaxInt`, `MaxFloat64`) di Go. Namun, implementasinya di balik layar sangat berbeda dengan C++ (yang menggunakan substitusi *Monomorphization* gila-gilaan) atau Java (yang menggunakan *Type Erasure* penuh via `Object`).
@@ -257,3 +259,35 @@ func (s *Stack[T]) Pop() T {
    *Kasus:* Anda membuat fungsi pemroses generik tunggal `Process[T any]`, lalu di dalamnya Anda melakukan `switch x := any(item).(type) { case int: ... }`.
    *Edge Case:* Anda membuang kehebatan Stenciling *monomorphization* ke tong sampah. Karena Anda me-*repack* tipe konkret T kembali ke *interface{}* (`any`), dan melakukan *runtime reflection switch*, memori yang tadinya murni dialokasikan efisien di *Stack*, tiba-tiba terjebak *Escape Analysis* dipaksa pindah ke *Heap*. *Latency* akan membengkak, objek berantakan dan GC menangis.
    *Solusi Spesifik:* Jika logika internal Anda harus bercabang secara drastis berdasarkan tipe data internalnya, artinya desain arsitektur Anda **TIDAK COCOK** untuk Go Generics! Bubarkan fungsi generiknya; gunakan model *method overloading* standar atau murni pendekatan *interface* tradisional. Jangan gabungkan generik dan tipe-casting dinamis dalam satu lorong padat.
+
+## Kapan JANGAN Pakai Ini
+
+- **Untuk menggantikan interface yang sudah bekerja.** Bila pemanggil hanya butuh satu perilaku, interface lebih sederhana dan tidak memaksa parameter tipe merambat ke seluruh tanda tangan fungsi di atasnya.
+- **Untuk "utilitas umum" yang dipakai satu kali.** Generik dibayar dengan keterbacaan dan waktu kompilasi. Satu fungsi konkret yang jelas mengalahkan satu fungsi generik yang pintar.
+- **Ketika tiap tipe butuh perilaku berbeda.** Generik memberi **satu** implementasi untuk banyak tipe. Bila perilakunya berbeda per tipe, yang dibutuhkan interface — atau `switch` tipe yang eksplisit.
+- **Dengan asumsi generik selalu lebih cepat dari interface.** Go memakai stenciling parsial berbasis GC shape: semua tipe pointer berbagi satu instansiasi dan mengakses metode lewat dictionary, jadi panggilannya tetap tidak langsung. Keuntungan nyata muncul pada tipe nilai, tidak otomatis pada semua.
+- **Constraint `any` yang lalu ditambal refleksi di dalam.** Itu membuang seluruh keamanan tipe yang menjadi alasan memakai generik.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Waktu kompilasi naik mencolok | jumlah instansiasi | Terlalu banyak parameter tipe berbeda distensil |
+| Ukuran biner membengkak | simbol `go.shape` | Tiap bentuk tipe menghasilkan salinan kode |
+| Benchmark generik tidak lebih cepat dari interface | tipe yang dipakai | Tipe pointer berbagi instansiasi dan tetap memakai dictionary |
+| Alokasi tak terduga di jalur generik | profil alokasi | Nilai di-box saat masuk dictionary |
+| Tanda tangan fungsi merambat parameter tipe ke mana-mana | siapa yang benar-benar butuh | Generik dipakai terlalu dekat ke tepi sistem |
+
+```bash
+# Jumlah instansiasi berbasis bentuk yang benar-benar dihasilkan
+go tool nm ./app | grep -c 'go\.shape'
+go tool nm -size -sort size ./app | head -20
+
+# Bandingkan langsung versi generik dan versi interface
+go test -bench='BenchmarkGeneric|BenchmarkInterface' -benchmem -count=10 -run='^$' ./... \
+  | tee hasil.txt
+benchstat hasil.txt
+
+# Apakah fungsinya benar-benar ter-inline?
+go build -gcflags='-m' ./... 2>&1 | grep -E 'inlin(e|ing)' | head -20
+```

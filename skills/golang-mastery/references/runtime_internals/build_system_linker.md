@@ -1,5 +1,7 @@
 # Golang Build System & Linker Internals
 
+> **Berlaku:** Go 1.21+ · **Lihat juga:** `runtime_internals/cgo_abi_boundaries.md` · `cli_tooling/binary_distribution_release.md` · `runtime_internals/pgo_profile_guided_optimization.md` · `devops_control_planes/docker_container_go.md`
+
 ## 1. Konsep dan Arsitektur Internal (Technical Depth)
 
 Sistem kompilasi Go sangat revolusioner karena kecepatannya. Dibandingkan dengan C++ (yang bergantung pada *Make*, *CMake*, resolusi *header* yang berulang-ulang, dan *linking* objek eksternal lambat), `go build` adalah *toolchain* monolitik yang dirancang khusus untuk mem-parsing, menganalisa dependensi (DAG - *Directed Acyclic Graph*), dan merakit sebuah *executable* biner *statically-linked* secara kilat.
@@ -160,3 +162,37 @@ import "github.com/mattn/go-sqlite3"
    *Kasus:* Anda mengoptimasi kalkulasi matematika rumit ke dalam satu fungsi pendek (`func calculate(a,b int) int`). Namun saat diluncurkan (deploy), *profiling* CPU menunjukkan *function call overhead* tinggi, fungsi Anda gagal di-*inline* oleh compiler.
    *Edge Case:* Kompiler Go memiliki "Anggaran Inlining" (Inlining Budget) sekitar 80 node AST. Jika fungsi pendek Anda diakhiri dengan `switch` 10 *case* atau memanggil banyak *panic* cabang, anggarannya tembus. Compiler tidak akan melebur fungsi tersebut ke kode pemanggil.
    *Solusi Spesifik:* Observasi inlining menggunakan perintah `go build -gcflags="-m -m"`. Pecah cabang error handling (seperti *panic* format) ke dalam fungsi *helper* kecil terpisah berlabel `//go:noinline`, agar fungsi kalkulasi utamanya mengecil dan lolos ambang *inlining budget*.
+
+## Kapan JANGAN Pakai Ini
+
+- **`-ldflags="-s -w"` bila debugger masih dibutuhkan.** Stack trace Go tetap terbaca (ia memakai `pclntab`, bukan DWARF), tetapi `delve`, `gdb`, dan sebagian alat simbolisasi kehilangan informasinya. Untuk layanan yang sering di-debug langsung, penghematan beberapa megabyte itu tidak sebanding.
+- **Mengejar ukuran biner sebagai target tersendiri.** Selisih 5 MB nyaris tidak pernah menjadi masalah nyata dibanding ukuran base image dan lapisan dependensi di atasnya.
+- **`CGO_ENABLED=0` dipasang membabi buta.** Beberapa paket (`os/user`, `net` dengan resolver sistem, sebagian driver) diam-diam beralih ke implementasi Go murni yang **perilakunya berbeda** — bukan gagal, tetapi berbeda. Itu jenis perubahan yang paling sulit dilacak.
+- **Build tag untuk memisahkan logika bisnis.** Kode di balik tag yang tidak aktif tidak dikompilasi, jadi tidak diperiksa kompilator maupun uji. Ia baru terlihat rusak saat lingkungan yang memakainya di-deploy.
+- **Melewatkan `-trimpath`.** Tanpanya, path absolut mesin build ikut tertanam di biner — bocor ke stack trace pengguna, dan membuat build tidak reproducible.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Path `/home/runner/work/...` muncul di stack trace | `-trimpath` dipakai atau tidak | Path mesin build tertanam di biner |
+| Dua build dari commit sama menghasilkan checksum berbeda | flag build di `go version -m` | Build tidak reproducible; sulit memverifikasi rilis |
+| Image besar tanpa alasan jelas | ukuran simbol per paket | DWARF ikut terbawa, atau dependensi tak terpakai tertaut |
+| Biner jalan di CI tapi gagal di image minimal | `file`, `ldd` | Tertaut dinamis; libc tidak ada di image |
+| Versi dependensi di produksi tidak sesuai dugaan | `go version -m` | Modul yang benar-benar tertaut berbeda dari yang diperkirakan |
+
+```bash
+# Modul, versi, dan flag build yang BENAR-BENAR dipakai untuk biner ini
+go version -m ./app | head -30
+
+# Apa yang membuat biner besar
+go tool nm -size -sort size ./app | head -20
+
+# Build produksi yang lazim
+go build -trimpath -ldflags='-s -w -X main.versi=1.4.2' -o app ./cmd/app
+file ./app && ls -lh ./app
+
+# Reproducible build: dua kali build harus menghasilkan checksum identik
+go build -trimpath -o a1 ./cmd/app && go build -trimpath -o a2 ./cmd/app
+sha256sum a1 a2
+```

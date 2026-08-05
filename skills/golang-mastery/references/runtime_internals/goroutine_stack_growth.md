@@ -1,5 +1,7 @@
 # Goroutine Stack Growth & Shrinking Internals
 
+> **Berlaku:** Go 1.21+ · **Lihat juga:** `runtime_internals/gmp_scheduler.md` · `concurrency/goroutine_leak_detection.md` · `runtime_internals/escape_analysis_pprof.md` · `runtime_internals/memory_allocator_arenas.md`
+
 ## 1. Konsep dan Arsitektur Internal (Technical Depth)
 
 Berbeda dengan utas OS (*Thread Native* seperti di C/C++ POSIX) yang sejak awal lahir menuntut porsi memori raksasa tak bergeming (umumnya 1MB-8MB ruang *virtual memory* per thread), Go menggunakan konsep **Contiguous Stack Dinamis** untuk *Goroutine*-nya. Ini adalah fondasi sesungguhnya dari kemampuan Go men-spawn jutaan konkurensi di server berukuran kecil.
@@ -244,3 +246,37 @@ func closeAllConnections(conns []net.Conn) {
    *Kasus:* Fungsi rutin poller TCP menerima paket gergasi 5MB sesekali, lalu diam menerima *heartbeat* 10 byte per jam selama ratusan hari.
    *Edge Case:* *Stack Shrinking* berjalan ketika siklus GC memindai goroutine. Jika Goroutine tersebut tak pernah membebaskan diri dari titik *sleep blocking* atau loop tak tentu, proses penyalinan dari *stack 10MB* diringkas jadi *2MB* (*memory shrinking copy*) terjadi, mengorbankan siklus CPU GC.
    *Solusi Spesifik:* Gunakan fungsi Goroutine secara temporal (*short-lived worker pattern*). Daripada poller TCP abadi yang menahan riwayat kedalaman stack gergasi, buat arsitektur loop utama kurus yang men-spawn goroutine kecil berumur-pendek per paket *network* yang datang.
+
+## Kapan JANGAN Pakai Ini
+
+- **`debug.SetMaxStack` untuk "mencegah" stack overflow.** Overflow stack di Go hampir selalu rekursi tak berujung. Mengubah batasnya hanya menggeser kapan proses mati, bukan menghilangkan penyebabnya.
+- **Mengoptimalkan pertumbuhan stack sebelum profil menunjukkannya.** `runtime.morestack` jarang menjadi penyempitan utama; alokasi heap dan kontensi lock hampir selalu lebih dominan.
+- **Array besar sebagai variabel lokal.** Yang tampak seperti "menghindari heap" justru memicu penyalinan stack berulang, dan bila melewati ambang tetap berakhir di heap juga.
+- **`defer` di dalam loop panjang.** Sejak Go 1.14 ongkosnya kecil, tetapi defer tetap menumpuk sampai fungsi induk selesai. Masalahnya bukan kecepatan — melainkan sumber daya (lock, berkas, koneksi) yang tertahan sampai akhir.
+- **Rekursi yang kedalamannya ditentukan input pengguna.** JSON atau XML bersarang dalam adalah vektor DoS yang sah: satu permintaan bisa menghabiskan stack dan mematikan proses.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Memori naik sebanding jumlah goroutine | `os-stacks:bytes` | Yang tumbuh stack goroutine, bukan heap |
+| `fatal error: stack overflow` | jejak rekursi di stack trace | Rekursi tak berujung, atau input bersarang terlalu dalam |
+| CPU terpakai di `runtime.morestack` | profil CPU | Stack tumbuh berulang di jalur panas |
+| Memori tetap tinggi setelah lonjakan trafik reda | jumlah goroutine sekarang | Stack menyusut lambat; atau goroutine memang belum mati |
+| Proses mati tanpa `OOMKilled` | log crash | Stack overflow mematikan proses tanpa lewat OOM killer |
+
+```bash
+# Total memori stack seluruh goroutine (runtime/metrics: /memory/classes/os-stacks:bytes)
+curl -s localhost:6060/debug/pprof/goroutine?debug=1 | head -5
+
+# Stack overflow menyebutkan batasnya secara eksplisit di log:
+#   runtime: goroutine stack exceeds 1000000000-byte limit
+#   fatal error: stack overflow
+kubectl logs -l app=api --previous | grep -A15 'stack overflow'
+
+# Kedalaman stack terdalam yang sedang aktif
+curl -s 'localhost:6060/debug/pprof/goroutine?debug=2' \
+  | awk '/^goroutine /{if(n>m){m=n}; n=0} /^\t/{n++} END{print "frame terdalam:", m}'
+
+go tool pprof -top 'http://localhost:6060/debug/pprof/profile?seconds=30' | grep -i morestack
+```

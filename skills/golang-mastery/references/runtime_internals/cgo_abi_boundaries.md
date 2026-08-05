@@ -1,5 +1,7 @@
 # Golang CGO & ABI Boundaries Internals
 
+> **Berlaku:** Go 1.21+ (`GOEXPERIMENT=cgocheck2` menggantikan `GODEBUG=cgocheck=2`) · **Lihat juga:** `runtime_internals/gmp_scheduler.md` · `runtime_internals/build_system_linker.md` · `system_programming_linux/process_management_exec.md` · `devops_control_planes/docker_container_go.md`
+
 ## 1. Konsep dan Arsitektur Internal (Technical Depth)
 
 CGO bukanlah sebuah _Foreign Function Interface_ (FFI) yang sederhana seperti di bahasa Python atau Rust; CGO di Golang adalah sebongkah mesin virtual jembatan (*bridge*) yang tebal yang merangkai dua semesta komputasi yang memiliki paradigma memori dan eksekusi bertolak belakang: **Go Runtime (Goroutine/M/P) vs OS Native (POSIX Threads/C ABI)**.
@@ -220,3 +222,36 @@ func ProcessImage(pixels []int) {
    *Kasus:* Anda membangun `.so` atau `.dll` (Shared Library) dari bahasa Golang (menggunakan `buildmode=c-shared`) agar librari Go bisa dipanggil dari aplikasi C# atau Java utama (via JNI/PInvoke).
    *Edge Case:* OS Thread yang dikelola C#/Java mendadak memanggil *exported Go function*. Runtime Go belum siap dan belum merakit struktur `G`, `M`, `P` untuk utas asing tersebut. Go akan menabrak rutinitas *cgo_callback_sig* (Signal Handling) secara brutal.
    *Solusi Spesifik:* Pastikan desain tidak merusak rutinitas inisiasi `_cgo_wait_runtime_init_done`. Di lingkungan Windows, Anda tidak bisa dengan mudah melemparkan goroutine sebagai *C function pointer callbacks* untuk library C-Windows API secara *asynchronous thread*, tanpa mengatur `runtime.LockOSThread` terlebih dahulu di akar (root) pendelegasian antarmuka tersebut.
+
+## Kapan JANGAN Pakai Ini
+
+- **Untuk sesuatu yang sudah punya padanan Go murni.** CGO menghilangkan cross-compilation sederhana, memperlambat build, mempersulit biner statis, dan membuat sebagian crash tidak lagi bisa ditelusuri lewat stack trace Go.
+- **Di jalur panas.** Tiap penyeberangan membawa ongkos transisi puluhan sampai ratusan nanodetik, ditambah kemungkinan goroutine dipindahkan ke thread lain. Ratusan ribu panggilan per detik akan terasa jelas.
+- **Ketika biner statis untuk `distroless`/`scratch` dibutuhkan.** CGO menarik libc secara dinamis kecuali dikompilasi dengan sangat hati-hati. Ini sumber `no such file or directory` yang membingungkan — binernya ada, pustakanya yang tidak.
+- **Untuk menghindari menulis ulang pustaka kecil.** Ongkos pemeliharaan lintas-bahasa berlaku selamanya; penulisan ulang dibayar sekali.
+- **Bila tim belum siap men-debug memori manual.** Aturan pointer cgo bersifat mutlak, dan pelanggarannya menghasilkan kerusakan yang tidak deterministik — muncul berminggu-minggu kemudian di tempat yang tidak berhubungan.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Container gagal start: `no such file or directory` | `file ./app`, `ldd ./app` | Biner tertaut dinamis; image minimal tidak punya libc |
+| Jumlah thread OS membengkak | `pprof/threadcreate` | Panggilan CGO yang memblokir menahan M |
+| Crash tanpa stack trace Go | log crash mentah | Panik terjadi di sisi C; runtime Go tidak melihatnya |
+| `fatal error: found bad pointer in Go heap` | aturan pointer cgo | Pointer Go disimpan di memori C, atau sebaliknya |
+| Build CI jauh lebih lambat dari biasanya | `CGO_ENABLED` | CGO mematikan sebagian cache build |
+
+```bash
+go env CGO_ENABLED
+file ./app                       # "statically linked" yang diinginkan untuk distroless
+ldd ./app 2>/dev/null || echo "tertaut statis"
+
+# Pemeriksaan aturan pointer cgo yang ketat. Mahal -- untuk uji, bukan produksi.
+GOEXPERIMENT=cgocheck2 go test ./...
+
+# Thread OS yang menumpuk karena CGO memblokir
+curl -s 'localhost:6060/debug/pprof/threadcreate?debug=1' | head -5
+
+# Crash dari sisi C tidak punya stack Go -- cari jejaknya di container sebelumnya
+kubectl logs -l app=api --previous | grep -E 'SIGSEGV|signal arrived during cgo'
+```

@@ -1,5 +1,7 @@
 # Golang Memory Allocator & Arenas Internals
 
+> **Berlaku:** Go 1.21+ · paket `arena` masih eksperimental (`GOEXPERIMENT=arenas`) · **Lihat juga:** `runtime_internals/gc_mark_sweep_internals.md` · `runtime_internals/escape_analysis_pprof.md` · `hft_zero_alloc/memory_arena_batch_alloc.md` · `concurrency/sync_primitives_deep.md`
+
 ## 1. Konsep dan Arsitektur Internal (Technical Depth)
 
 Go memiliki *Memory Allocator* tingkat lanjut yang dimodelkan berdasarkan **TCMalloc** (Thread-Caching Malloc) milik Google. Allocator Go dirancang untuk menangani beban konkurensi (Goroutine) secara efisien tanpa mengalami *bottleneck* penguncian (lock contention) tingkat global, serta berfokus meminimalisir fragmentasi *heap*.
@@ -251,3 +253,37 @@ func parsePayload(dynamicSize int) {
    *Kasus:* Menggunakan CGO untuk memanggil C++ library (contoh AI Inference atau Image Processing). Anda memantau `runtime.MemStats.HeapInuse`.
    *Edge Case:* `MemStats` HANYA melaporkan blok data dari pengelola Go `mheap`. Jika librari C melakukan `malloc()` sebesar 4GB, Go runtime akan mengabarkan bahwa heap usage Anda cuma 50MB! Anda tertipu dan mengira server aman.
    *Solusi Spesifik:* Lacak `cgo` allocations via `jemalloc` atau instrumentasi metrik dari OS Linux `sys/fs/cgroup/memory.current` (bukan mengandalkan `runtime.MemStats` Go), lalu sediakan proteksi sirkuit-breaker untuk menolak *request* CGO baru ketika mendekati batas host.
+
+## Kapan JANGAN Pakai Ini
+
+- **`arena` di kode produksi.** Ia berada di balik `GOEXPERIMENT`, tidak tercakup jaminan kompatibilitas Go 1, dan bisa dihapus tanpa jalur migrasi. `sync.Pool` dan slice yang dipakai ulang memberi sebagian besar manfaatnya tanpa risiko itu.
+- **Mengoptimalkan allocator sebelum mengurangi alokasi.** Alokasi yang tidak pernah terjadi selalu lebih cepat daripada alokasi yang dipercepat.
+- **Buffer raksasa berukuran beragam yang dialokasikan dinamis.** Objek di atas 32 KB masuk jalur large object dan diambil langsung dari mheap; ukuran yang berubah-ubah memperparah fragmentasi dan menahan span.
+- **Menaruh objek berumur panjang di pool objek berumur pendek.** Itu membalik asumsi allocator dan menahan span yang seharusnya sudah bebas.
+- **Membaca RSS sebagai ukuran heap.** Go mengembalikan memori ke OS secara bertahap. RSS yang tinggi setelah beban reda belum tentu kebocoran — bandingkan dengan `heap/released`.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| RSS jauh di atas heap yang hidup | `heap/objects` vs `heap/free` vs `heap/released` | Fragmentasi, atau memori belum dikembalikan ke OS |
+| Alokasi besar berulang di profil | distribusi ukuran objek | Jalur large object; pertimbangkan buffer berukuran tetap |
+| `sync.Pool` tidak menurunkan alokasi | rasio `Get` vs `Put` | Objek tidak pernah dikembalikan ke pool |
+| Memori naik seiring jumlah goroutine | `os-stacks:bytes` | Yang tumbuh stack, bukan heap |
+| Heap tinggi tapi objek hidup sedikit | `gctrace` kolom sesudah GC | Sampah menumpuk di antara siklus; laju alokasi terlalu tinggi |
+
+```go
+// runtime/metrics memberi pemisahan yang MemStats tidak berikan:
+//   /memory/classes/heap/objects:bytes    objek yang hidup
+//   /memory/classes/heap/free:bytes       span bebas, siap dipakai lagi
+//   /memory/classes/heap/released:bytes   sudah dikembalikan ke OS
+//   /memory/classes/os-stacks:bytes       memori stack seluruh goroutine
+```
+
+```bash
+go tool pprof -sample_index=inuse_space   -top http://localhost:6060/debug/pprof/heap
+go tool pprof -sample_index=alloc_objects -top 'http://localhost:6060/debug/pprof/allocs?seconds=30'
+
+# Kolom heap pada gctrace: sebelum -> sesudah -> target
+GODEBUG=gctrace=1 ./app 2>&1 | head -20
+```
