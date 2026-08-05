@@ -558,16 +558,22 @@ spec:
                 # terhitung dua kali.
                 command: ["sleep", "5"]
           readinessProbe:
-            httpGet: { path: /readyz, port: 8080 }
+            httpGet: { path: /readyz, port: 9090 }
             periodSeconds: 2
+            timeoutSeconds: 1
             # failureThreshold × periodSeconds = berapa lama sampai endpoint
-            # benar-benar dilepas. Default 3 × 10 = 30 detik — LEBIH LAMA dari
-            # seluruh grace period, sehingga Pod mati sebelum sempat ditandai
-            # tidak siap dan jeda di aplikasi jadi sia-sia.
-            failureThreshold: 2   # ~4 detik
+            # benar-benar dilepas: 2 × 2 = 4 detik, DI BAWAH jedaTepi 5 detik.
+            # Bawaan 3 × 10 = 30 detik LEBIH LAMA dari seluruh grace period,
+            # sehingga Pod mati sebelum sempat ditandai tidak siap dan jeda di
+            # aplikasi tidak menghasilkan apa-apa.
+            failureThreshold: 2
           livenessProbe:
-            httpGet: { path: /healthz, port: 8080 }
+            # WAJIB tetap 200 selama drain. Liveness yang ikut 503 saat
+            # shutdown membuat kubelet me-restart container di tengah drain —
+            # lihat Anti-Pattern 4 di health_check_readiness.md.
+            httpGet: { path: /livez, port: 9090 }
             periodSeconds: 10
+            failureThreshold: 3
 ```
 
 ---

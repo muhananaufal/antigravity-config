@@ -51,188 +51,335 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
+	"log/slog"
 	"net/http"
-	"net/http/httptest"
+	"sync"
 	"sync/atomic"
-	"testing"
 	"time"
 )
 
-// CheckResult merepresentasikan hasil satu health check.
-type CheckResult struct {
-	Status  string `json:"status"`           // "UP" atau "DOWN"
-	Message string `json:"message,omitempty"` // detail error jika DOWN
+type Status string
+
+const (
+	StatusUP       Status = "UP"
+	StatusDEGRADED Status = "DEGRADED"
+	StatusDOWN     Status = "DOWN"
+)
+
+// Pemeriksaan adalah satu dependensi yang diperiksa readiness.
+type Pemeriksaan struct {
+	Nama string
+	// Kritis=false berarti kegagalannya menghasilkan DEGRADED (tetap 200),
+	// bukan 503. Menarik pod dari LB karena cache mati mengubah kegagalan
+	// PARSIAL menjadi kegagalan TOTAL — 90% permintaan yang masih bisa
+	// dilayani ikut dibuang.
+	Kritis  bool
+	Periksa func(context.Context) error
 }
 
-// HealthResponse adalah response JSON standar.
-type HealthResponse struct {
-	Status    string                 `json:"status"`    // "UP", "DOWN", "DEGRADED"
-	Timestamp time.Time              `json:"timestamp"`
-	Checks    map[string]CheckResult `json:"checks"`
+type HasilPeriksa struct {
+	Status Status `json:"status"`
+	// Pesan memuat galat mentah. Aman HANYA karena port probe tidak pernah
+	// diekspos ke internet (Anti-Pattern 2) — galat koneksi DB kerap memuat
+	// host dan nama pengguna.
+	Pesan string `json:"pesan,omitempty"`
 }
 
-// HealthChecker mengatur semua health check dengan lifecycle management.
+type ResponsKesehatan struct {
+	Status Status                  `json:"status"`
+	Waktu  time.Time               `json:"waktu"`
+	Cek    map[string]HasilPeriksa `json:"cek"`
+}
+
 type HealthChecker struct {
-	db             *sql.DB
-	isShuttingDown atomic.Bool
-	dbCheckTimeout time.Duration
+	sedangMati atomic.Bool
+
+	pemeriksaan  []Pemeriksaan
+	batasPeriksa time.Duration
+
+	mu        sync.RWMutex
+	terakhir  ResponsKesehatan
+	kodeAkhir int
+
+	denyut      sync.Map // nama komponen → *atomic.Int64 (UnixNano)
+	batasDenyut time.Duration
 }
 
-// NewHealthChecker membuat HealthChecker baru.
-func NewHealthChecker(db *sql.DB) *HealthChecker {
+func NewHealthChecker(pemeriksaan ...Pemeriksaan) *HealthChecker {
 	return &HealthChecker{
-		db:             db,
-		dbCheckTimeout: 2 * time.Second, // ketat — jangan biarkan probe block lama
+		pemeriksaan: pemeriksaan,
+		// Lebih kecil dari probe.timeoutSeconds — yang default-nya di
+		// Kubernetes adalah 1 DETIK. Lihat Anti-Pattern 3.
+		batasPeriksa: 800 * time.Millisecond,
+		batasDenyut:  60 * time.Second,
+		// FAIL-CLOSED: sebelum pemeriksaan pertama selesai, pod BELUM siap.
+		// Bawaan yang sebaliknya membuat pod yang dependensinya belum terpasang
+		// sama sekali melapor SIAP dan langsung menerima trafik.
+		kodeAkhir: http.StatusServiceUnavailable,
+		terakhir:  ResponsKesehatan{Status: StatusDOWN, Cek: map[string]HasilPeriksa{}},
 	}
 }
 
 // MarkShuttingDown dipanggil saat SIGTERM diterima — readiness segera 503.
-func (h *HealthChecker) MarkShuttingDown() {
-	h.isShuttingDown.Store(true)
+func (h *HealthChecker) MarkShuttingDown() { h.sedangMati.Store(true) }
+
+// MulaiPenyegar menjalankan pemeriksaan di LATAR BELAKANG, bukan di jalur probe.
+//
+// Alasannya bukan sekadar mengurangi beban. `db.PingContext` MENGAMBIL koneksi
+// dari pool: saat pool jenuh di puncak trafik, ping mengantre dan readiness
+// gagal — padahal database baik-baik saja. Pod ditarik dari LB, bebannya pindah
+// ke pod sisanya, pool mereka ikut jenuh, dan seterusnya. Itu kaskade yang
+// sama persis dengan Anti-Pattern 1, hanya lewat pintu readiness.
+func (h *HealthChecker) MulaiPenyegar(ctx context.Context, tiap time.Duration) {
+	go func() {
+		t := time.NewTicker(tiap)
+		defer t.Stop()
+		h.segarkan(ctx) // sekali di awal agar pod tidak lama tertahan di 503
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				h.segarkan(ctx)
+			}
+		}
+	}()
 }
 
-// LivenessHandler — HANYA cek goroutine tidak deadlock.
-// JANGAN pernah cek DB/Redis di sini.
+func (h *HealthChecker) segarkan(induk context.Context) {
+	cek := make(map[string]HasilPeriksa, len(h.pemeriksaan))
+	status := StatusUP
+	kode := http.StatusOK
+
+	for _, p := range h.pemeriksaan {
+		ctx, batal := context.WithTimeout(induk, h.batasPeriksa)
+		err := p.Periksa(ctx)
+		batal()
+
+		switch {
+		case err == nil:
+			cek[p.Nama] = HasilPeriksa{Status: StatusUP}
+		case p.Kritis:
+			cek[p.Nama] = HasilPeriksa{Status: StatusDOWN, Pesan: err.Error()}
+			status, kode = StatusDOWN, http.StatusServiceUnavailable
+		default:
+			cek[p.Nama] = HasilPeriksa{Status: StatusDOWN, Pesan: err.Error()}
+			if status == StatusUP {
+				status = StatusDEGRADED // tetap 200
+			}
+		}
+	}
+
+	h.mu.Lock()
+	h.terakhir = ResponsKesehatan{Status: status, Waktu: time.Now(), Cek: cek}
+	h.kodeAkhir = kode
+	h.mu.Unlock()
+}
+
+// DaftarkanDenyut dipanggil SEBELUM komponen berjalan, supaya komponen yang
+// tidak pernah berdenyut sekali pun tetap terdeteksi.
+func (h *HealthChecker) DaftarkanDenyut(komponen string) { h.KetukDenyut(komponen) }
+
+// KetukDenyut dipanggil setiap iterasi oleh goroutine latar (konsumer antrean,
+// scheduler).
+//
+// Inilah yang membuat liveness benar-benar berarti. Handler yang sekadar
+// mengembalikan 200 hanya membuktikan goroutine HTTP hidup — ia tidak
+// membuktikan apa pun tentang worker yang macet, padahal worker macet adalah
+// satu-satunya keadaan yang memang pantas disembuhkan dengan restart.
+func (h *HealthChecker) KetukDenyut(komponen string) {
+	v, _ := h.denyut.LoadOrStore(komponen, new(atomic.Int64))
+	v.(*atomic.Int64).Store(time.Now().UnixNano())
+}
+
+func (h *HealthChecker) denyutBasi() (string, bool) {
+	var basi string
+	h.denyut.Range(func(k, v any) bool {
+		umur := time.Since(time.Unix(0, v.(*atomic.Int64).Load()))
+		if umur > h.batasDenyut {
+			basi = fmt.Sprintf("%v basi %s", k, umur.Round(time.Second))
+			return false
+		}
+		return true
+	})
+	return basi, basi != ""
+}
+
+// LivenessHandler menjawab satu pertanyaan: apakah proses ini masih waras?
+//
+// Perhatikan apa yang TIDAK ada di sini: pemeriksaan sedangMati. Liveness yang
+// gagal membuat Kubernetes MEMBUNUH DAN ME-RESTART container. Selama graceful
+// shutdown, itu memotong drain di tengah — persis kebalikan dari yang
+// diinginkan. Saat shutdown, hanya READINESS yang boleh berubah jadi 503.
 func (h *HealthChecker) LivenessHandler(w http.ResponseWriter, r *http.Request) {
-	if h.isShuttingDown.Load() {
-		w.WriteHeader(http.StatusServiceUnavailable)
-		w.Write([]byte("shutting down"))
+	if pesan, basi := h.denyutBasi(); basi {
+		slog.Error("liveness gagal: denyut komponen basi", "detail", pesan)
+		http.Error(w, "denyut basi: "+pesan, http.StatusServiceUnavailable)
 		return
 	}
-	// Jika HTTP event loop mencapai sini → server tidak deadlock
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("OK"))
+	_, _ = w.Write([]byte("OK"))
 }
 
-// ReadinessHandler — cek dependency kritis.
+// ReadinessHandler menyajikan hasil pemeriksaan terakhir. Ia TIDAK memanggil
+// dependensi apa pun secara langsung.
 func (h *HealthChecker) ReadinessHandler(w http.ResponseWriter, r *http.Request) {
-	// Segera return 503 saat shutdown — hapus pod dari LB traffic
-	if h.isShuttingDown.Load() {
-		w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/json")
+
+	if h.sedangMati.Load() {
 		w.WriteHeader(http.StatusServiceUnavailable)
-		json.NewEncoder(w).Encode(HealthResponse{
-			Status:    "DOWN",
-			Timestamp: time.Now(),
-			Checks:    map[string]CheckResult{"shutdown": {Status: "DOWN", Message: "graceful shutdown in progress"}},
+		_ = json.NewEncoder(w).Encode(ResponsKesehatan{
+			Status: StatusDOWN,
+			Waktu:  time.Now(),
+			Cek:    map[string]HasilPeriksa{"shutdown": {Status: StatusDOWN, Pesan: "graceful shutdown berjalan"}},
 		})
 		return
 	}
 
-	checks := make(map[string]CheckResult)
-	allUp := true
+	h.mu.RLock()
+	resp, kode := h.terakhir, h.kodeAkhir
+	h.mu.RUnlock()
 
-	// Check database dengan timeout ketat
-	if h.db != nil {
-		dbCtx, dbCancel := context.WithTimeout(r.Context(), h.dbCheckTimeout)
-		defer dbCancel()
-
-		if err := h.db.PingContext(dbCtx); err != nil {
-			checks["database"] = CheckResult{Status: "DOWN", Message: err.Error()}
-			allUp = false
-		} else {
-			checks["database"] = CheckResult{Status: "UP"}
-		}
-	}
-
-	resp := HealthResponse{
-		Status:    "UP",
-		Timestamp: time.Now(),
-		Checks:    checks,
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	if !allUp {
-		resp.Status = "DOWN"
-		w.WriteHeader(http.StatusServiceUnavailable) // 503
-	} else {
-		w.WriteHeader(http.StatusOK) // 200
-	}
-	json.NewEncoder(w).Encode(resp)
+	w.WriteHeader(kode)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 // RegisterProbeHandlers mendaftarkan handler di mux terpisah (port 9090).
-// Wajib di-register di port BERBEDA dari API publik.
+// Wajib di-register di port BERBEDA dari API publik — lihat Anti-Pattern 2.
 func (h *HealthChecker) RegisterProbeHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("/livez", h.LivenessHandler)
 	mux.HandleFunc("/readyz", h.ReadinessHandler)
 }
 
-// --- Unit Tests ---
-
-func TestLivenessHandler_Healthy(t *testing.T) {
-	hc := NewHealthChecker(nil)
-	req := httptest.NewRequest(http.MethodGet, "/livez", nil)
-	rec := httptest.NewRecorder()
-
-	hc.LivenessHandler(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Errorf("liveness healthy: got %d, want 200", rec.Code)
+// PemeriksaanDB membungkus *sql.DB menjadi Pemeriksaan kritis.
+func PemeriksaanDB(db *sql.DB) Pemeriksaan {
+	return Pemeriksaan{
+		Nama:    "database",
+		Kritis:  true,
+		Periksa: func(ctx context.Context) error { return db.PingContext(ctx) },
 	}
 }
+```
 
-func TestLivenessHandler_ShuttingDown(t *testing.T) {
-	hc := NewHealthChecker(nil)
+```go
+package healthz
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+)
+
+// Uji terpenting di berkas ini. Liveness yang gagal saat shutdown membuat
+// Kubernetes me-restart container DI TENGAH drain. Versi lama berkas ini
+// mengembalikan 503 di sini — dan ujinya mengunci perilaku itu sebagai benar.
+func TestLivenessTetap200SaatShutdown(t *testing.T) {
+	hc := NewHealthChecker()
 	hc.MarkShuttingDown()
 
-	req := httptest.NewRequest(http.MethodGet, "/livez", nil)
 	rec := httptest.NewRecorder()
-	hc.LivenessHandler(rec, req)
+	hc.LivenessHandler(rec, httptest.NewRequest(http.MethodGet, "/livez", nil))
 
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Errorf("liveness shutting down: got %d, want 503", rec.Code)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("liveness saat shutdown = %d, mau 200 (503 memicu restart di tengah drain)", rec.Code)
 	}
 }
 
-func TestReadinessHandler_NoDB(t *testing.T) {
-	// Readiness tanpa DB dependency harus return 200
-	hc := NewHealthChecker(nil)
-	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+func TestLivenessGagalSaatDenyutBasi(t *testing.T) {
+	hc := NewHealthChecker()
+	hc.batasDenyut = 10 * time.Millisecond
+	hc.DaftarkanDenyut("konsumer-antrean")
+	time.Sleep(20 * time.Millisecond)
+
 	rec := httptest.NewRecorder()
+	hc.LivenessHandler(rec, httptest.NewRequest(http.MethodGet, "/livez", nil))
 
-	hc.ReadinessHandler(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Errorf("readiness no-db: got %d, want 200", rec.Code)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("liveness dengan denyut basi = %d, mau 503", rec.Code)
 	}
+}
 
-	var resp HealthResponse
+// Fail-closed. Versi lama mengembalikan 200 sebelum satu dependensi pun
+// diperiksa: pod yang DB-nya belum terpasang melapor SIAP dan menerima trafik.
+func TestReadinessBelumDiperiksaBerartiTidakSiap(t *testing.T) {
+	hc := NewHealthChecker(Pemeriksaan{
+		Nama: "db", Kritis: true,
+		Periksa: func(context.Context) error { return nil },
+	})
+
+	rec := httptest.NewRecorder()
+	hc.ReadinessHandler(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("readiness sebelum pemeriksaan pertama = %d, mau 503", rec.Code)
+	}
+}
+
+func TestReadinessDependensiKritisJatuh(t *testing.T) {
+	hc := NewHealthChecker(Pemeriksaan{
+		Nama: "db", Kritis: true,
+		Periksa: func(context.Context) error { return errors.New("koneksi ditolak") },
+	})
+	hc.segarkan(context.Background())
+
+	rec := httptest.NewRecorder()
+	hc.ReadinessHandler(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("kode = %d, mau 503", rec.Code)
+	}
+	var resp ResponsKesehatan
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
-		t.Fatalf("decode response: %v", err)
+		t.Fatalf("dekode: %v", err)
 	}
-	if resp.Status != "UP" {
-		t.Errorf("status = %q, want UP", resp.Status)
+	if resp.Status != StatusDOWN {
+		t.Fatalf("status = %q, mau DOWN", resp.Status)
 	}
 }
 
-func TestReadinessHandler_ShutdownReturns503(t *testing.T) {
-	hc := NewHealthChecker(nil)
+// Kegagalan parsial TIDAK boleh diubah menjadi kegagalan total.
+func TestReadinessDependensiOpsionalJatuhTetapSiap(t *testing.T) {
+	hc := NewHealthChecker(
+		Pemeriksaan{Nama: "db", Kritis: true,
+			Periksa: func(context.Context) error { return nil }},
+		Pemeriksaan{Nama: "cache", Kritis: false,
+			Periksa: func(context.Context) error { return errors.New("redis mati") }},
+	)
+	hc.segarkan(context.Background())
+
+	rec := httptest.NewRecorder()
+	hc.ReadinessHandler(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("kode = %d, mau 200 — cache mati bukan alasan menarik pod dari LB", rec.Code)
+	}
+	var resp ResponsKesehatan
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("dekode: %v", err)
+	}
+	if resp.Status != StatusDEGRADED {
+		t.Fatalf("status = %q, mau DEGRADED", resp.Status)
+	}
+}
+
+func TestReadinessShutdownMengembalikan503(t *testing.T) {
+	hc := NewHealthChecker()
+	hc.segarkan(context.Background()) // tanpa dependensi → UP/200
 	hc.MarkShuttingDown()
 
-	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
 	rec := httptest.NewRecorder()
-	hc.ReadinessHandler(rec, req)
+	hc.ReadinessHandler(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 
 	if rec.Code != http.StatusServiceUnavailable {
-		t.Errorf("readiness shutdown: got %d, want 503", rec.Code)
+		t.Fatalf("kode = %d, mau 503", rec.Code)
 	}
-
-	var resp HealthResponse
-	json.NewDecoder(rec.Body).Decode(&resp)
-	if resp.Status != "DOWN" {
-		t.Errorf("status = %q, want DOWN", resp.Status)
-	}
-}
-
-func TestReadinessHandler_ContentType(t *testing.T) {
-	hc := NewHealthChecker(nil)
-	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
-	rec := httptest.NewRecorder()
-	hc.ReadinessHandler(rec, req)
-
-	ct := rec.Header().Get("Content-Type")
-	if ct != "application/json" {
-		t.Errorf("Content-Type = %q, want application/json", ct)
+	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+		t.Fatalf("Content-Type = %q, mau application/json", ct)
 	}
 }
 ```
@@ -296,46 +443,76 @@ func ReadinessHandler(w http.ResponseWriter, r *http.Request) {
 // → Readiness probe timeout sebelum Ping() selesai
 // → Pod terus di-remove dari LB padahal DB sebenarnya OK
 
-// GOOD: Timeout ketat, lebih kecil dari probe timeoutSeconds
-func ReadinessHandler(w http.ResponseWriter, r *http.Request) {
-    ctx, cancel := context.WithTimeout(r.Context(), 500*time.Millisecond)
-    defer cancel()
-    if err := db.PingContext(ctx); err != nil {
-        w.WriteHeader(503)
-    }
+// GOOD: timeout internal LEBIH KECIL dari probe.timeoutSeconds,
+// dan pemeriksaannya dijalankan di latar belakang (lihat §2).
+func (h *HealthChecker) segarkan(induk context.Context) {
+    ctx, batal := context.WithTimeout(induk, 800*time.Millisecond)
+    defer batal()
+    // ...
 }
 ```
 
-**Kenapa berbahaya:** Default `timeoutSeconds` K8s probe adalah 1 detik. Jika DB Ping membutuhkan 2 detik, probe selalu timeout — pod selalu dianggap NOT READY meski DB berfungsi normal. Seluruh deployment tidak pernah bisa siap menerima traffic.
+**Kenapa berbahaya:** default `timeoutSeconds` probe Kubernetes adalah **1 detik**, bukan 3. Bila ping DB butuh 2 detik, probe selalu timeout — pod selamanya NOT READY meski database berfungsi normal, dan deployment tidak pernah bisa menerima trafik.
+
+> Versi lama berkas ini memakai **2 detik** di kode, menyebut **500ms** di sini, dan **3 detik** di Edge Case 5 — tiga angka untuk satu rantai yang sama, sementara `timeoutSeconds` bawaan Kubernetes 1 detik membuat dua di antaranya mustahil berhasil. Setelah readiness disajikan dari cache (§2), rantainya jauh lebih sederhana: `batasPeriksa` membatasi penyegar latar, dan probe hanya membacakan hasil. Angka lengkapnya di Edge Case 5.
+
+### ❌ Anti-Pattern 4: Liveness Ikut Gagal Saat Graceful Shutdown
+
+Ini kesalahan yang paling merusak justru karena terlihat rapi dan konsisten.
+
+```go
+// BAD: satu penanda dipakai untuk kedua probe
+func (h *HealthChecker) LivenessHandler(w http.ResponseWriter, r *http.Request) {
+    if h.sedangMati.Load() {
+        w.WriteHeader(503) // Kubernetes: "container ini mati" → KILL + RESTART
+        return
+    }
+    w.WriteHeader(200)
+}
+```
+
+Liveness yang gagal **bukan** sinyal "jangan kirim trafik ke sini" — itu tugas readiness. Liveness yang gagal berarti "container ini rusak, bunuh dan hidupkan lagi". Selama drain, kubelet **tetap menjalankan liveness probe**. Setelah `failureThreshold` tercapai, container dibunuh di tengah drain: permintaan yang sedang berjalan putus, pool DB tidak sempat ditutup, dan seluruh urutan di `graceful_shutdown_drain.md` tidak pernah selesai.
+
+Yang membuatnya sulit terlihat: dengan `periodSeconds: 10` dan `failureThreshold: 3`, pembunuhan datang pada detik ke-30 — persis berimpit dengan `terminationGracePeriodSeconds`. Di lingkungan yang santai, drain menang tipis dan semuanya tampak normal. Percepat probe, perlambat drain sedikit, atau tambah beban, dan urutannya berbalik tanpa ada yang berubah di kode.
+
+```go
+// GOOD: shutdown HANYA memengaruhi readiness. Liveness tetap 200 selama
+// proses masih waras — lihat implementasinya di §2.
+```
 
 ---
 
 ## 4. Edge Cases & Defensive Programming
 
-1. **Readiness Caching untuk Mengurangi DB Load:** Jika 50 pods masing-masing melakukan `db.Ping()` setiap 5 detik, itu 10 ping/detik konstan ke database — beban yang tidak perlu. Solusi: cache hasil DB check selama 3 detik menggunakan `sync/atomic` timestamp. Hanya jalankan ping nyata jika cache expired.
+1. **Readiness WAJIB memakai hasil ter-cache, dan alasannya bukan sekadar beban:** 50 pod yang masing-masing `db.Ping()` tiap 5 detik memang menghasilkan 10 ping/detik yang percuma. Tapi bahaya sesungguhnya lain: **`db.PingContext` mengambil koneksi dari pool**. Saat pool jenuh di puncak trafik, ping mengantre dan readiness gagal — padahal database sehat. Pod ditarik dari LB, bebannya pindah ke pod sisanya, pool mereka ikut jenuh, dan seluruh fleet menandai diri tidak siap secara berurutan. Itu kaskade yang sama dengan Anti-Pattern 1, hanya lewat pintu readiness dan tanpa satu pun restart untuk memberi petunjuk. Karena itu `MulaiPenyegar` di §2 menjalankan pemeriksaan di goroutine latar, dan handler probe hanya membacakan hasil terakhir.
 
 2. **Startup Probe untuk Aplikasi Berat:** Aplikasi yang butuh warmup (pre-load cache, warm JIT, migrate DB) bisa memakan 60+ detik. Tanpa Startup Probe, Liveness probe akan timeout dan membunuh pod sebelum siap. Startup Probe menggunakan `failureThreshold` tinggi (misal 30 × 10s = 5 menit) untuk memberi waktu startup, lalu menyerahkan kontrol ke Liveness/Readiness.
 
 3. **Thread-Safety di Health State:** `isShuttingDown` dan status dependency harus menggunakan `atomic.Bool` atau `sync/atomic`, bukan regular boolean. Probe handler dipanggil dari goroutine berbeda dengan goroutine signal handler — data race tanpa atomic menyebabkan undefined behavior.
 
-4. **Partial Dependency Degradation:** Tidak semua dependency sama kritisnya. Jika Redis cache down tapi DB masih UP, apakah Readiness harus return 503? Lebih baik return 200 dengan `status: "DEGRADED"` dan `checks.redis: "DOWN"` — pod masih bisa melayani request (dengan sedikit degradasi performa). Reserve 503 hanya untuk dependency yang benar-benar kritikal (primary DB).
+4. **Partial Dependency Degradation:** tidak semua dependensi sama kritisnya. Redis cache mati sementara DB sehat **tidak** boleh menghasilkan 503 — lebih baik 200 dengan `status: "DEGRADED"` dan `cek.cache: "DOWN"`. Diimplementasikan lewat field `Kritis` pada `Pemeriksaan` di §2. Sediakan 503 hanya untuk dependensi yang tanpanya layanan benar-benar tidak bisa menjawab apa pun.
 
-5. **Kubernetes Probe Timing Configuration:**
+5. **Konfigurasi timing probe — dan startup probe yang mengubah aturannya:**
    ```yaml
+   startupProbe:
+     httpGet: { path: /livez, port: 9090 }
+     periodSeconds: 10
+     failureThreshold: 30     # 30 x 10 = 5 menit anggaran boot
    livenessProbe:
      httpGet: { path: /livez, port: 9090 }
-     initialDelaySeconds: 10  # tunggu app start
-     periodSeconds: 10        # check interval
-     timeoutSeconds: 2        # beri waktu untuk respond
-     failureThreshold: 3      # 3 failures berturut = restart
+     periodSeconds: 10
+     timeoutSeconds: 2
+     failureThreshold: 3
    readinessProbe:
      httpGet: { path: /readyz, port: 9090 }
-     initialDelaySeconds: 5
-     periodSeconds: 5
-     timeoutSeconds: 3        # sedikit lebih lama (ada DB ping)
-     failureThreshold: 2
+     periodSeconds: 2
+     timeoutSeconds: 1
+     failureThreshold: 2      # deteksi ~4 detik
    ```
-   Pastikan `timeoutSeconds` probe selalu > timeout internal Go handler (misal probe timeout 3s, Go context timeout 2s = 1s buffer).
+   Tiga hal yang sering luput:
+   - **Selama `startupProbe` belum berhasil, liveness dan readiness TIDAK dijalankan sama sekali.** Karena itu `initialDelaySeconds` pada keduanya menjadi tidak berguna dan sengaja dihapus di atas — memakai keduanya sekaligus hanya menambah kebingungan tanpa menambah perlindungan.
+   - **`timeoutSeconds` tidak perlu lagi memberi ruang untuk ping DB.** Karena readiness disajikan dari cache (§2), handler-nya menjawab dalam mikrodetik; `batasPeriksa` 800ms membatasi penyegar di LATAR BELAKANG, bukan probe. Inilah yang membebaskan `timeoutSeconds` menjadi 1 detik, dan itu pada gilirannya yang memungkinkan `periodSeconds` turun ke 2.
+   - **`failureThreshold × periodSeconds` harus LEBIH KECIL dari jeda tepi shutdown.** Di sini 2 × 2 = 4 detik, di bawah jeda 5 detik pada `graceful_shutdown_drain.md`. Bila terbalik — misalnya bawaan 3 × 10 = 30 detik — listener sudah ditutup sementara endpoint masih terdaftar, dan seluruh jeda yang dirancang untuk mencegah `502` justru tidak menghasilkan apa-apa.
 
 ## Kapan JANGAN Pakai Ini
 
@@ -354,6 +531,8 @@ func ReadinessHandler(w http.ResponseWriter, r *http.Request) {
 | Pod tidak pernah mencapai `Ready` | startup probe | Waktu boot melebihi toleransi probe |
 | Probe gagal hanya saat trafik puncak | port yang dipakai probe | Probe antre bersama trafik pengguna |
 | Restart beruntun memperparah insiden | apakah liveness memeriksa hilir | Liveness ikut jatuh saat hilir jatuh |
+| Pod di-restart saat rollout, bukan berhenti bersih | apakah liveness ikut 503 saat shutdown | Drain dipotong oleh liveness sendiri (Anti-Pattern 4) |
+| Seluruh fleet tidak-siap di puncak trafik tanpa restart | apakah readiness memanggil DB di jalur probe | Pool jenuh, bukan database yang mati (Edge Case 1) |
 
 ```bash
 kubectl describe pod <pod> | grep -A6 -E 'Liveness|Readiness|Startup'
@@ -365,7 +544,12 @@ kubectl get events --field-selector reason=Unhealthy --sort-by=.lastTimestamp | 
 kubectl get pods -l app=api \
   -o custom-columns='NAMA:.metadata.name,RESTART:.status.containerStatuses[0].restartCount'
 
-# Waktu respons probe -- harus jauh di bawah timeoutSeconds
-curl -sw '\n%{http_code} %{time_total}s\n' -o /dev/null localhost:8081/healthz
-curl -sw '\n%{http_code} %{time_total}s\n' -o /dev/null localhost:8081/readyz
+# Waktu respons probe -- harus jauh di bawah timeoutSeconds.
+# Port dan path WAJIB sama dengan yang dipakai RegisterProbeHandlers di §2.
+curl -sw '\n%{http_code} %{time_total}s\n' -o /dev/null localhost:9090/livez
+curl -sw '\n%{http_code} %{time_total}s\n' -o /dev/null localhost:9090/readyz
+
+# Saat rollout: /livez WAJIB tetap 200 sampai proses benar-benar keluar.
+# Bila ia berubah 503, drain sedang dipotong oleh liveness sendiri.
+kubectl exec <pod> -- sh -c 'while :; do curl -so /dev/null -w "%{http_code} " localhost:9090/livez; sleep 1; done'
 ```
