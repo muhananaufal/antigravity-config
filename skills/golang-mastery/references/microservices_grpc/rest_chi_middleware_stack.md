@@ -138,7 +138,7 @@ func RegisterUserServiceServer(s grpc.ServiceRegistrar, srv UserServiceServer) {
 // Simulasi manual registrasi Handler gRPC-Gateway dari file *.pb.gw.go
 func RegisterUserServiceHandlerClient(ctx context.Context, mux *runtime.ServeMux, endpoint string, opts []grpc.DialOption) error {
 	// Gateway membuka koneksi balik ke gRPC server asli (In-Memory dialer akan di pass lewat opt)
-	conn, err := grpc.Dial(endpoint, opts...)
+	conn, err := grpc.NewClient(endpoint, opts...)
 	if err != nil { return err }
 
 	// Mendaftarkan pattern HTTP REST ke rute Gateway

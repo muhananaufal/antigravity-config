@@ -48,15 +48,18 @@ package grpcstreaming_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"net"
 	"sync"
 	"testing"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 )
@@ -152,33 +155,54 @@ type myStreamingServer struct{}
 func (s *myStreamingServer) Chat(stream StreamingService_ChatServer) error {
 	ctx := stream.Context()
 
+	// CATATAN POLA: loop ini SEKUENSIAL (recv -> proses -> send), bukan
+	// full-duplex sungguhan. Itu aman dan cukup untuk sebagian besar kasus,
+	// TETAPI hanya bila klien membaca responsnya secara konkuren.
+	//
+	// Bila klien mengirim terus tanpa membaca, kedua sisi bisa saling
+	// menunggu: jendela flow control HTTP/2 penuh, Send() server memblokir,
+	// dan Send() klien juga memblokir. Deadlock ini tidak menghasilkan galat
+	// -- stream hanya berhenti bergerak. Untuk bidi yang benar-benar
+	// independen, pisahkan menjadi dua goroutine (satu Recv, satu Send)
+	// dengan channel di tengahnya, dan JANGAN pernah memanggil Send dari
+	// lebih dari satu goroutine.
 	for {
-		// Validasi apakah client terputus/dibatalkan sebelum memblokir di Recv()
-		if err := ctx.Err(); err != nil {
-			log.Printf("Stream context cancelled: %v", err)
-			return status.Error(codes.Canceled, "client disconnected")
-		}
-
-		// Recv memblokir hingga ada data, error, atau stream selesai.
+		// Recv() SUDAH kembali dengan galat ketika context selesai; memeriksa
+		// ctx.Err() lebih dulu tidak menambah jaminan apa pun, hanya membuka
+		// jendela balapan antara pemeriksaan dan pemanggilan.
 		req, err := stream.Recv()
-		if err == io.EOF {
-			// Client memanggil CloseSend(). Menandakan tidak ada request lagi.
-			// Server bisa clean exit.
+		if errors.Is(err, io.EOF) {
+			// Klien memanggil CloseSend(): tidak ada permintaan lagi.
 			return nil
 		}
 		if err != nil {
-			// Jika client mati tiba-tiba, error biasanya code Canceled atau Unavailable.
-			log.Printf("Failed to receive stream: %v", err)
-			return status.Errorf(codes.Internal, "recv failed: %v", err)
+			// KLIEN YANG PERGI BUKAN GALAT SERVER.
+			//
+			// Memetakannya ke codes.Internal menaikkan error rate layanan
+			// untuk peristiwa yang disebabkan klien -- membakar error budget,
+			// memicu alert, dan membuat SLO tampak buruk karena pengguna
+			// menutup tab. Kembalikan kode aslinya, dan catat sebagai info.
+			switch status.Code(err) {
+			case codes.Canceled, codes.Unavailable:
+				slog.InfoContext(ctx, "klien memutus stream", slog.String("sebab", err.Error()))
+				return err
+			case codes.DeadlineExceeded:
+				return err
+			}
+			slog.ErrorContext(ctx, "gagal menerima dari stream", slog.String("error", err.Error()))
+			return status.Error(codes.Internal, "gagal membaca stream")
 		}
 
-		// Simulasi proses komputasi yang berat
 		replyMsg := fmt.Sprintf("Echo: %s", req.Payload)
 
-		// Send respons kembali
 		if err := stream.Send(&StreamResponse{Payload: replyMsg}); err != nil {
-			log.Printf("Failed to send stream: %v", err)
-			return status.Errorf(codes.Internal, "send failed: %v", err)
+			// Sama seperti di atas: Send yang gagal karena klien pergi
+			// bukan kegagalan server.
+			if c := status.Code(err); c == codes.Canceled || c == codes.Unavailable {
+				return err
+			}
+			slog.ErrorContext(ctx, "gagal mengirim ke stream", slog.String("error", err.Error()))
+			return status.Error(codes.Internal, "gagal menulis stream")
 		}
 	}
 }
@@ -208,9 +232,9 @@ func TestBidirectionalStreamWithBufconn(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	conn, err := grpc.DialContext(ctx, "bufnet",
+	conn, err := grpc.NewClient("bufnet",
 		grpc.WithContextDialer(dialer),
-		grpc.WithInsecure(),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	)
 	if err != nil {
 		t.Fatalf("Failed to dial bufnet: %v", err)

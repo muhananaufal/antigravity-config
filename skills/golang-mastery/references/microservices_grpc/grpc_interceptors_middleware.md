@@ -100,6 +100,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
@@ -280,9 +281,9 @@ func TestInterceptorsWithBufconn(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	conn, err := grpc.DialContext(ctx, "bufnet", 
+	conn, err := grpc.NewClient("bufnet", 
 		grpc.WithContextDialer(dialer), 
-		grpc.WithInsecure(), // Menggunakan WithInsecure() untuk testing lokal adalah umum
+		grpc.WithTransportCredentials(insecure.NewCredentials()), // Menggunakan WithInsecure() untuk testing lokal adalah umum
 	)
 	if err != nil {
 		t.Fatalf("Failed to dial bufnet: %v", err)

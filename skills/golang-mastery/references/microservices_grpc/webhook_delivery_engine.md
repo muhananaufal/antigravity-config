@@ -7,11 +7,40 @@ Sistem pengiriman *Webhook* seringkali digunakan untuk menginformasikan layanan 
 
 Jika Anda melakukan pengiriman HTTP POST (Webhook) ke eksternal langsung dari dalam *Service Core* (misal layanan Checkout), Anda membahayakan ketersediaan peladen internal Anda. Layanan pihak ketiga yang lambat akan menyandera *Goroutine* internal Anda, memicu kehabisan memori (*OOM*).
 
-Arsitektur terbaik adalah memisahkan peran: **Service Core** bertugas menyiarkan kejadian ke **Webhook Worker**. Cara paling efisien di Golang untuk mendistribusikan deretan *event* ini dengan latensi sub-milidetik adalah melalui pola **gRPC Server Streaming**.
-- **Service Core**: Membuka koneksi `ServerStream` dan secara non-stop memompa pesan `Send()`.
-- **Webhook Worker (Klien gRPC)**: Terkoneksi ke Core, membaca `Recv()` secara *continuous*, dan memasukkan pesan-pesan tersebut ke dalam *Goroutine Worker Pool* yang bertugas menembakkan HTTP POST ke luar.
+Pemisahan peran memang benar: **Service Core** menyiarkan kejadian, **Webhook Worker** yang menembakkan HTTP POST ke luar. gRPC Server Streaming adalah transport yang efisien untuk mendistribusikannya dengan latensi rendah.
 
-Ini memungkinkan pemisahan (*decoupling*) dan mengisolasi kegagalan jaringan eksternal dari *throughput* sistem inti.
+### ⚠ Tetapi streaming saja TIDAK CUKUP — dan ini bagian terpenting berkas ini
+
+Pola streaming murni seperti yang dicontohkan di bawah punya tiga celah yang membuatnya **tidak layak dipakai apa adanya** untuk webhook:
+
+| Celah | Akibatnya |
+| :--- | :--- |
+| Kejadian hanya hidup di **memori** Core | Core restart = seluruh webhook tertunda **hilang** |
+| Tidak ada **acknowledgment** dari worker | Worker mati setelah `Recv()` tetapi sebelum POST berhasil = kejadian hilang selamanya |
+| Tidak ada **retensi** | Tidak ada cara memutar ulang kejadian yang gagal terkirim |
+
+Hasilnya adalah pengiriman **at-most-once**, sementara webhook menuntut **at-least-once**. Untuk notifikasi "Pembayaran Berhasil", kejadian yang hilang berarti mitra tidak pernah tahu uang sudah masuk.
+
+**Yang benar: streaming adalah lapisan TRANSPORT, bukan lapisan DURABILITAS.**
+
+```
+                     WAJIB ADA DI BAWAHNYA
+  [Transaksi bisnis] --(satu transaksi)--> [tabel outbox]  <- durabel
+                                                |
+                                        [poller / CDC]
+                                                |
+                                     gRPC stream (transport)
+                                                |
+                                          [Worker POST]
+                                                |
+                                   ACK -> tandai terkirim di outbox
+```
+
+- Kejadian ditulis ke **outbox dalam transaksi yang sama** dengan perubahan bisnisnya — lihat `distributed_patterns_resilience/outbox_pattern_transactional.md`.
+- Worker **mengakui** (`ack`) setelah POST berhasil; tanpa ack, kejadian dikirim ulang.
+- Karena pengiriman ulang adalah perilaku normal, penerima WAJIB idempoten — lihat `distributed_patterns_resilience/idempotency_key_engine.md`.
+
+Kode di bawah menunjukkan **lapisan transport dan pool worker-nya**. Ia sengaja tidak mengulang implementasi outbox, tetapi jangan menyalinnya sebagai sistem webhook yang lengkap.
 
 ## Diagram ASCII: Arsitektur gRPC Webhook Worker
 
@@ -52,6 +81,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 )
@@ -146,6 +176,20 @@ func (s *myCoreServer) SubscribeEvents(req *SubscribeRequest, stream WebhookServ
 func TestWebhookDelivery_WithGRPCStreaming(t *testing.T) {
 	lis := bufconn.Listen(1024 * 1024)
 
+	// CATATAN: klien HTTP dibuat SEKALI di luar loop worker (lihat bagian C).
+	// Membuatnya per kejadian -- `client := &http.Client{...}` di dalam loop --
+	// berarti setiap webhook membayar TCP + TLS handshake baru dan pool
+	// koneksi tidak pernah terpakai. Itu persis anti-pattern yang diajarkan
+	// microservices_grpc/http_client_production.md di domain yang sama.
+	klienWebhook := &http.Client{
+		Timeout: 10 * time.Second,
+		Transport: &http.Transport{
+			MaxIdleConns:        100,
+			MaxIdleConnsPerHost: 10, // bawaan 2 terlalu kecil untuk fan-out mitra
+			IdleConnTimeout:     90 * time.Second,
+		},
+	}
+
 	// Setup Dummy Eksternal Partner HTTP API
 	var partnerReceivedPayloads []string
 	var muPartner sync.Mutex
@@ -172,7 +216,22 @@ func TestWebhookDelivery_WithGRPCStreaming(t *testing.T) {
 
 	// B. Bangun Worker Klien gRPC
 	dialer := func(ctx context.Context, s string) (net.Conn, error) { return lis.Dial() }
-	conn, _ := grpc.DialContext(context.Background(), "bufnet", grpc.WithContextDialer(dialer), grpc.WithInsecure())
+	// Dua API lama yang masih banyak beredar di contoh internet:
+	//   grpc.WithInsecure()  -> usang. Ganti dengan
+	//       grpc.WithTransportCredentials(insecure.NewCredentials()),
+	//       yang membuat "memang tanpa TLS" menjadi pernyataan eksplisit
+	//       alih-alih terlihat seperti lupa memasang kredensial.
+	//   grpc.DialContext()   -> usang sejak grpc-go v1.63. Ganti dengan
+	//       grpc.NewClient(), yang TIDAK menerima context karena memang
+	//       tidak menghubungkan secara eager -- koneksi dibangun malas
+	//       saat RPC pertama.
+	conn, err := grpc.NewClient("bufnet",
+		grpc.WithContextDialer(dialer),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatalf("dial bufnet: %v", err)
+	}
 	defer conn.Close()
 
 	streamDesc, _ := conn.NewStream(context.Background(), &grpc.StreamDesc{

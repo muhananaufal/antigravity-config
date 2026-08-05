@@ -59,6 +59,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 )
@@ -178,7 +179,7 @@ func TestGraphQL_BFF_Dataloader_Batching(t *testing.T) {
 	defer grpcServer.Stop()
 
 	dialer := func(ctx context.Context, s string) (net.Conn, error) { return lis.Dial() }
-	conn, _ := grpc.DialContext(context.Background(), "bufnet", grpc.WithContextDialer(dialer), grpc.WithInsecure())
+	conn, _ := grpc.NewClient("bufnet", grpc.WithContextDialer(dialer), grpc.WithTransportCredentials(insecure.NewCredentials()))
 	defer conn.Close()
 
 	// Bungkus Invoke gRPC ke dalam fungsi untuk Dataloader

@@ -153,7 +153,7 @@ func TestClientSideLoadBalancingConfig(t *testing.T) {
 		}]
 	}`
 
-	conn, err := grpc.DialContext(ctx, "bufnet",
+	conn, err := grpc.NewClient("bufnet",
 		grpc.WithContextDialer(dialer),
 		grpc.WithDefaultServiceConfig(serviceConfig),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
@@ -181,8 +181,22 @@ func TestClientSideLoadBalancingConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Expected no error on Invoke, got %v", err)
 	}
+	// PERINGATAN: assertion ini TIDAK menguji load balancing.
+	//
+	// bufconn hanya punya satu listener, sehingga hanya ada satu backend --
+	// hasilnya selalu "Server-1" apa pun kebijakan LB-nya. Uji ini
+	// memverifikasi perilaku pick_first di berkas yang mengajarkan
+	// round_robin, yaitu kebalikan dari pelajarannya.
+	//
+	// Load balancing tidak bisa diuji dengan satu backend. Yang benar:
+	//   - jalankan N listener sungguhan (net.Listen pada port 0),
+	//   - daftarkan ketiganya lewat manual resolver
+	//     (google.golang.org/grpc/resolver/manual),
+	//   - kirim 3N permintaan, lalu pastikan SETIAP backend menerima
+	//     kira-kira sepertiganya.
+	// Tanpa itu, "uji load balancing" hanya memastikan koneksi hidup.
 	if resp.ServerID != "Server-1" {
-		t.Errorf("Expected Server-1 (due to mocked dialer limit), got %s", resp.ServerID)
+		t.Errorf("dengan satu backend, hasilnya selalu Server-1; dapat %s", resp.ServerID)
 	}
 }
 ```
@@ -194,7 +208,7 @@ Secara bawaan, library `grpc-go` tidak melakukan load balancing ke multiple IP. 
 
 ```go
 // BAD: Tidak menyebut algoritma LB explisit.
-conn, err := grpc.Dial("dns:///my-database-svc.local:50051", grpc.WithInsecure())
+conn, err := grpc.NewClient("dns:///my-database-svc.local:50051", grpc.WithTransportCredentials(insecure.NewCredentials()))
 // Akibatnya: DNS mengembalikan [Pod A, Pod B, Pod C]. Klien Go mengambil IP Pod A, 
 // membangun 1 HTTP/2 pipe ke A, dan menembakkan SEJUTA requests ke Pod A saja. 
 // Pod B dan Pod C akan idle (0 load).
@@ -202,11 +216,34 @@ conn, err := grpc.Dial("dns:///my-database-svc.local:50051", grpc.WithInsecure()
 **Mengapa berbahaya:** Anda akan mendapati CPU utilization yang sangat miring pada dashboard pemantauan. Pod A bisa mengalami _Throttling / OOM_ sedangkan replika lain menganggur. Pada saat puncak traffic (*surge*), layanan tumbang satu persatu (*cascading failure*).
 
 ```go
-// GOOD: Gunakan 'round_robin' atau manfaatkan Service Mesh (Envoy L7 proxy)
-serviceConfig := `{"loadBalancingPolicy": "round_robin"}`
-conn, err := grpc.Dial("dns:///my-database-svc.local:50051", 
+// GOOD: sebutkan kebijakan LB secara eksplisit.
+//
+// Perhatikan WithTransportCredentials tetap ada. grpc.NewClient MENOLAK
+// dibuat tanpa kredensial transport ("no transport security set") --
+// contoh perbaikan yang menghilangkannya justru tidak bisa dijalankan.
+//
+// retryPolicy disertakan karena selama rolling update, resolver DNS masih
+// memegang IP pod yang sudah mati; tanpa retry pada UNAVAILABLE, permintaan
+// di jendela itu gagal ke pengguna padahal pod sehat tersedia.
+serviceConfig := `{
+  "loadBalancingConfig": [{"round_robin": {}}],
+  "methodConfig": [{
+    "name": [{}],
+    "retryPolicy": {
+      "maxAttempts": 4,
+      "initialBackoff": "0.1s",
+      "maxBackoff": "1s",
+      "backoffMultiplier": 2,
+      "retryableStatusCodes": ["UNAVAILABLE"]
+    }
+  }]
+}`
+conn, err := grpc.NewClient("dns:///my-database-svc.local:50051",
+    grpc.WithTransportCredentials(insecure.NewCredentials()), // atau TLS sungguhan
     grpc.WithDefaultServiceConfig(serviceConfig))
 ```
+
+> **Syarat yang sering terlewat:** `round_robin` hanya bermakna bila resolver benar-benar mengembalikan banyak alamat. Di Kubernetes, Service biasa hanya me-resolve ke **satu** ClusterIP — jadi kebijakan LB apa pun tidak mengubah apa-apa. Yang dibutuhkan **Headless Service** (`clusterIP: None`), lihat Edge Case 1.
 
 ### ❌ Anti-Pattern 2: NGINX TCP L4 Proxy Sebagai Balancer gRPC
 Memasang NGINX tradisional (Layer 4 TCP balancer) di depan cluster gRPC Anda adalah kesalahan arsitektural yang umum dilakukan.
@@ -230,7 +267,7 @@ stream {
 1. **Headless Service Kubernetes untuk Client-Side LB**: Jika menggunakan pola Client-Side LB di dalam kluster K8s tanpa Service Mesh, mendial nama domain service biasa (misal `my-svc`) hanya me-resolve menjadi **satu IP Virtual K8s**. Go Client kembali hanya melihat 1 alamat. Anda harus membuat Service berjenis **Headless** (`clusterIP: None`) agar DNS memuntahkan daftar lengkap semua alamat IP Pod, sehingga Go Client LB dapat bekerja.
 2. **Context Cancellation & Envoy Retry Storm**: Service Mesh (seperti Envoy) otomatis mem-parse *Deadline* Go Context (`context.WithTimeout`) dan menerjemahkannya ke HTTP Header `grpc-timeout`. Jika Klien menset timeout 2 detik dan timeout habis di Klien, Proxy (Envoy) akan ikut membatalkan *request* ke hilir, mencegah peladen hilir kelelahan bekerja untuk klien yang sudah menyerah. Namun jika Proxy dikonfigurasikan Retry ekstrem tanpa pembatasan `x-envoy-max-retries`, satu request gagal bisa diamplifikasi menjadi badai lalu lintas (Retry Storm).
 3. **Flapping Health Checks di Service Mesh**: Endpoint `grpc_health_v1.HealthCheck` digunakan Proxy untuk memvalidasi rotasi peladen. Apabila pemeriksaan Health Check Anda terlalu sensitif (misalnya langsung `NOT_SERVING` jika ada 1 kueri DB lambat selama 200ms), pod akan ditendang keluar-masuk rotasi (*flapping*). Proses ini me-reset pool koneksi Envoy secara konstan, memicu lonjakan latensi di seluruh mesh jaringan. Gunakan state management transisional untuk Health Server.
-4. **Stale DNS Resolution saat Pod di-roll**: Saat *Deployment* Kubernetes diperbarui, pod lama mati dan IP baru muncul. gRPC-go DNS Resolver mem-cache data ini. Terkadang resolusi ulangnya membutuhkan jeda (*DNS lag*). Membekali klien `grpc.Dial` dengan konfigurasi *Retry mechanism JSON* (untuk status `UNAVAILABLE`) akan memastikan request terselamatkan sementara resolver memompa IP baru ke *Load Balancing pool*.
+4. **Stale DNS Resolution saat Pod di-roll**: Saat *Deployment* Kubernetes diperbarui, pod lama mati dan IP baru muncul. gRPC-go DNS Resolver mem-cache data ini. Terkadang resolusi ulangnya membutuhkan jeda (*DNS lag*). Membekali klien `grpc.NewClient` dengan `retryPolicy` di service config (untuk status `UNAVAILABLE`) memastikan permintaan di jendela itu terselamatkan sementara resolver memompa IP baru ke pool — lihat contoh di Anti-Pattern 1.
 
 ## Kapan JANGAN Pakai Ini
 
