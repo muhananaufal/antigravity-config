@@ -62,6 +62,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 )
@@ -75,16 +76,25 @@ type Event interface {
 	EventType() string
 }
 
+// Jumlah dalam SATUAN MINOR bertipe int64.
+//
+// Di event sourcing, uang berbasis float64 lebih berbahaya daripada di
+// tempat lain: state tidak disimpan, ia DIHITUNG ULANG dengan memutar
+// seluruh histori. Galat pembulatan tidak sekadar muncul sekali — ia
+// terakumulasi di sepanjang ribuan event, dan saldo yang dibaca pengguna
+// bergeser dari jumlah transaksinya tanpa satu pun baris kode yang salah.
 type MoneyDeposited struct {
-	Amount    float64
-	Timestamp time.Time
+	AmountMinor int64
+	Timestamp   time.Time
 }
+
 func (e MoneyDeposited) EventType() string { return "MoneyDeposited" }
 
 type MoneyWithdrawn struct {
-	Amount    float64
-	Timestamp time.Time
+	AmountMinor int64
+	Timestamp   time.Time
 }
+
 func (e MoneyWithdrawn) EventType() string { return "MoneyWithdrawn" }
 
 // ==========================================
@@ -94,52 +104,63 @@ func (e MoneyWithdrawn) EventType() string { return "MoneyWithdrawn" }
 var ErrInsufficientFunds = errors.New("insufficient funds")
 var ErrInvalidAmount = errors.New("amount must be greater than zero")
 
+var ErrEventTidakDikenal = errors.New("tipe event tidak dikenal saat replay")
+
 type BankAccount struct {
-	ID      string
-	Balance float64
-	Version int // Digunakan untuk Optimistic Concurrency Control
+	ID           string
+	BalanceMinor int64
+	Version      int // Optimistic Concurrency Control
 }
 
 // NewBankAccount menginisialisasi agregat kosong (sebelum direhydrate).
 func NewBankAccount(id string) *BankAccount {
-	return &BankAccount{ID: id, Balance: 0, Version: 0}
+	return &BankAccount{ID: id}
 }
 
-// Apply adalah satu-satunya tempat di mana state agregat dimutasi.
-// Metode ini memutar ulang logika masa lalu, sehingga TIDAK BOLEH MENGANDUNG ERROR/VALIDASI.
-func (a *BankAccount) Apply(event Event) {
+// Apply memutar satu event ke dalam state. Ia tidak boleh memuat VALIDASI
+// bisnis — masa lalu sudah terjadi dan tidak bisa ditolak.
+//
+// Tetapi ia WAJIB menolak event yang tidak dikenalnya, dan itu berbeda.
+//
+// Versi sebelumnya memakai switch tanpa cabang default: event bertipe asing
+// hanya menaikkan Version tanpa mengubah saldo. Skenario yang menghasilkannya
+// biasa terjadi — rollback deploy, atau satu replika tertinggal versi —
+// dan akibatnya proses replay menghasilkan SALDO YANG SALAH tanpa satu pun
+// galat. Di sistem event-sourced, diam adalah mode kegagalan terburuk:
+// tidak ada state tersimpan yang bisa dibandingkan untuk menyadarinya.
+func (a *BankAccount) Apply(event Event) error {
 	switch e := event.(type) {
 	case MoneyDeposited:
-		a.Balance += e.Amount
+		a.BalanceMinor += e.AmountMinor
 	case MoneyWithdrawn:
-		a.Balance -= e.Amount
+		a.BalanceMinor -= e.AmountMinor
+	default:
+		return fmt.Errorf("%w: %q pada agregat %s", ErrEventTidakDikenal, event.EventType(), a.ID)
 	}
 	a.Version++
+	return nil
 }
 
 // Rehydrate memuat keseluruhan histori event untuk membangun state terkini.
-func (a *BankAccount) Rehydrate(events []Event) {
-	for _, evt := range events {
-		a.Apply(evt)
+func (a *BankAccount) Rehydrate(events []Event) error {
+	for i, evt := range events {
+		if err := a.Apply(evt); err != nil {
+			return fmt.Errorf("replay event ke-%d: %w", i, err)
+		}
 	}
+	return nil
 }
 
-// Withdraw mewakili COMMAND (Business Logic).
-// Memvalidasi request menggunakan state terkini (yang telah direhydrate),
-// lalu menghasilkan Event, TANPA MENGUBAH STATE SECARA LANGSUNG.
-func (a *BankAccount) Withdraw(amount float64) ([]Event, error) {
-	if amount <= 0 {
+// Withdraw mewakili COMMAND. Ia memvalidasi terhadap state terkini lalu
+// MENGHASILKAN event, tanpa memutasi state secara langsung.
+func (a *BankAccount) Withdraw(amountMinor int64) ([]Event, error) {
+	if amountMinor <= 0 {
 		return nil, ErrInvalidAmount
 	}
-	if a.Balance < amount {
+	if a.BalanceMinor < amountMinor {
 		return nil, ErrInsufficientFunds
 	}
-	
-	event := MoneyWithdrawn{
-		Amount:    amount,
-		Timestamp: time.Now().UTC(),
-	}
-	return []Event{event}, nil
+	return []Event{MoneyWithdrawn{AmountMinor: amountMinor, Timestamp: time.Now().UTC()}}, nil
 }
 
 // ==========================================
@@ -153,30 +174,57 @@ type EventStore interface {
 }
 
 // InMemoryEventStore mensimulasikan database event (production = Postgres/EventStoreDB).
+var ErrKonflikVersi = errors.New("konflik versi agregat")
+
 type InMemoryEventStore struct {
-	// Peta dari AggregateID ke daftar Events
+	// Mutex WAJIB, dan alasannya lebih tajam dari sekadar "map tidak aman".
+	//
+	// Seluruh guna expectedVersion adalah menjaga penulisan BERSAMAAN. Tetapi
+	// baca-periksa-tulis di SaveEvents tidak atomik tanpa kunci: dua goroutine
+	// bisa sama-sama membaca currentVersion == 3, sama-sama lolos pemeriksaan,
+	// lalu sama-sama menambahkan event. Mekanisme yang dirancang untuk
+	// mencegah tulis-bersamaan justru tidak aman terhadap tulis-bersamaan —
+	// dan sebelum itu, map telanjangnya sudah membuat runtime Go panic dengan
+	// "concurrent map writes".
+	mu     sync.RWMutex
 	events map[string][]Event
 }
 
 func NewInMemoryEventStore() *InMemoryEventStore {
-	return &InMemoryEventStore{
-		events: make(map[string][]Event),
-	}
+	return &InMemoryEventStore{events: make(map[string][]Event)}
 }
 
 func (s *InMemoryEventStore) SaveEvents(ctx context.Context, aggregateID string, events []Event, expectedVersion int) error {
-	currentVersion := len(s.events[aggregateID])
-	if expectedVersion != currentVersion {
-		// Proteksi Optimistic Concurrency Control yang Murni
-		return fmt.Errorf("concurrency exception: expected version %d, but db is at %d", expectedVersion, currentVersion)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if versiKini := len(s.events[aggregateID]); expectedVersion != versiKini {
+		return fmt.Errorf("%w: agregat %s diharapkan versi %d, penyimpanan di versi %d",
+			ErrKonflikVersi, aggregateID, expectedVersion, versiKini)
 	}
 	s.events[aggregateID] = append(s.events[aggregateID], events...)
-	// Dalam sistem nyata, setelah save, trigger Transactional Outbox untuk mengirim event ke Message Broker.
+	// Di sistem nyata: picu Transactional Outbox di transaksi yang SAMA.
 	return nil
 }
 
 func (s *InMemoryEventStore) GetEvents(ctx context.Context, aggregateID string) ([]Event, error) {
-	return s.events[aggregateID], nil
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	// SALINAN, bukan slice internal.
+	//
+	// Versi sebelumnya mengembalikan slice milik store apa adanya, sehingga
+	// pemanggil bisa menimpa elemennya — pada penyimpanan yang seluruh
+	// jaminannya adalah APPEND-ONLY. Histori yang bisa diubah pemanggil
+	// bukan histori.
+	asli := s.events[aggregateID]
+	return append([]Event(nil), asli...), nil
 }
 
 // ==========================================
@@ -191,7 +239,7 @@ func TestBankAccount_CQRS(t *testing.T) {
 	// --- 1. SETUP INITIAL STATE (Simulasi kejadian masa lalu) ---
 	// Akun dibuat dan didepositkan 100 secara paralel tanpa logic command
 	initialEvents := []Event{
-		MoneyDeposited{Amount: 100, Timestamp: time.Now()},
+		MoneyDeposited{AmountMinor: 10_000, Timestamp: time.Now()}, // 100,00
 	}
 	if err := store.SaveEvents(ctx, accountID, initialEvents, 0); err != nil {
 		t.Fatalf("failed to setup initial state: %v", err)
@@ -207,18 +255,22 @@ func TestBankAccount_CQRS(t *testing.T) {
 
 	// B. Rehydrate state aggregate (Rebuild current state)
 	account := NewBankAccount(accountID)
-	account.Rehydrate(history)
-	
-	// Validasi state setelah replay (Versi harus 1, Saldo harus 100)
-	if account.Version != 1 {
-		t.Errorf("Expected version 1, got %d", account.Version)
-	}
-	if account.Balance != 100 {
-		t.Errorf("Expected balance 100, got %.2f", account.Balance)
+	// Galat Rehydrate TIDAK dibuang: replay yang menemui event tak dikenal
+	// menghasilkan saldo yang salah, dan itu harus menghentikan proses —
+	// bukan berlanjut diam-diam.
+	if err := account.Rehydrate(history); err != nil {
+		t.Fatalf("Rehydrate: %v", err)
 	}
 
-	// C. Eksekusi Business Logic Command (Penarikan uang 40)
-	newEvents, err := account.Withdraw(40)
+	if account.Version != 1 {
+		t.Errorf("versi = %d, mau 1", account.Version)
+	}
+	if account.BalanceMinor != 10_000 {
+		t.Errorf("saldo = %d, mau 10000", account.BalanceMinor)
+	}
+
+	// C. Eksekusi Business Logic Command (penarikan 40,00)
+	newEvents, err := account.Withdraw(4_000)
 	if err != nil {
 		t.Fatalf("Unexpected withdraw error: %v", err)
 	}
@@ -232,10 +284,33 @@ func TestBankAccount_CQRS(t *testing.T) {
 	// --- 3. TEST INVARIANT PROTECTION ---
 	
 	// Coba withdraw melebihi saldo baru (60)
-	account.Rehydrate(newEvents) // Terapkan state terbaru sementara
-	_, err = account.Withdraw(999)
-	if !errors.Is(err, ErrInsufficientFunds) {
-		t.Errorf("Expected ErrInsufficientFunds, got: %v", err)
+	if err := account.Rehydrate(newEvents); err != nil {
+		t.Fatalf("Rehydrate event baru: %v", err)
+	}
+	if _, err := account.Withdraw(99_900); !errors.Is(err, ErrInsufficientFunds) {
+		t.Errorf("galat = %v, mau ErrInsufficientFunds", err)
+	}
+}
+
+// eventAsing meniru event yang diterbitkan versi kode LEBIH BARU.
+type eventAsing struct{}
+
+func (eventAsing) EventType() string { return "FiturBaruDeposit" }
+
+// Replay yang menemui event tak dikenal WAJIB gagal keras.
+//
+// Skenarionya biasa: satu replika di-rollback, atau deploy bergulir belum
+// selesai. Tanpa cabang default di Apply, event itu hanya menaikkan versi
+// tanpa mengubah saldo — dan yang dibaca pengguna adalah saldo yang salah,
+// tanpa satu pun galat di mana pun.
+func TestRehydrate_EventTakDikenalDitolak(t *testing.T) {
+	akun := NewBankAccount("acc-x")
+	err := akun.Rehydrate([]Event{
+		MoneyDeposited{AmountMinor: 5_000},
+		eventAsing{},
+	})
+	if !errors.Is(err, ErrEventTidakDikenal) {
+		t.Fatalf("galat = %v, mau ErrEventTidakDikenal", err)
 	}
 }
 ```
