@@ -92,24 +92,39 @@ Context Propagation:
 package observability
 
 import (
-	"bytes"
+	"bufio"
 	"context"
-	"encoding/json"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
+	"fmt"
+	"io"
+	"net"
 	"net/http"
-	"net/http/httptest"
 	"os"
-	"strings"
-	"testing"
 	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+	"go.opentelemetry.io/otel/trace"
 )
 
+const panjangMaksRequestID = 64
+
 // InitLogger menyiapkan global logger. Dipanggil sekali saat app boot.
-func InitLogger(env string) zerolog.Logger {
-	zerolog.TimeFieldFormat = time.RFC3339Nano // presisi nanosecond
+//
+// keluaran dijadikan parameter (produksi: os.Stdout) supaya fungsi ini
+// benar-benar bisa diuji. Versi lama menulis langsung ke os.Stdout, dan
+// akibatnya uji yang bernama TestInitLogger_ProductionMode tidak pernah
+// memanggil InitLogger sama sekali — ia membangun logger-nya sendiri.
+func InitLogger(env string, keluaran io.Writer) zerolog.Logger {
+	zerolog.TimeFieldFormat = time.RFC3339Nano
+
+	// Disetel EKSPLISIT. Keduanya variabel global: bila ada pustaka lain yang
+	// mengubahnya, field bernama "latency_ms" diam-diam berisi detik, dan
+	// tidak ada yang menyadarinya sampai grafik latensi terlihat ganjil.
+	zerolog.DurationFieldUnit = time.Millisecond
+	zerolog.DurationFieldInteger = false
 
 	level := zerolog.InfoLevel
 	if env == "development" {
@@ -119,232 +134,345 @@ func InitLogger(env string) zerolog.Logger {
 
 	var logger zerolog.Logger
 	if env == "development" {
-		// ConsoleWriter HANYA di development — terlalu lambat untuk production
-		logger = zerolog.New(zerolog.ConsoleWriter{
-			Out:        os.Stdout,
-			TimeFormat: "15:04:05",
-		}).With().Timestamp().Caller().Logger()
+		// ConsoleWriter HANYA di development — terlalu lambat untuk produksi.
+		logger = zerolog.New(zerolog.ConsoleWriter{Out: keluaran, TimeFormat: "15:04:05"}).
+			With().Timestamp().Caller().Logger()
 	} else {
-		// JSON ke stdout — 12-factor app standard (K8s/Docker collect stdout)
-		logger = zerolog.New(os.Stdout).
-			With().
+		// JSON ke stdout — standar 12-factor (K8s/Docker mengumpulkan stdout).
+		logger = zerolog.New(keluaran).With().
 			Timestamp().
 			Str("service", "my-service").
 			Str("version", os.Getenv("APP_VERSION")).
 			Logger()
 	}
 
-	// Set sebagai global logger agar bisa dipakai via log.Info()
 	log.Logger = logger
+
+	// WAJIB, dan hampir selalu terlewat.
+	//
+	// Tanpa baris ini, zerolog.Ctx(ctx) pada context yang belum disisipi
+	// logger mengembalikan logger YANG DINONAKTIFKAN — bukan nil, bukan
+	// panic, melainkan objek sah yang membuang seluruh log tanpa suara. Satu
+	// jalur kode yang lupa meneruskan context cukup untuk melenyapkan semua
+	// lognya, dan satu-satunya gejala adalah sunyi.
+	zerolog.DefaultContextLogger = &logger
+
 	return logger
 }
 
-// contextKey type untuk menghindari collision dengan package lain.
-type contextKey struct{ name string }
-
-var loggerCtxKey = &contextKey{"logger"}
-
-// WithRequestLogger menyisipkan request-scoped logger ke dalam context.
-// Berbeda dari zerolog.Logger.WithContext() bawaan — ini menggunakan typed key.
-func WithRequestLogger(ctx context.Context, logger zerolog.Logger) context.Context {
-	return context.WithValue(ctx, loggerCtxKey, logger)
-}
-
-// GetLogger mengambil logger dari context, fallback ke global logger.
-func GetLogger(ctx context.Context) zerolog.Logger {
-	if l, ok := ctx.Value(loggerCtxKey).(zerolog.Logger); ok {
-		return l
-	}
-	return log.Logger
-}
+// LoggerDari mengambil logger dari context.
+//
+// Hanya ADA SATU mekanisme di berkas ini, dan itu disengaja. Versi lama
+// menyediakan dua sekaligus — typed key buatan sendiri DAN mekanisme bawaan
+// zerolog — dengan perilaku fallback yang BERBEDA: yang satu jatuh ke logger
+// global, yang lain diam-diam menonaktifkan diri. Dua mekanisme yang gagal
+// secara berbeda lebih buruk daripada satu, karena pemanggil tidak punya cara
+// mengetahui mana yang sedang ia pakai.
+func LoggerDari(ctx context.Context) *zerolog.Logger { return zerolog.Ctx(ctx) }
 
 // RequestLoggerMiddleware menyisipkan request-scoped logger ke setiap request.
 func RequestLoggerMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		reqID := r.Header.Get("X-Request-ID")
-		if reqID == "" {
-			reqID = generateRequestID() // UUID v4
-		}
-
-		// Buat sublogger dengan request metadata
-		subLogger := log.With().
-			Str("request_id", reqID).
+		binding := log.With().
+			Str("request_id", requestIDBersih(r.Header.Get("X-Request-ID"))).
 			Str("method", r.Method).
 			Str("path", r.URL.Path).
-			Str("remote_addr", r.RemoteAddr).
-			Logger()
+			Str("remote_addr", r.RemoteAddr)
 
-		// Simpan ke context via zerolog bawaan DAN typed key kita
+		// Tanpa dua field ini, log dan trace hidup di dua dunia terpisah:
+		// Anda menemukan trace yang lambat lalu tidak punya cara menemukan
+		// lognya, dan sebaliknya. Tabel deteksi di bawah mengukur persis ini.
+		if sc := trace.SpanContextFromContext(r.Context()); sc.IsValid() {
+			binding = binding.
+				Str("trace_id", sc.TraceID().String()).
+				Str("span_id", sc.SpanID().String())
+		}
+		subLogger := binding.Logger()
+
 		ctx := subLogger.WithContext(r.Context())
-		ctx = WithRequestLogger(ctx, subLogger)
-
-		start := time.Now()
-		rw := &statusResponseWriter{ResponseWriter: w, code: http.StatusOK}
+		mulai := time.Now()
+		rw := &penulisStatus{ResponseWriter: w, kode: http.StatusOK}
 
 		next.ServeHTTP(rw, r.WithContext(ctx))
 
-		// Log request selesai dengan latency dan status
-		subLogger.Info().
-			Int("status", rw.code).
-			Dur("latency_ms", time.Since(start)).
-			Int64("response_bytes", rw.bytes).
+		// Level MENGIKUTI hasil. Versi lama mencatat semuanya sebagai Info,
+		// sehingga query `level:error` tidak pernah menemukan satu pun 5xx —
+		// dan alert apa pun yang dibangun di atas level log tidak berbunyi.
+		ev := subLogger.Info()
+		switch {
+		case rw.kode >= 500:
+			ev = subLogger.Error()
+		case rw.kode >= 400:
+			ev = subLogger.Warn()
+		}
+		ev.Int("status", rw.kode).
+			Dur("latency_ms", time.Since(mulai)).
+			Int64("response_bytes", rw.bita).
 			Msg("request completed")
 	})
 }
 
-// statusResponseWriter menangkap status code dan bytes ditulis.
-type statusResponseWriter struct {
+// requestIDBersih memvalidasi X-Request-ID kiriman klien.
+//
+// Header itu ditulis pengirim dan panjangnya tidak dibatasi siapa pun.
+// zerolog memang meng-escape isinya dengan benar, jadi struktur JSON tidak
+// bisa dirusak — tetapi nilai 1 MB akan disalin ke SETIAP baris log
+// permintaan itu, dan volume log adalah biaya observabilitas terbesar di
+// banyak tim. Nilai sembarang juga mencemari indeks agregator log.
+func requestIDBersih(dariKlien string) string {
+	if dariKlien == "" || len(dariKlien) > panjangMaksRequestID {
+		return requestIDBaru()
+	}
+	for i := 0; i < len(dariKlien); i++ {
+		c := dariKlien[i]
+		sah := c == '-' || c == '_' ||
+			(c >= '0' && c <= '9') ||
+			(c >= 'a' && c <= 'z') ||
+			(c >= 'A' && c <= 'Z')
+		if !sah {
+			return requestIDBaru()
+		}
+	}
+	return dariKlien
+}
+
+// requestIDBaru menghasilkan 128 bit acak.
+//
+// Versi lama memakai `"req-" + time.Now().Format("20060102150405.000")`
+// dengan komentar `// UUID v4` di tempat pemanggilannya. Itu stempel waktu
+// MILIDETIK: dua permintaan bersamaan dalam milidetik yang sama mendapat ID
+// yang SAMA. Pada trafik nyata tabrakan terjadi terus-menerus, dan akibatnya
+// persis kebalikan dari tujuan request ID — Anda mencari satu id lalu
+// mendapat beberapa permintaan tak berkaitan yang saling berselang-seling.
+func requestIDBaru() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// crypto/rand yang gagal menandakan sistem bermasalah serius. Jangan
+		// diam-diam turun ke sumber acak yang lebih lemah.
+		panic(fmt.Sprintf("crypto/rand gagal: %v", err))
+	}
+	return hex.EncodeToString(b[:])
+}
+
+// penulisStatus menangkap kode status dan jumlah bita.
+//
+// Ia WAJIB meneruskan antarmuka opsional — pembungkus yang hanya menyematkan
+// http.ResponseWriter menghilangkan Flusher dan Hijacker, sehingga handler SSE
+// tidak pernah bisa flush dan upgrade WebSocket gagal. Middleware ini dipasang
+// di SELURUH rute, jadi kerusakannya menyebar tanpa gejala yang jelas.
+type penulisStatus struct {
 	http.ResponseWriter
-	code  int
-	bytes int64
+	kode    int
+	bita    int64
+	ditulis bool
 }
 
-func (rw *statusResponseWriter) WriteHeader(code int) {
-	rw.code = code
-	rw.ResponseWriter.WriteHeader(code)
+func (p *penulisStatus) WriteHeader(kode int) {
+	if p.ditulis {
+		return // WriteHeader kedua diabaikan transport; jangan catat yang salah
+	}
+	p.kode = kode
+	p.ditulis = true
+	p.ResponseWriter.WriteHeader(kode)
 }
 
-func (rw *statusResponseWriter) Write(b []byte) (int, error) {
-	n, err := rw.ResponseWriter.Write(b)
-	rw.bytes += int64(n)
+func (p *penulisStatus) Write(b []byte) (int, error) {
+	p.ditulis = true // Write tanpa WriteHeader mengirim 200 secara implisit
+	n, err := p.ResponseWriter.Write(b)
+	p.bita += int64(n)
 	return n, err
 }
 
-func generateRequestID() string {
-	return "req-" + time.Now().Format("20060102150405.000")
+func (p *penulisStatus) Unwrap() http.ResponseWriter { return p.ResponseWriter }
+
+func (p *penulisStatus) Flush() {
+	if f, ok := p.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
 }
 
-// ProcessOrder contoh business logic yang menggunakan context logger.
-func ProcessOrder(ctx context.Context, orderID string, amount float64) error {
-	logger := zerolog.Ctx(ctx) // extract logger dari context
+func (p *penulisStatus) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	h, ok := p.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, fmt.Errorf("ResponseWriter di bawah tidak mendukung Hijack")
+	}
+	return h.Hijack()
+}
+
+// ProsesPesanan contoh business logic yang memakai logger dari context.
+func ProsesPesanan(ctx context.Context, idPesanan string, jumlahSen int64) error {
+	logger := LoggerDari(ctx)
 
 	logger.Info().
-		Str("order_id", orderID).
-		Float64("amount", amount).
-		Msg("processing order")
+		Str("order_id", idPesanan).
+		Int64("amount_minor", jumlahSen). // satuan sen bertipe int64, bukan float64
+		Msg("memproses pesanan")
 
-	if amount <= 0 {
-		err := errors.New("invalid amount")
-		logger.Error().
-			Err(err).
-			Str("order_id", orderID).
-			Float64("amount", amount).
-			Msg("order validation failed")
+	if jumlahSen <= 0 {
+		err := errors.New("jumlah tidak valid")
+		logger.Error().Err(err).
+			Str("order_id", idPesanan).
+			Int64("amount_minor", jumlahSen).
+			Msg("validasi pesanan gagal")
 		return err
 	}
 
-	// Simulasi DB call
-	logger.Debug().Str("order_id", orderID).Msg("saving to database")
-
-	logger.Info().
-		Str("order_id", orderID).
-		Msg("order processed successfully")
+	logger.Debug().Str("order_id", idPesanan).Msg("menyimpan ke basis data")
+	logger.Info().Str("order_id", idPesanan).Msg("pesanan berhasil diproses")
 	return nil
 }
+```
 
-// --- Unit Tests ---
+```go
+package observability
 
-func TestInitLogger_ProductionMode(t *testing.T) {
-	// Redirect output ke buffer untuk verifikasi
-	var buf bytes.Buffer
-	logger := zerolog.New(&buf).With().Timestamp().Logger()
-	log.Logger = logger
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
 
-	log.Info().Str("key", "value").Msg("test message")
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
+)
 
-	output := buf.String()
-	if !strings.Contains(output, `"level":"info"`) {
-		t.Errorf("expected JSON level field, got: %s", output)
-	}
-	if !strings.Contains(output, `"key":"value"`) {
-		t.Errorf("expected key field, got: %s", output)
-	}
-	if !strings.Contains(output, `"message":"test message"`) {
-		t.Errorf("expected message field, got: %s", output)
-	}
-
-	// Verifikasi output adalah valid JSON
-	var parsed map[string]any
-	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &parsed); err != nil {
-		t.Errorf("log output is not valid JSON: %v\n%s", err, output)
-	}
-}
-
-func TestRequestLoggerMiddleware_InjectsRequestID(t *testing.T) {
-	var capturedCtx context.Context
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		capturedCtx = r.Context()
-		w.WriteHeader(http.StatusOK)
+// pulihkanGlobal mengembalikan seluruh keadaan global zerolog setelah uji.
+// Tanpa ini, uji yang memanggil InitLogger mengubah logger, level, dan
+// DefaultContextLogger untuk SEMUA uji berikutnya — dan hasilnya bergantung
+// urutan eksekusi.
+func pulihkanGlobal(t *testing.T) {
+	t.Helper()
+	logger, ctxLogger, level := log.Logger, zerolog.DefaultContextLogger, zerolog.GlobalLevel()
+	t.Cleanup(func() {
+		log.Logger = logger
+		zerolog.DefaultContextLogger = ctxLogger
+		zerolog.SetGlobalLevel(level)
 	})
+}
 
-	// Setup logger yang output ke buffer
+func TestInitLoggerMenghasilkanJSONValid(t *testing.T) {
+	pulihkanGlobal(t)
+
 	var buf bytes.Buffer
-	log.Logger = zerolog.New(&buf)
+	logger := InitLogger("production", &buf)
+	logger.Info().Str("key", "value").Msg("pesan uji")
 
-	wrapped := RequestLoggerMiddleware(handler)
-	req := httptest.NewRequest("GET", "/api/orders", nil)
-	req.Header.Set("X-Request-ID", "test-req-123")
-
-	wrapped.ServeHTTP(httptest.NewRecorder(), req)
-
-	// Verifikasi request_id ter-log
-	logOutput := buf.String()
-	if !strings.Contains(logOutput, "test-req-123") {
-		t.Errorf("request_id not found in log output: %s", logOutput)
+	var terurai map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(buf.Bytes()), &terurai); err != nil {
+		t.Fatalf("keluaran bukan JSON valid: %v\n%s", err, buf.String())
 	}
-
-	// Verifikasi logger tersedia di context
-	logger := GetLogger(capturedCtx)
-	var innerBuf bytes.Buffer
-	logger2 := logger.Output(&innerBuf)
-	logger2.Info().Msg("inner message")
-	if !strings.Contains(innerBuf.String(), "inner message") {
-		t.Error("logger from context should be writable")
+	for _, k := range []string{"level", "time", "service", "message"} {
+		if _, ada := terurai[k]; !ada {
+			t.Errorf("field %q hilang dari keluaran: %v", k, terurai)
+		}
 	}
 }
 
-func TestProcessOrder_LogsError(t *testing.T) {
-	var buf bytes.Buffer
-	logger := zerolog.New(&buf)
-	ctx := logger.WithContext(context.Background())
-
-	err := ProcessOrder(ctx, "ORD-001", -10.0)
-	if err == nil {
-		t.Fatal("expected error for negative amount")
-	}
-
-	output := buf.String()
-	if !strings.Contains(output, `"level":"error"`) {
-		t.Errorf("expected error level in log, got: %s", output)
-	}
-	if !strings.Contains(output, "ORD-001") {
-		t.Errorf("expected order_id in error log, got: %s", output)
+// Versi lama menghasilkan ID dari stempel waktu milidetik. Loop ini membuat
+// ribuan ID dalam beberapa milidetik — dengan implementasi lama, sebagian
+// besar di antaranya identik.
+func TestRequestIDTidakPernahTabrakan(t *testing.T) {
+	const n = 10_000
+	terlihat := make(map[string]struct{}, n)
+	for i := 0; i < n; i++ {
+		id := requestIDBaru()
+		if _, ada := terlihat[id]; ada {
+			t.Fatalf("request ID bertabrakan setelah %d pembuatan: %q", i, id)
+		}
+		terlihat[id] = struct{}{}
 	}
 }
 
-func TestProcessOrder_Success(t *testing.T) {
-	var buf bytes.Buffer
-	logger := zerolog.New(&buf)
-	ctx := logger.WithContext(context.Background())
-
-	err := ProcessOrder(ctx, "ORD-002", 99.99)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+func TestRequestIDKlienDivalidasi(t *testing.T) {
+	kasus := []struct {
+		nama    string
+		masukan string
+		dipakai bool
+	}{
+		{"wajar", "abc-123_XYZ", true},
+		{"kosong", "", false},
+		{"terlalu panjang", strings.Repeat("a", panjangMaksRequestID+1), false},
+		{"karakter aneh", "abc\n{\"level\":\"error\"}", false},
 	}
-
-	// Verifikasi ada log "processed successfully"
-	if !strings.Contains(buf.String(), "order processed successfully") {
-		t.Errorf("success log not found: %s", buf.String())
+	for _, k := range kasus {
+		got := requestIDBersih(k.masukan)
+		if dipakai := got == k.masukan; dipakai != k.dipakai {
+			t.Errorf("%s: dipakai=%v, mau %v (hasil %q)", k.nama, dipakai, k.dipakai, got)
+		}
 	}
 }
 
-func TestStatusResponseWriter_CapturesCode(t *testing.T) {
-	rec := httptest.NewRecorder()
-	rw := &statusResponseWriter{ResponseWriter: rec, code: http.StatusOK}
+// Query `level:error` HARUS menemukan 5xx. Versi lama mencatat semuanya
+// sebagai info, sehingga alert berbasis level tidak pernah berbunyi.
+func TestLevelLogMengikutiStatus(t *testing.T) {
+	pulihkanGlobal(t)
+	zerolog.SetGlobalLevel(zerolog.DebugLevel)
 
-	rw.WriteHeader(http.StatusCreated)
-	if rw.code != http.StatusCreated {
-		t.Errorf("code = %d, want 201", rw.code)
+	for _, k := range []struct {
+		kode int
+		mau  string
+	}{{200, "info"}, {404, "warn"}, {500, "error"}} {
+		var buf bytes.Buffer
+		log.Logger = zerolog.New(&buf)
+
+		h := RequestLoggerMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(k.kode)
+		}))
+		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
+
+		var terurai map[string]any
+		if err := json.Unmarshal(bytes.TrimSpace(buf.Bytes()), &terurai); err != nil {
+			t.Fatalf("status %d: keluaran bukan JSON: %v", k.kode, err)
+		}
+		if terurai["level"] != k.mau {
+			t.Errorf("status %d → level %v, mau %q", k.kode, terurai["level"], k.mau)
+		}
+	}
+}
+
+func TestLoggerDariContextKosongTetapMenulis(t *testing.T) {
+	pulihkanGlobal(t)
+
+	var buf bytes.Buffer
+	InitLogger("production", &buf)
+
+	// Context tanpa logger. Tanpa zerolog.DefaultContextLogger, baris berikut
+	// tidak menghasilkan APA PUN — logger nonaktif, tanpa galat, tanpa jejak.
+	LoggerDari(context.Background()).Info().Msg("terlihat")
+
+	if !strings.Contains(buf.String(), "terlihat") {
+		t.Fatal("log dari context kosong lenyap — zerolog.Ctx mengembalikan logger nonaktif")
+	}
+}
+
+func TestPenulisStatusMempertahankanFlusher(t *testing.T) {
+	pulihkanGlobal(t)
+	log.Logger = zerolog.New(io.Discard)
+
+	var bisaFlush bool
+	h := RequestLoggerMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, bisaFlush = w.(http.Flusher)
+	}))
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
+
+	if !bisaFlush {
+		t.Fatal("pembungkus menghilangkan http.Flusher — handler SSE menggantung di buffer")
+	}
+}
+
+func TestProsesPesananMencatatGalat(t *testing.T) {
+	var buf bytes.Buffer
+	ctx := zerolog.New(&buf).WithContext(context.Background())
+
+	if err := ProsesPesanan(ctx, "ORD-001", -1000); err == nil {
+		t.Fatal("mau galat untuk jumlah negatif")
+	}
+	if !strings.Contains(buf.String(), `"level":"error"`) || !strings.Contains(buf.String(), "ORD-001") {
+		t.Errorf("log galat tidak sesuai: %s", buf.String())
 	}
 }
 ```
@@ -425,7 +553,9 @@ type sanitizedBody struct {
 
 ## 4. Edge Cases & Defensive Programming
 
-1. **Stdout Blocking di High Throughput:** Pada 100K+ req/s, `os.Stdout` pipe bisa menjadi bottleneck I/O karena blocking write. Zerolog menulis ke `io.Writer` synchronously. Solusi: wrap writer dengan async buffer menggunakan `zerolog/diode` (non-blocking ring buffer) — ringan memory dengan tradeoff slight log loss di extreme load.
+1. **Stdout Blocking di High Throughput:** pada 100K+ req/s, pipe `os.Stdout` bisa menjadi bottleneck I/O karena penulisannya blocking. Zerolog menulis ke `io.Writer` secara sinkron. Solusi: bungkus writer dengan buffer asinkron `zerolog/diode` (ring buffer non-blocking) — ringan di memori, dengan tradeoff sedikit log hilang saat beban ekstrem.
+
+6. **Baris log di atas 4 KB bisa TERPOTONG-POTONG antar-goroutine:** di Linux, penulisan ke pipe dijamin atomik hanya sampai `PIPE_BUF` (4096 byte). Karena stdout container adalah pipe, satu baris log yang melampaui batas itu dapat terjalin dengan baris dari goroutine lain — hasilnya JSON rusak yang ditolak parser di agen log, dan **kedua** log itu hilang sekaligus. Ini bukan kasus langka: ia terjadi persis ketika Anda melakukan hal yang dilarang Anti-Pattern 3 (mencatat objek permintaan utuh) atau menyematkan stack trace panjang. Dua pencegahannya: jaga baris tetap kecil, dan bila memang butuh baris besar, tulis lewat satu writer yang diserialkan sendiri (`diode` atau writer ber-mutex) alih-alih mengandalkan atomisitas pipe.
 
 2. **Multi-line Stack Traces Memecah JSON Parsing:** Panic stack traces mengandung `\n` yang memecah satu log event menjadi banyak baris. Fluentd/Logstash mengira setiap baris adalah JSON baru → parse error. Solusi: gunakan `pkg/errors` atau `github.com/rotisserie/eris` yang mengemas stack trace menjadi JSON array field, bukan multiline string.
 
@@ -433,7 +563,7 @@ type sanitizedBody struct {
 
 4. **Level Sampling untuk Mengurangi Volume:** `log.Debug()` di production dengan ribuan request bisa menghasilkan gigabytes log/jam. Gunakan zerolog sampling: `log.Sample(&zerolog.BurstSampler{Burst: 5, Period: 1*time.Second})` untuk log hanya 5 debug events per detik per endpoint.
 
-5. **Log Level Dinamis via HTTP Endpoint:** Hard-coding log level di config membutuhkan restart untuk mengubah level. Expose endpoint internal `PUT /admin/log-level` yang memanggil `zerolog.SetGlobalLevel()` — ubah log level di runtime tanpa restart. Wajib diamankan dengan autentikasi internal.
+5. **Log Level Dinamis via HTTP Endpoint:** log level yang dipatok di config menuntut restart untuk diubah — dan restart menghapus keadaan yang sedang Anda selidiki. Sediakan endpoint `PUT /admin/log-level` yang memanggil `zerolog.SetGlobalLevel()` (aman dari race: ia memakai `atomic.StoreInt32`). Dua syarat: pasang di **port internal yang sama dengan probe**, bukan di port API publik — endpoint yang bisa menyalakan `debug` pada layanan produksi adalah tombol amplifikasi biaya sekaligus tombol kebocoran data; dan pasang pengembalian otomatis ke level semula setelah beberapa menit, karena `debug` yang lupa dimatikan setelah investigasi adalah penyebab lonjakan biaya log nomor satu.
 
 ## Kapan JANGAN Pakai Ini
 
@@ -452,6 +582,9 @@ type sanitizedBody struct {
 | Proses mati tanpa pesan penjelas | ada `log.Fatal` di jalur itu | `os.Exit` melewati flush buffer log |
 | Rahasia ditemukan di sistem log | pola nilai, bukan nama field | Objek permintaan dicatat utuh |
 | Alert berbasis log sering telat | jalur ingest log | Log tertunda; alert seharusnya di atas metrik |
+| Query `level:error` tidak menemukan 5xx | level yang dipakai middleware | Semua permintaan dicatat sebagai `info` |
+| Satu `request_id` memuat beberapa permintaan | cara ID dibuat | ID berbasis stempel waktu; tabrakan di bawah beban |
+| JSON rusak sporadis di agen log | panjang baris vs `PIPE_BUF` | Baris >4 KB terjalin antar-goroutine |
 
 ```bash
 # Volume dan sebaran level -- biaya observabilitas biasanya bersembunyi di sini

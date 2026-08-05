@@ -31,8 +31,9 @@ Tanpa penyimpanan berkelanjutan, "kemarin" tidak pernah ada. Inilah alasan conti
 | :--- | :--- | :--- |
 | CPU | ~1–3% saat aktif | Sampling 100 Hz; aman menyala terus |
 | Heap (alloc) | Rendah | Sampling per 512 KB alokasi secara bawaan |
-| Goroutine | **Naik dengan jumlah goroutine** | Mahal pada puluhan ribu goroutine — hentikan dunia |
+| Goroutine | **Naik dengan jumlah goroutine** | Sejak **Go 1.19** jeda stop-the-world-nya singkat dan hampir tidak bergantung jumlah goroutine — pembacaan stack dilakukan konkuren. Total kerjanya tetap sebanding dengan jumlah goroutine, jadi tetap jangan diambil sering |
 | Mutex / Block | **Tergantung rate** | `SetMutexProfileFraction(1)` sangat mahal; pakai 100+ |
+| Label (`pprof.Do`) | Kecil tapi **per permintaan** | Ia memasang label pada goroutine di setiap permintaan. Kecil dibanding kerja handler, tetapi bukan nol — jangan dipasang pada jalur yang tidak pernah Anda profil |
 
 Menyalakan semuanya sekaligus dengan rate maksimum bukan continuous profiling — itu memindahkan masalah performa ke dalam alat yang seharusnya mendiagnosisnya.
 
@@ -106,8 +107,9 @@ package profiling
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
-	_ "net/http/pprof" // mendaftarkan handler di DefaultServeMux
+	httppprof "net/http/pprof"
 	"runtime"
 	"time"
 )
@@ -145,9 +147,22 @@ func KonfigDefault(versi, wilayah string) Konfig {
 	}
 }
 
-// Mulai menyalakan profil dan server debug.
-// Kembaliannya WAJIB dipanggil saat shutdown.
-func Mulai(ctx context.Context, k Konfig) (berhenti func(context.Context) error, err error) {
+// Mulai menyalakan profil dan server debug. `berhenti` WAJIB dipanggil saat
+// shutdown; `alamat` adalah alamat yang benar-benar terikat (berguna saat
+// AlamatDebug memakai port 0).
+//
+// Listener DIIKAT SECARA SINKRON supaya kegagalannya benar-benar dilaporkan.
+// Bentuk `go func() { _ = srv.ListenAndServe() }()` mengembalikan err nil apa
+// pun yang terjadi: port yang sudah terpakai menghasilkan konstruktor yang
+// tampak "berhasil" dan endpoint profil yang TIDAK ADA. Anda baru
+// mengetahuinya saat insiden — tepat ketika endpoint itu satu-satunya hal
+// yang Anda butuhkan.
+func Mulai(k Konfig) (alamat string, berhenti func(context.Context) error, err error) {
+	ln, err := net.Listen("tcp", k.AlamatDebug)
+	if err != nil {
+		return "", nil, fmt.Errorf("ikat alamat debug %q: %w", k.AlamatDebug, err)
+	}
+
 	if k.MutexFraction > 0 {
 		runtime.SetMutexProfileFraction(k.MutexFraction)
 	}
@@ -155,17 +170,34 @@ func Mulai(ctx context.Context, k Konfig) (berhenti func(context.Context) error,
 		runtime.SetBlockProfileRate(k.BlockRate)
 	}
 
+	// Mux SENDIRI, bukan http.DefaultServeMux.
+	//
+	// Blank import `_ "net/http/pprof"` mendaftarkan handler ke mux GLOBAL.
+	// Selama mux global memuatnya, setiap server yang dijalankan dengan
+	// handler nil — termasuk yang ditambahkan orang lain enam bulan kemudian
+	// tanpa tahu soal ini — ikut mengekspos /debug/pprof. Pendaftaran
+	// eksplisit membuat paparannya menjadi keputusan, bukan efek samping
+	// sebuah baris import.
+	mux := http.NewServeMux()
+	mux.HandleFunc("/debug/pprof/", httppprof.Index)
+	mux.HandleFunc("/debug/pprof/cmdline", httppprof.Cmdline)
+	mux.HandleFunc("/debug/pprof/profile", httppprof.Profile)
+	mux.HandleFunc("/debug/pprof/symbol", httppprof.Symbol)
+	mux.HandleFunc("/debug/pprof/trace", httppprof.Trace)
+
 	srv := &http.Server{
-		Addr:              k.AlamatDebug,
-		Handler:           http.DefaultServeMux,
+		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
+		// SENGAJA tanpa WriteTimeout. Profil CPU 30 detik ditulis sebagai satu
+		// respons yang berlangsung selama itu; WriteTimeout akan memutusnya di
+		// tengah dan menghasilkan berkas profil rusak yang sulit dijelaskan.
 	}
 	go func() {
 		// Server debug yang mati tidak boleh menjatuhkan aplikasi.
-		_ = srv.ListenAndServe()
+		_ = srv.Serve(ln)
 	}()
 
-	return func(ctx context.Context) error {
+	return ln.Addr().String(), func(ctx context.Context) error {
 		runtime.SetMutexProfileFraction(0)
 		runtime.SetBlockProfileRate(0)
 		if err := srv.Shutdown(ctx); err != nil {
@@ -190,19 +222,28 @@ import (
 // MiddlewareLabel menempelkan dimensi ke setiap sampel profil yang
 // diambil selama permintaan ini berjalan.
 //
-// KARDINALITAS: label profil punya batasan yang sama dengan label metrik.
-// Rute (pola, bukan path mentah) dan tenant aman; ID permintaan TIDAK --
-// ia membuat setiap sampel unik dan penyimpanan profil meledak.
-func MiddlewareLabel(polaRute func(*http.Request) string) func(http.Handler) http.Handler {
+// KARDINALITAS: label profil punya batasan yang sama dengan label metrik --
+// dan sumbernya pun harus sama-sama TEPERCAYA. Rute wajib berupa pola, bukan
+// path mentah; ID permintaan tidak boleh dipakai sama sekali.
+//
+// tenantDari sengaja berupa fungsi yang membaca CONTEXT, bukan header.
+// Mengambil tenant langsung dari `X-Tenant-ID` berarti nilainya ditulis
+// klien: cukup kirim nilai berbeda tiap permintaan, dan setiap sampel menjadi
+// unik sampai penyimpanan profil meledak. Itu ledakan kardinalitas yang bisa
+// dipicu dari luar, tanpa perlu satu pun bug di sisi Anda.
+func MiddlewareLabel(
+	polaRute func(*http.Request) string,
+	tenantDari func(context.Context) string,
+) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			label := pprof.Labels(
-				"rute", polaRute(r),
-				"metode", r.Method,
-				"tenant", r.Header.Get("X-Tenant-ID"),
-			)
+			pasangan := []string{"rute", polaRute(r), "metode", r.Method}
+			// Label kosong hanya menambah derau; lewati bila tenant tak dikenal.
+			if t := tenantDari(r.Context()); t != "" {
+				pasangan = append(pasangan, "tenant", t)
+			}
 			// Do() memasang label pada goroutine ini SELAMA fn berjalan.
-			pprof.Do(r.Context(), label, func(ctx context.Context) {
+			pprof.Do(r.Context(), pprof.Labels(pasangan...), func(ctx context.Context) {
 				next.ServeHTTP(w, r.WithContext(ctx))
 			})
 		})
@@ -226,6 +267,7 @@ package profiling
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"runtime"
@@ -248,24 +290,62 @@ func TestKonfigDefault_TidakMemakaiRateMahal(t *testing.T) {
 }
 
 func TestKonfigDefault_TidakTerekspos(t *testing.T) {
-	// Endpoint pprof membocorkan nama fungsi dan path berkas, dan bisa
-	// dipakai menghabiskan CPU. Ia TIDAK BOLEH mendengar di 0.0.0.0.
+	// Endpoint pprof membocorkan nama fungsi dan path berkas, dan bisa dipakai
+	// menahan profiler. Ia TIDAK BOLEH mendengar di semua antarmuka.
 	k := KonfigDefault("1.0.0", "id-jkt")
-	if k.AlamatDebug == "" || k.AlamatDebug[0] == ':' {
-		t.Fatalf("alamat debug %q mendengar di semua antarmuka", k.AlamatDebug)
+	host, _, err := net.SplitHostPort(k.AlamatDebug)
+	if err != nil {
+		t.Fatalf("alamat debug %q bukan host:port: %v", k.AlamatDebug, err)
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || !ip.IsLoopback() {
+		// Menangkap ":6060", "0.0.0.0:6060", dan "[::]:6060" sekaligus —
+		// pemeriksaan lama hanya menangkap yang pertama.
+		t.Fatalf("alamat debug %q tidak terbatas pada loopback", k.AlamatDebug)
 	}
 }
 
-func TestMulai_MemasangDanMelepasRate(t *testing.T) {
+func TestMulai_MelaporkanGagalIkat(t *testing.T) {
+	// Membuktikan kegagalan benar-benar dilaporkan. Versi lama menjalankan
+	// ListenAndServe di goroutine dan membuang galatnya, sehingga port yang
+	// sudah terpakai menghasilkan konstruktor "berhasil" tanpa endpoint apa pun.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+
+	k := KonfigDefault("uji", "lokal")
+	k.AlamatDebug = ln.Addr().String() // sudah terpakai
+	if _, _, err := Mulai(k); err == nil {
+		t.Fatal("Mulai harus melaporkan galat saat alamat sudah terpakai")
+	}
+}
+
+func TestMulai_MemasangRateDanMelayaniProfil(t *testing.T) {
 	k := KonfigDefault("uji", "lokal")
 	k.AlamatDebug = "127.0.0.1:0" // port acak agar uji tidak bentrok
 
-	berhenti, err := Mulai(context.Background(), k)
+	alamat, berhenti, err := Mulai(k)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if runtime.SetMutexProfileFraction(-1) != k.MutexFraction {
-		t.Error("MutexProfileFraction tidak terpasang")
+	if got := runtime.SetMutexProfileFraction(-1); got != k.MutexFraction {
+		t.Errorf("MutexProfileFraction = %d, mau %d", got, k.MutexFraction)
+	}
+	// Catatan: runtime tidak menyediakan cara membaca BlockProfileRate yang
+	// sedang aktif, jadi setelan itu tidak bisa diperiksa di sini — hanya
+	// pelepasannya yang bisa dipastikan lewat kode.
+
+	// Endpoint benar-benar melayani. Tanpa pemeriksaan ini, uji hanya
+	// membuktikan konstruktor tidak melempar galat.
+	resp, err := http.Get("http://" + alamat + "/debug/pprof/")
+	if err != nil {
+		t.Fatalf("endpoint debug tidak dapat dihubungi: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /debug/pprof/ = %d, mau 200", resp.StatusCode)
 	}
 
 	ctx, batal := context.WithTimeout(context.Background(), 2*time.Second)
@@ -278,9 +358,12 @@ func TestMulai_MemasangDanMelepasRate(t *testing.T) {
 	}
 }
 
+// tanpaTenant dipakai uji yang tidak menguji dimensi tenant.
+func tanpaTenant(context.Context) string { return "" }
+
 func TestMiddlewareLabel_LabelTerpasangSelamaPermintaan(t *testing.T) {
 	var terlihat bool
-	h := MiddlewareLabel(func(*http.Request) string { return "/pesanan/{id}" })(
+	h := MiddlewareLabel(func(*http.Request) string { return "/pesanan/{id}" }, tanpaTenant)(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			pprof.ForLabels(r.Context(), func(k, v string) bool {
 				if k == "rute" && v == "/pesanan/{id}" {
@@ -300,7 +383,7 @@ func TestMiddlewareLabel_MemakaiPolaBukanPathMentah(t *testing.T) {
 	// Path mentah sebagai label = kardinalitas tak terbatas, persis
 	// masalah yang sama seperti pada metrik Prometheus.
 	var nilai string
-	h := MiddlewareLabel(func(*http.Request) string { return "/pesanan/{id}" })(
+	h := MiddlewareLabel(func(*http.Request) string { return "/pesanan/{id}" }, tanpaTenant)(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			pprof.ForLabels(r.Context(), func(k, v string) bool {
 				if k == "rute" {
@@ -315,6 +398,30 @@ func TestMiddlewareLabel_MemakaiPolaBukanPathMentah(t *testing.T) {
 		t.Fatal("label memakai path mentah; kardinalitas akan meledak")
 	}
 }
+
+// Header kiriman klien TIDAK boleh menjadi label. Uji ini membuktikan
+// tenant hanya bisa masuk lewat context yang sudah terautentikasi.
+func TestMiddlewareLabel_TenantTidakDariHeader(t *testing.T) {
+	var nilaiTenant string
+	h := MiddlewareLabel(func(*http.Request) string { return "/pesanan/{id}" }, tanpaTenant)(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			pprof.ForLabels(r.Context(), func(k, v string) bool {
+				if k == "tenant" {
+					nilaiTenant = v
+				}
+				return true
+			})
+		}))
+
+	req := httptest.NewRequest(http.MethodGet, "/pesanan/1", nil)
+	req.Header.Set("X-Tenant-ID", "sembarang-nilai-unik-tiap-permintaan")
+	h.ServeHTTP(httptest.NewRecorder(), req)
+
+	if nilaiTenant != "" {
+		t.Fatalf("label tenant = %q, mau kosong — nilai kiriman klien menjadi label", nilaiTenant)
+	}
+}
+
 
 func TestTandaiTugasLatar(t *testing.T) {
 	var ok bool
@@ -340,15 +447,21 @@ func TestTandaiTugasLatar(t *testing.T) {
 http.ListenAndServe(":8080", nil) // DefaultServeMux sudah memuat /debug/pprof
 ```
 
-Siapa pun bisa mengambil profil Anda — yang membocorkan seluruh nama fungsi, path berkas mesin build, dan struktur internal. `?seconds=300` juga menahan CPU selama lima menit atas permintaan orang asing.
+Siapa pun bisa mengambil profil Anda — yang membocorkan seluruh nama fungsi, path berkas mesin build, dan struktur internal. Dua penyalahgunaan yang lebih konkret dari sekadar "membebani CPU":
 
-**✅ BENAR — port terpisah, hanya localhost, agen yang mengambil**
+- `?seconds=300` menahan **profiler CPU** selama lima menit. Profil CPU bersifat eksklusif: selama itu berjalan, Anda **tidak bisa mengambil profil sendiri** — tepat saat insiden, alat diagnosis Anda dipegang orang asing.
+- `/debug/pprof/heap?gc=1` **memaksa garbage collection** setiap kali dipanggil. Ini satu permintaan HTTP yang memicu jeda GC atas permintaan pihak luar, berulang sesuka mereka.
+
+**✅ BENAR — mux sendiri, port terpisah, hanya loopback, agen yang mengambil**
 
 ```go
-srv := &http.Server{Addr: "127.0.0.1:6060", Handler: http.DefaultServeMux}
-go srv.ListenAndServe()
-// API publik memakai mux sendiri, bukan DefaultServeMux
+mux := http.NewServeMux()
+mux.HandleFunc("/debug/pprof/", httppprof.Index) // dan seterusnya, lihat Mulai()
+srv := &http.Server{Handler: mux}
+ln, err := net.Listen("tcp", "127.0.0.1:6060")   // galatnya WAJIB diperiksa
 ```
+
+Perhatikan: yang benar bukan sekadar "port terpisah", tetapi **mux terpisah**. Selama `_ "net/http/pprof"` diimpor, handler-nya terdaftar di `http.DefaultServeMux` — dan server mana pun yang kelak dijalankan dengan handler `nil` ikut mengekspos `/debug/pprof` tanpa ada yang pernah memutuskannya.
 
 **❌ SALAH — `SetMutexProfileFraction(1)` di produksi**
 
@@ -411,7 +524,7 @@ go tool pprof -base sebelum.pb.gz sesudah.pb.gz
 
 1. **Profil goroutine menghentikan dunia.** Pada proses dengan puluhan ribu goroutine, mengambilnya bisa menyebabkan jeda yang terlihat pengguna. Ambil jarang, dan jangan jadikan bagian dari pengambilan berkala yang agresif.
 
-2. **Profil tanpa simbol setelah `-ldflags "-s -w"`.** Stack trace Go tetap terbaca, tetapi sebagian alat profiling kehilangan informasi simbol. Bila continuous profiling adalah bagian dari operasi Anda, timbang ulang penghematan beberapa megabyte itu.
+2. **`-ldflags "-s -w"` — yang hilang bukan yang biasa disangka.** Profil `runtime/pprof` **tetap tersimbolisasi penuh**: nama fungsi dan nomor barisnya berasal dari `pclntab`, tabel yang sama yang membuat panic tetap mencetak stack trace, dan `-s -w` tidak menghapusnya. Yang benar-benar terdampak adalah profiler **di luar proses**: agen berbasis eBPF/perf (mode itu ada pada Parca dan Pyroscope) yang membongkar stack dengan DWARF atau membaca tabel simbol ELF akan kehilangan informasi, begitu pula `gdb` dan `delve`. Putuskan berdasarkan cara agen Anda mengambil profil, bukan berdasarkan anggapan bahwa binary yang di-strip selalu buta.
 
 3. **Agen sidecar menambah pemakaian memori per pod.** Pada armada besar, sidecar profiling dikalikan jumlah pod adalah angka yang nyata. Hitung sebelum memasang di seluruh cluster.
 
@@ -421,7 +534,11 @@ go tool pprof -base sebelum.pb.gz sesudah.pb.gz
 
 6. **Retensi profil punya biaya penyimpanan.** Profil jauh lebih besar daripada metrik. Retensi tinggi untuk seluruh armada bisa mengejutkan di tagihan; simpan resolusi penuh untuk periode pendek dan turunkan resolusinya setelah itu.
 
-7. **Label tidak merambat ke goroutine anak yang dibuat manual.** `pprof.Do` memasang label pada goroutine yang memanggilnya. Goroutine yang di-spawn di dalamnya **mewarisi** label lewat context hanya bila dibuat setelah `Do` dan memakai context tersebut — `go func()` yang menangkap variabel luar tanpa context tidak berlabel.
+7. **Label DIWARISKAN goroutine anak — dan justru itu masalahnya.** Pewarisan label terjadi di tingkat runtime: goroutine baru menyalin label dari goroutine yang membuatnya, **tanpa** memerlukan context. Konsekuensinya berlawanan dengan dugaan umum:
+   - Goroutine yang di-spawn di dalam handler dan **hidup lebih lama** dari permintaan itu tetap membawa label `rute` dan `tenant` permintaan tersebut — selamanya. Pekerjaan latar yang berjalan berjam-jam akan terus dihitung sebagai beban satu endpoint yang sudah lama selesai, dan kesimpulan "endpoint X memakan 40% CPU" menjadi salah tanpa ada yang curiga.
+   - Sebaliknya, worker pool yang dibuat **saat startup** tidak akan pernah mendapat label permintaan meski memproses pekerjaan yang berasal dari permintaan — karena ia lahir sebelum label apa pun terpasang. Worker seperti itu harus diberi label sendiri lewat `pprof.Do` di dalam loop kerjanya (lihat `TandaiTugasLatar`).
+
+   Perhatikan juga bahwa `pprof.ForLabels(ctx, …)` membaca label dari **context**, bukan dari goroutine. Keduanya biasanya sinkron karena `pprof.Do` menyetel keduanya sekaligus, tetapi pada goroutine anak yang tidak menerima context, hanya label runtime-nya yang ikut.
 
 ## Kapan JANGAN Pakai Ini
 
@@ -441,6 +558,8 @@ go tool pprof -base sebelum.pb.gz sesudah.pb.gz
 | Beban dasar naik setelah memasang profiling | rate mutex/block | Rate terlalu agresif |
 | Penyimpanan profil membengkak | kardinalitas label | Ada label unik per permintaan |
 | `/debug/pprof` dapat diakses dari luar | port dan kebijakan jaringan | Endpoint terekspos |
+| Endpoint profil tidak ada saat dibutuhkan | galat pengikatan saat start | Kegagalan listener ditelan goroutine |
+| Beban latar dihitung sebagai beban satu endpoint | goroutine yang hidup melampaui permintaan | Label permintaan terwariskan dan tidak pernah dilepas |
 
 ```bash
 # Endpoint pprof TIDAK BOLEH terjangkau dari luar pod
