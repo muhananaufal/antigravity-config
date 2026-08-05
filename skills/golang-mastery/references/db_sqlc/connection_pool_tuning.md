@@ -78,12 +78,36 @@ type Config struct {
 	HealthPeriod time.Duration
 }
 
-// DefaultPoolConfig memberikan estimasi baseline yang baik untuk layanan API menengah.
-func DefaultPoolConfig(dsn string) Config {
+// DefaultPoolConfig memberikan baseline untuk SATU pod.
+//
+// Angka 40 yang sering disalin dari contoh di internet adalah kesalahan yang
+// mahal: dengan 10 pod, itu 400 koneksi -- empat kali lipat `max_connections`
+// bawaan PostgreSQL (100). Gejalanya `FATAL: sorry, too many clients already`
+// tepat saat autoscaler menambah pod, yaitu saat trafik sedang tinggi.
+//
+// Rumusnya dihitung dari kapasitas DATABASE, lalu DIBAGI jumlah pod:
+//
+//	total_aman  = (core_cpu_db * 2) + jumlah_spindle_disk
+//	per_pod     = total_aman / perkiraan_pod_maksimum
+//
+// Contoh: DB 4 vCPU dengan SSD -> total ~9. Dengan maksimum 6 pod (termasuk
+// ruang untuk rolling update), per_pod = 1..2. Naikkan hanya bila
+// AcquireDuration membuktikan pool menjadi penyempitan -- bukan sebelumnya.
+func DefaultPoolConfig(dsn string, maksPod int32) Config {
+	if maksPod < 1 {
+		maksPod = 1
+	}
+	const totalAman = 9 // sesuaikan dengan ukuran DB Anda
+	perPod := totalAman / maksPod
+	if perPod < 2 {
+		perPod = 2 // batas bawah wajar agar satu query lambat tidak memblokir semua
+	}
 	return Config{
-		DSN:          dsn,
-		MaxConns:     40, // Rumus umum: ((Core CPU DB * 2) + Kapasitas Disk Spindle) / Total Pods Aplikasi
-		MinConns:     10,
+		DSN:      dsn,
+		MaxConns: perPod,
+		// MinConns kecil: koneksi idle tetap memakan memori di sisi server,
+		// dan tetap harus di-health-check.
+		MinConns:     1,
 		MaxLifetime:  1 * time.Hour,
 		MaxIdleTime:  30 * time.Minute,
 		HealthPeriod: 1 * time.Minute,
@@ -185,18 +209,34 @@ for rows.Next() {
 ```
 
 ```go
-// ✅ GOOD: Selalu manfaatkan defer rows.Close() langsung di bawah inisialisasi query.
+// ✅ GOOD: tiga hal yang WAJIB ada bersamaan -- periksa galat Query,
+// defer Close, dan periksa rows.Err() setelah loop.
 rows, err := pool.Query(ctx, "SELECT id, name FROM users")
 if err != nil {
-	return err
+	return err // di contoh BAD galat ini diabaikan dengan `_`
 }
-defer rows.Close() // Memastikan koneksi dikembalikan, meskipun function mengembalikan error (early return)
+defer rows.Close() // koneksi kembali ke pool meski ada early return
 
 for rows.Next() {
 	var id int
 	if err := rows.Scan(&id); err != nil {
-		return err // Koneksi aman tertutup dan dikembalikan oleh defer
+		return err
 	}
+}
+
+// INI YANG PALING SERING TERLUPAKAN, dan paling berbahaya.
+//
+// rows.Next() mengembalikan false untuk DUA sebab yang berbeda: data habis,
+// ATAU terjadi galat di tengah aliran (koneksi putus, query dibatalkan
+// server, timeout). Tanpa memeriksa rows.Err(), keduanya tidak bisa
+// dibedakan -- loop selesai dengan tenang dan pemanggil menyimpulkan ia
+// menerima SELURUH baris, padahal hanya menerima sebagian.
+//
+// Ini kelas bug yang tidak pernah muncul di pengembangan dan tidak
+// menghasilkan satu pun galat di log: laporan yang kurang beberapa baris,
+// saldo yang tidak cocok, ekspor yang terpotong diam-diam.
+if err := rows.Err(); err != nil {
+	return fmt.Errorf("iterasi baris terputus: %w", err)
 }
 ```
 **Why dangerous:** Koneksi yang tidak ditutup menyebabkan `pgxpool` mengira koneksi tersebut masih sibuk (`In-Use`). Kapasitas pool berkurang 1. Setelah kejadian ini berulang sebanyak nilai `MaxConns`, setiap query baru akan *hang* mengantre hingga waktu `context` habis (*timeout*). Seluruh endpoint yang bergantung pada database akan lumpuh secara seketika (*Outage*).

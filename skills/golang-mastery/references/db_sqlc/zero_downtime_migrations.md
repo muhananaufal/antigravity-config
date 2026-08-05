@@ -95,8 +95,47 @@ func RunMigrations(ctx context.Context, dsn string, logger *slog.Logger) error {
 	}
 
 	logger.InfoContext(ctx, "starting database migrations (goose)")
-	// goose secara bawaan akan memperoleh pg_advisory_lock
-	// memastikan hanya 1 instance migrasi yang berjalan walau ada 10 replika k8s.
+
+	// PENTING — KESALAHPAHAMAN YANG BERBAHAYA:
+	// goose TIDAK mengambil advisory lock secara bawaan. Penguncian sesi
+	// adalah fitur OPT-IN (goose.WithSessionLocker / -lock-mode). Menjalankan
+	// goose.Up dari 10 replika sekaligus TANPA mengaktifkannya berarti sepuluh
+	// proses berlomba di tabel versi yang sama -- hasilnya migrasi terjadi
+	// ganda, atau tabel versi berakhir dalam keadaan `dirty`.
+	//
+	// Dua jalan yang benar, pilih salah satu:
+	//   (a) Jalankan migrasi dari SATU tempat: Job Kubernetes atau initContainer
+	//       yang hanya ada satu instansnya. Ini pilihan paling sederhana.
+	//   (b) Bila migrasi memang dipanggil dari banyak proses, bungkus sendiri
+	//       dengan advisory lock seperti di bawah.
+	const kunciMigrasi int64 = 987654321 // konstanta tetap, bukan hash
+
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("ambil koneksi untuk lock migrasi: %w", err)
+	}
+	defer conn.Close()
+
+	var dapat bool
+	if err := conn.QueryRowContext(ctx,
+		"SELECT pg_try_advisory_lock($1)", kunciMigrasi).Scan(&dapat); err != nil {
+		return fmt.Errorf("ambil advisory lock migrasi: %w", err)
+	}
+	if !dapat {
+		// Instans lain sedang bermigrasi. Ini BUKAN galat: menunggu dan
+		// melanjutkan start adalah perilaku yang benar.
+		logger.InfoContext(ctx, "migrasi sedang dijalankan instans lain, dilewati")
+		return nil
+	}
+	defer func() {
+		// Lock sesi WAJIB dilepas eksplisit; ia tidak terikat transaksi.
+		if _, err := conn.ExecContext(context.WithoutCancel(ctx),
+			"SELECT pg_advisory_unlock($1)", kunciMigrasi); err != nil {
+			logger.ErrorContext(ctx, "gagal melepas advisory lock migrasi",
+				slog.String("error", err.Error()))
+		}
+	}()
+
 	if err := goose.UpContext(ctx, db, "migrations"); err != nil {
 		return fmt.Errorf("migration step failed: %w", err)
 	}
@@ -153,13 +192,35 @@ func (b *DataBackfiller) SplitNameBackfill(ctx context.Context) error {
 		b.log.InfoContext(ctx, "backfill progress", slog.Int("updated", totalProcessed))
 
 		if rowsUpdated == 0 {
-			// Tidak ada lagi baris yang tertinggal
-			break
+			// JANGAN langsung berhenti. SKIP LOCKED bisa mengembalikan 0 baris
+			// bukan karena pekerjaan habis, tetapi karena SELURUH kandidat
+			// batch ini sedang dikunci transaksi lain. Berhenti di sini akan
+			// melaporkan "backfill selesai" sementara masih ada baris tersisa
+			// -- kegagalan senyap yang baru ketahuan saat fase Contract
+			// menghapus kolom lama dan datanya benar-benar hilang.
+			//
+			// Verifikasi sisa pekerjaan secara langsung sebelum menyatakan selesai.
+			var sisa int64
+			if err := b.pool.QueryRow(ctx,
+				`SELECT count(*) FROM users WHERE first_name IS NULL AND full_name IS NOT NULL`,
+			).Scan(&sisa); err != nil {
+				return fmt.Errorf("periksa sisa backfill: %w", err)
+			}
+			if sisa == 0 {
+				break // benar-benar habis
+			}
+			b.log.InfoContext(ctx, "batch kosong karena baris terkunci, menunggu",
+				slog.Int64("sisa", sisa))
 		}
 
-		// Berikan nafas (yield) kepada database agar query pengguna asli 
-		// tidak kelaparan (I/O starvation).
-		time.Sleep(100 * time.Millisecond)
+		// Beri nafas ke database agar query pengguna tidak kelaparan I/O.
+		// Memakai select, bukan time.Sleep: backfill bisa berjalan berjam-jam
+		// dan WAJIB berhenti rapi saat shutdown.
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("backfill dibatalkan setelah %d baris: %w", totalProcessed, ctx.Err())
+		case <-time.After(100 * time.Millisecond):
+		}
 	}
 
 	b.log.InfoContext(ctx, "backfill completed", slog.Int("total_updated", totalProcessed))

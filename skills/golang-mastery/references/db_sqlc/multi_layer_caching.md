@@ -61,7 +61,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"testing"
 	"time"
 
 	"github.com/dgraph-io/ristretto"
@@ -82,10 +81,23 @@ func NewMultiLayerCache(pool *pgxpool.Pool, logger *slog.Logger) (*MultiLayerCac
 	// Ristretto adalah cache concurrent performa tinggi, dirancang khusus
 	// menghindari contention lock mutex tradisional.
 	cache, err := ristretto.NewCache(&ristretto.Config{
-		NumCounters: 1e7,     // Menyimpan metrik frekuensi untuk 10 juta item
-		MaxCost:     1 << 28, // Batas memori absolut ~256MB
-		BufferItems: 64,      // Ukuran channel buffer internal
+		NumCounters: 1e7,     // metrik frekuensi untuk ~10 juta item
+		MaxCost:     1 << 28, // 268.435.456 satuan "cost"
+		BufferItems: 64,      // ukuran channel buffer internal
 	})
+	// PERINGATAN — MaxCost BUKAN batas byte secara otomatis.
+	//
+	// MaxCost hanya berarti "byte" bila setiap Set() menyertakan cost dalam
+	// satuan byte. Bila Anda memakai cost = 1 per item (pola yang sangat
+	// umum disalin), MaxCost 1<<28 berarti batasnya 268 JUTA ITEM, bukan
+	// 256 MB -- dan cache itu bisa menghabiskan puluhan gigabyte sebelum
+	// satu item pun dievict.
+	//
+	// Pilih satu dan konsisten:
+	//   (a) cost = perkiraan byte item  -> MaxCost adalah batas memori
+	//   (b) cost = 1                    -> MaxCost adalah batas jumlah item,
+	//                                      dan setel angkanya sesuai itu
+	// Kode di bawah memakai (a).
 	if err != nil {
 		return nil, fmt.Errorf("failed to init ristretto l1 cache: %w", err)
 	}
@@ -119,12 +131,21 @@ func (c *MultiLayerCache) GetUserName(ctx context.Context, userID int) (string, 
 			return nil, err
 		}
 
-		// Simpan ke L1 dengan biaya alokasi 1 item, hidup selama 30 menit.
-		// Jika terjadi event "Notify", ini akan dihapus sebelum 30 menit.
-		c.l1.SetWithTTL(cacheKey, name, 1, 30*time.Minute)
-		
-		// Ristretto menulis data secara async! Ada delay 1-2 ms hingga data betul-betul
-		// tersedia untuk pemanggilan Get() selanjutnya.
+		// cost = perkiraan byte yang benar-benar dipakai item ini, konsisten
+		// dengan MaxCost sebagai batas memori. Menaruh 1 di sini akan membuat
+		// MaxCost berhenti berarti sebagai batas byte.
+		biaya := int64(len(cacheKey) + len(name) + 48) // +48: overhead header string & entri
+
+		// Set MENGEMBALIKAN bool: kebijakan admisi Ristretto boleh MENOLAK item.
+		// Mengabaikannya berarti Anda tidak pernah tahu cache diam-diam tidak
+		// menyimpan apa pun -- hit rate nol tanpa satu pun galat.
+		if diterima := c.l1.SetWithTTL(cacheKey, name, biaya, 30*time.Minute); !diterima {
+			c.log.DebugContext(ctx, "item ditolak kebijakan admisi L1",
+				slog.String("key", cacheKey))
+		}
+
+		// Ristretto menulis secara asinkron: ada jeda singkat sebelum item
+		// benar-benar terlihat oleh Get() berikutnya. Di uji, panggil Wait().
 		return name, nil
 	})
 
@@ -156,13 +177,29 @@ func (c *MultiLayerCache) StartInvalidationListener(ctx context.Context) {
 }
 
 func (c *MultiLayerCache) listenRoutine(ctx context.Context) error {
-	// PENTING: Acquire sebuah Dedicated Connection. Jangan kembalikan ke pool
-	// hingga terputus. Koneksi ini tidak bisa lagi dipakai untuk Query/Tx biasa.
-	conn, err := c.pool.Acquire(ctx)
+	// Koneksi yang sudah menjalankan LISTEN TIDAK BOLEH kembali ke pool.
+	//
+	// pgxpool tidak mereset status LISTEN saat Release(). Koneksi itu akan
+	// diberikan ke query biasa berikutnya sementara langganannya masih aktif
+	// -- notifikasi berakhir di tempat yang tidak menanganinya, dan hilang.
+	// Gejalanya: invalidasi cache "kadang tidak sampai", tanpa satu pun galat.
+	//
+	// Hijack() MENGELUARKAN koneksi dari pool secara permanen. Kita yang
+	// bertanggung jawab menutupnya.
+	poolConn, err := c.pool.Acquire(ctx)
 	if err != nil {
 		return fmt.Errorf("acquire notify connection: %w", err)
 	}
-	defer conn.Release()
+	conn := poolConn.Hijack() // sejak titik ini, pool tidak lagi memilikinya
+	defer func() {
+		// Konteks terpisah: ctx bisa sudah dibatalkan, dan penutupan tetap
+		// harus terkirim agar tidak meninggalkan koneksi menggantung di server.
+		tutupCtx, batal := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer batal()
+		if err := conn.Close(tutupCtx); err != nil {
+			c.log.Error("gagal menutup koneksi listener", slog.String("error", err.Error()))
+		}
+	}()
 
 	// Daftarkan niat pada channel pg_notify 'cache_invalidation'
 	_, err = conn.Exec(ctx, "LISTEN cache_invalidation")

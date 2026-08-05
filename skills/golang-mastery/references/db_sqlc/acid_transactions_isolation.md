@@ -78,7 +78,6 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand"
-	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -120,6 +119,21 @@ func ExecuteSerializableTx(
 	logger *slog.Logger,
 	fn TxFn,
 ) error {
+	// Logger nil akan panic pada pemanggilan WarnContext di bawah -- dan itu
+	// HANYA terjadi saat ada konflik transaksi, yaitu di produksi bertrafik
+	// tinggi, tidak pernah di uji. Jaga di sini, bukan di sana.
+	if logger == nil {
+		logger = slog.Default()
+	}
+	// MaxRetries 0 membuat loop tidak pernah berjalan, dan baris terakhir
+	// fungsi ini akan membungkus err yang masih nil dengan %w.
+	if opts.MaxRetries < 1 {
+		opts.MaxRetries = 1
+	}
+	if opts.BaseDelay < time.Millisecond {
+		opts.BaseDelay = time.Millisecond // rand.Int63n panic bila argumennya <= 0
+	}
+
 	txOpts := pgx.TxOptions{
 		IsoLevel:   pgx.Serializable,
 		AccessMode: pgx.ReadWrite,
@@ -315,7 +329,21 @@ err := ExecuteSerializableTx(ctx, pool, opts, logger, func(ctx context.Context, 
 
 1. **Context Cancellation di Tengah Transaksi Panjang**
    Jika `ctx` yang dilempar dari HTTP handler dibatalkan (karena *client* memutuskan koneksi internet), operasi `tx.Exec` atau `tx.Commit` akan mengembalikan `context.Canceled`. Namun, kita harus memastikan bahwa koneksi dikembalikan dengan memanggil `tx.Rollback(ctx)`. `pgx` mengimplementasikan ini dengan sangat baik: jika koneksi gagal atau context dibatalkan, `Rollback` secara cerdas melepaskan koneksi, bahkan menutup koneksi dasar (`net.Conn`) jika ia berada di status tidak aman.
-   *Tip Spesifik*: Jangan memanggil `Rollback(context.Background())` saat *cleanup*, biarkan menggunakan `ctx` asli; `pgx` bisa menanganinya secara aman meski sudah `Done`.
+   *Koreksi penting*: nasihat "biarkan `Rollback` memakai `ctx` asli, `pgx` menanganinya dengan aman" **menyesatkan**. Bila `ctx` sudah dibatalkan, `Rollback(ctx)` gagal seketika dan `pgx` **membuang koneksinya** — bukan mengembalikannya ke pool. Aman dari sisi konsistensi data, tetapi pada layanan yang sering ditinggal klien, setiap pembatalan berarti satu koneksi dibangun ulang lengkap dengan TCP dan TLS handshake. Di bawah beban, churn ini sendiri menjadi insiden.
+
+   Yang benar untuk *cleanup*: pakai konteks yang **tidak ikut dibatalkan**, dengan batas waktu pendek agar tetap tidak menggantung.
+   ```go
+   defer func() {
+       // context.WithoutCancel mempertahankan nilai (TraceID) tetapi memutus
+       // rantai pembatalan, sehingga ROLLBACK benar-benar terkirim ke server
+       // dan koneksinya bisa dipakai ulang.
+       rbCtx, batal := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+       defer batal()
+       if err := tx.Rollback(rbCtx); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+           slog.ErrorContext(ctx, "rollback gagal", slog.String("error", err.Error()))
+       }
+   }()
+   ```
 
 2. **PgBouncer vs Prepared Statements pada Serializable**
    Jika infrastruktur Anda menggunakan *PgBouncer* dalam mode *Transaction Pooling*, Anda **tidak bisa** menggunakan prepared statements (`PREPARE ...`) tanpa pengaturan khusus. Secara default, `pgxpool` menyiapkan statement di latar belakang. Anda harus secara eksplisit mendisable cache (misalnya menggunakan parameter DSN `default_query_exec_mode=exec`) jika ada lapisan proxy di tengah, agar *Prepared Statement* tidak tersebar ke koneksi PostgreSQL yang salah. 

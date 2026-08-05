@@ -59,8 +59,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"testing"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -84,23 +82,50 @@ func FetchUsersWithPosts(ctx context.Context, pool *pgxpool.Pool, limit int) ([]
 	// 3. FILTER (WHERE) mencegah terciptanya array sakti berisi null: "[null]" jika relasi kosong.
 	// 4. COALESCE memberikan jaminan balikan array kosong "[]" yang valid di-parsing Go.
 	
+	// URUTAN KLAUSA DI SINI MENENTUKAN SEGALANYA.
+	//
+	// Bentuk yang SALAH -- dan yang paling sering disalin:
+	//     FROM users u LEFT JOIN posts p ON ...
+	//     GROUP BY u.id, u.name
+	//     ORDER BY u.id DESC
+	//     LIMIT $1
+	// LIMIT diterapkan SETELAH agregasi. PostgreSQL akan men-JOIN SELURUH
+	// tabel users dengan SELURUH posts, mengelompokkan semuanya, mengurutkan
+	// hasilnya, lalu membuang semua kecuali 20 baris. Pada tabel 1 juta
+	// pengguna, query "optimal" ini justru membaca seluruh basis data --
+	// persis kebalikan dari yang ingin dicapai.
+	//
+	// Bentuk yang BENAR: batasi INDUK lebih dulu di CTE, baru gabungkan
+	// anaknya. Hanya `limit` pengguna yang pernah disentuh.
+	//
+	// LIMIT pada anak juga WAJIB: satu pengguna dengan 150.000 komentar
+	// menghasilkan dokumen JSON puluhan megabyte di memori server.
 	query := `
-		SELECT 
-			u.id, 
-			u.name, 
+		WITH induk AS (
+			SELECT id, name
+			FROM users
+			ORDER BY id DESC
+			LIMIT $1
+		)
+		SELECT
+			i.id,
+			i.name,
 			COALESCE(
 				jsonb_agg(
-					jsonb_build_object(
-						'id', p.id, 
-						'title', p.title
-					)
+					jsonb_build_object('id', p.id, 'title', p.title)
+					ORDER BY p.id DESC
 				) FILTER (WHERE p.id IS NOT NULL), '[]'::jsonb
-			) as posts_json
-		FROM users u
-		LEFT JOIN posts p ON p.user_id = u.id
-		GROUP BY u.id, u.name
-		ORDER BY u.id DESC
-		LIMIT $1
+			) AS posts_json
+		FROM induk i
+		LEFT JOIN LATERAL (
+			SELECT id, title
+			FROM posts
+			WHERE user_id = i.id
+			ORDER BY id DESC
+			LIMIT 50          -- batas anak per induk; tanpa ini payload bisa meledak
+		) p ON true
+		GROUP BY i.id, i.name
+		ORDER BY i.id DESC
 	`
 
 	rows, err := pool.Query(ctx, query, limit)

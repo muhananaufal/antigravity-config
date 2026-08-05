@@ -64,7 +64,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"hash/crc32"
 	"log/slog"
 	"time"
 
@@ -145,37 +144,72 @@ func FetchJobForProcessing(ctx context.Context, pool *pgxpool.Pool) (jobID int, 
 
 // 3. Advisory Locking (Transaction-level)
 // Menjamin hanya 1 pod aplikasi yang mengeksekusi fungsi closure `fn`.
+// idTugas memetakan nama tugas ke ID advisory lock.
+//
+// SENGAJA registry eksplisit, bukan hash. Advisory lock berbagi SATU
+// namespace 64-bit untuk seluruh database: crc32 hanya menghasilkan 32 bit,
+// dan dua nama tugas yang bertabrakan membuat salah satu cron TIDAK PERNAH
+// berjalan -- tanpa galat, tanpa log, tanpa cara menyadarinya selain
+// menyadari laporan tidak pernah terkirim.
+var idTugas = map[string]int64{
+	"laporan_harian":   1001,
+	"pembersihan_sesi": 1002,
+	"rekonsiliasi":     1003,
+}
+
+// ExecuteExclusiveLeaderTask menjamin hanya satu pod menjalankan fn.
+//
+// Lock diambil di level SESI, bukan transaksi. Alasannya penting:
+// pg_try_advisory_xact_lock menuntut transaksi tetap TERBUKA selama fn
+// berjalan. Untuk tugas berdurasi menit atau jam -- dan laporan harian
+// memang begitu -- itu berarti satu koneksi tertahan, satu snapshot MVCC
+// ditahan, dan VACUUM terhambat selama itu. Persis anti-pattern yang
+// dilarang di bagian atas berkas ini.
 func ExecuteExclusiveLeaderTask(ctx context.Context, pool *pgxpool.Pool, logger *slog.Logger, taskName string, fn func(context.Context) error) error {
-	// Hashing string ke int64 yang diperlukan oleh Advisory Lock
-	lockID := int64(crc32.ChecksumIEEE([]byte(taskName)))
+	lockID, ada := idTugas[taskName]
+	if !ada {
+		return fmt.Errorf("tugas %q tidak terdaftar di idTugas", taskName)
+	}
 
-	tx, err := pool.Begin(ctx)
+	// Koneksi khusus: lock sesi terikat pada KONEKSI, bukan pada pool.
+	conn, err := pool.Acquire(ctx)
 	if err != nil {
-		return fmt.Errorf("begin leader tx: %w", err)
+		return fmt.Errorf("ambil koneksi leader: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer conn.Release()
 
-	var lockAcquired bool
-	// xact_lock otomatis melepaskan kunci di ujung transaksi (rollback/commit)
-	// pg_try_* tidak akan hang menunggu, ia mereturn true/false (Non-Blocking)
-	err = tx.QueryRow(ctx, "SELECT pg_try_advisory_xact_lock($1)", lockID).Scan(&lockAcquired)
-	if err != nil {
-		return fmt.Errorf("acquire advisory lock: %w", err)
+	var dapat bool
+	if err := conn.QueryRow(ctx, "SELECT pg_try_advisory_lock($1)", lockID).Scan(&dapat); err != nil {
+		return fmt.Errorf("ambil advisory lock: %w", err)
 	}
-
-	if !lockAcquired {
-		logger.DebugContext(ctx, "task already running on another node, skipping", slog.String("task", taskName))
-		return nil // Secara terhormat mengalah
+	if !dapat {
+		logger.DebugContext(ctx, "tugas sedang berjalan di node lain, dilewati",
+			slog.String("task", taskName))
+		return nil
 	}
 
-	logger.InfoContext(ctx, "advisory lock acquired, executing task", slog.String("task", taskName))
-	
-	// Eksekusi core logic eksklusif (misal kirim report harian)
+	// Lock sesi TIDAK lepas sendiri. Ia WAJIB dilepas eksplisit, dan
+	// dengan konteks terpisah -- ctx bisa sudah dibatalkan saat shutdown,
+	// dan lock yang tidak terlepas akan memblokir seluruh node lain sampai
+	// koneksinya benar-benar putus.
+	defer func() {
+		lepasCtx, batal := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer batal()
+		if _, err := conn.Exec(lepasCtx, "SELECT pg_advisory_unlock($1)", lockID); err != nil {
+			logger.ErrorContext(ctx, "GAGAL melepas advisory lock -- node lain akan terblokir",
+				slog.String("task", taskName), slog.String("error", err.Error()))
+		}
+	}()
+
+	logger.InfoContext(ctx, "advisory lock diperoleh, menjalankan tugas",
+		slog.String("task", taskName))
+
+	// fn berjalan TANPA transaksi terbuka. Ia bebas memakai pool secara
+	// normal, dan durasinya tidak menahan snapshot apa pun.
 	if err := fn(ctx); err != nil {
-		return fmt.Errorf("leader task failed: %w", err)
+		return fmt.Errorf("tugas leader gagal: %w", err)
 	}
-
-	return tx.Commit(ctx)
+	return nil
 }
 ```
 
@@ -202,16 +236,42 @@ func ProcessPaymentSync(ctx context.Context, tx pgx.Tx, userID int) error {
 ```
 
 ```go
-// ✅ GOOD: Commit transaksi lock untuk mengamankan state logis, proses API lambat, gunakan state logis
+// ✅ GOOD: klaim status sebagai lock logis, panggil API DI LUAR transaksi.
+//
+// Yang membuat pola ini benar bukan sekadar "keluar dari transaksi", tetapi
+// MEMERIKSA RowsAffected. Tanpa itu, `AND status='idle'` hanyalah hiasan:
+// dua permintaan bersamaan sama-sama lanjut memanggil Stripe, dan pelanggan
+// terpotong dua kali. Guard yang ditulis tapi tidak ditegakkan lebih buruk
+// daripada tidak ada guard -- ia menciptakan rasa aman yang keliru.
 func ProcessPaymentAsync(ctx context.Context, pool *pgxpool.Pool, userID int) error {
-	// Transaksi Kecil Cepat
-	pool.Exec(ctx, "UPDATE users SET status='paying' WHERE id=$1 AND status='idle'", userID)
-	
-	// Di Luar Transaksi (Tidak ada Row DB yang di-lock di OS)
-	resp, _ := stripeClient.Charge(...)
-	
-	// Transaksi Kecil Cepat 2
-	pool.Exec(ctx, "UPDATE users SET status='paid' WHERE id=$1", userID)
+	// 1. Klaim: hanya SATU pemanggil yang berhasil memindahkan idle -> paying.
+	tag, err := pool.Exec(ctx,
+		"UPDATE users SET status='paying' WHERE id=$1 AND status='idle'", userID)
+	if err != nil {
+		return fmt.Errorf("klaim pembayaran: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		// Pemanggil lain sudah memegangnya. JANGAN memanggil Stripe.
+		return ErrPembayaranSedangBerjalan
+	}
+
+	// 2. Panggilan lambat terjadi tanpa satu pun baris DB terkunci.
+	resp, err := stripeClient.Charge(ctx, userID)
+	if err != nil {
+		// Kembalikan status agar percobaan berikutnya bisa mengklaim lagi.
+		// Konteks terpisah: ctx mungkin sudah mati bersama permintaannya.
+		_, _ = pool.Exec(context.WithoutCancel(ctx),
+			"UPDATE users SET status='idle' WHERE id=$1 AND status='paying'", userID)
+		return fmt.Errorf("charge gagal: %w", err)
+	}
+
+	// 3. Selesaikan. Bila baris ini gagal, pelanggan SUDAH terpotong --
+	//    itulah alasan referensi penyedia disimpan, agar rekonsiliasi harian
+	//    bisa menemukan dan memperbaiki keadaan yang menggantung.
+	if _, err := pool.Exec(context.WithoutCancel(ctx),
+		"UPDATE users SET status='paid', ref_pembayaran=$2 WHERE id=$1", userID, resp.ID); err != nil {
+		return fmt.Errorf("pembayaran berhasil tapi status gagal disimpan (ref %s): %w", resp.ID, err)
+	}
 	return nil
 }
 ```

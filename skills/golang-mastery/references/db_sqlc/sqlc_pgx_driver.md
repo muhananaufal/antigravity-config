@@ -80,16 +80,37 @@ type Queries struct {
 	db *pgxpool.Pool
 }
 
+// Assertion waktu kompilasi: bila Queries kehilangan satu metode saja,
+// build GAGAL di sini -- bukan pada pemanggil yang jauh di lapisan atas.
+// Baris satu ini yang menangkap interface yang tidak sinkron dengan
+// implementasinya, dan biayanya nol saat runtime.
+var _ Querier = (*Queries)(nil)
+
 func New(db *pgxpool.Pool) *Queries {
 	return &Queries{db: db}
 }
 
 type User struct {
-	ID        int32
-	Name      string
-	Email     string
+	ID    int32
+	Name  string
+	Email string
+	// Kolom nullable WAJIB memakai tipe pgtype, bukan string biasa --
+	// lihat Anti-Pattern 2 tentang perbedaan NULL dan zero value.
+	Bio pgtype.Text
 	// Tipe aman dari pgx untuk mengakomodir NULL di kolom timestamp
-	CreatedAt pgtype.Timestamptz 
+	CreatedAt pgtype.Timestamptz
+}
+
+// GetUser adalah representasi metode hasil generate sqlc.
+func (q *Queries) GetUser(ctx context.Context, id int32) (User, error) {
+	var u User
+	err := q.db.QueryRow(ctx,
+		`SELECT id, name, email, bio, created_at FROM users WHERE id = $1`, id,
+	).Scan(&u.ID, &u.Name, &u.Email, &u.Bio, &u.CreatedAt)
+	if err != nil {
+		return User{}, fmt.Errorf("ambil pengguna %d: %w", id, err)
+	}
+	return u, nil
 }
 
 type BulkInsertUsersParams struct {
@@ -183,10 +204,11 @@ _ = q.BulkInsertUsers(ctx, usersParams)
 Mengakses *value* pada struct data `pgtype` tanpa mengecek nilai properti `.Valid` terlebih dahulu.
 
 ```go
-// ❌ BAD: Secara buta membaca field
-user := q.GetUser(ctx, id)
-// Jika Bio (Teks) aslinya NULL di DB, String = "" (Kosong), bukan NULL!
-response.Bio = user.Bio.String 
+// ❌ BAD: Secara buta membaca field (dan mengabaikan galat)
+user, _ := q.GetUser(ctx, id)   // GetUser mengembalikan DUA nilai
+// Jika Bio aslinya NULL di DB, .String bernilai "" -- tidak bisa dibedakan
+// dari kolom yang memang berisi string kosong.
+response.Bio = user.Bio.String
 ```
 
 ```go
