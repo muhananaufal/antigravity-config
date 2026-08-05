@@ -42,9 +42,13 @@ package testingquality
 
 import (
 	"bytes"
+	"crypto/subtle"
 	"encoding/json"
+	"errors"
+	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -115,6 +119,9 @@ func writeError(w http.ResponseWriter, status int, detail string) {
 	writeJSON(w, status, apiErr)
 }
 
+// tokenUji adalah kredensial fixture untuk contoh di berkas ini.
+const tokenUji = "valid-test-token"
+
 // AuthMiddleware adalah contoh JWT middleware yang akan di-test.
 func AuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -128,8 +135,12 @@ func AuthMiddleware(next http.Handler) http.Handler {
 			return
 		}
 		token := strings.TrimPrefix(authHeader, "Bearer ")
-		if token != "valid-test-token" {
-			writeError(w, http.StatusUnauthorized, "invalid or expired token")
+		// subtle.ConstantTimeCompare, bukan `!=`. Ini fixture uji, tetapi
+		// bentuk yang ditiru orang dari berkas referensi adalah bentuk yang
+		// tertulis di sini — dan perbandingan token bearer dengan `!=`
+		// membocorkan informasi lewat waktu respons.
+		if subtle.ConstantTimeCompare([]byte(token), []byte(tokenUji)) != 1 {
+			writeError(w, http.StatusUnauthorized, "token tidak valid atau kedaluwarsa")
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -191,30 +202,42 @@ func TestUserHandler_Recorder(t *testing.T) {
 	}
 }
 
-// assertGoldenFile membandingkan body dengan golden file.
-// Set env UPDATE_GOLDEN=true untuk update golden files.
-func assertGoldenFile(t *testing.T, testName string, got []byte) {
+// perbaruiGolden adalah FLAG uji, bukan variabel lingkungan.
+//
+// Perbedaannya menentukan apakah golden test bisa dilucuti tanpa disadari.
+// `UPDATE_GOLDEN=true` diwarisi dari lingkungan: satu baris di profil shell
+// developer, satu variable group CI yang ditetapkan untuk keperluan lain,
+// dan setiap golden test MENULIS ULANG berkas acuannya lalu lulus tanpa
+// membandingkan apa pun — selamanya, tanpa gejala. Flag `-update` hanya bisa
+// muncul bila seseorang mengetiknya di baris perintah.
+var perbaruiGolden = flag.Bool("update", false, "tulis ulang berkas golden")
+
+// assertGoldenFile membandingkan body dengan berkas golden.
+// Jalankan `go test ./... -update` untuk memperbaruinya.
+func assertGoldenFile(t *testing.T, namaUji string, got []byte) {
 	t.Helper()
 
-	// Sanitize filename
-	filename := strings.ReplaceAll(testName, " ", "_") + ".golden"
-	goldenPath := filepath.Join("testdata", "golden", filename)
+	nama := strings.ReplaceAll(namaUji, " ", "_") + ".golden"
+	jalur := filepath.Join("testdata", "golden", nama)
 
-	if os.Getenv("UPDATE_GOLDEN") == "true" {
-		require.NoError(t, os.MkdirAll(filepath.Dir(goldenPath), 0o755))
-		require.NoError(t, os.WriteFile(goldenPath, got, 0o644))
-		t.Logf("Updated golden file: %s", goldenPath)
+	if *perbaruiGolden {
+		require.NoError(t, os.MkdirAll(filepath.Dir(jalur), 0o755))
+		require.NoError(t, os.WriteFile(jalur, got, 0o644))
+		t.Logf("berkas golden diperbarui: %s", jalur)
 		return
 	}
 
-	expected, err := os.ReadFile(goldenPath)
-	if os.IsNotExist(err) {
-		t.Fatalf("golden file not found: %s\nRun with UPDATE_GOLDEN=true to create it", goldenPath)
+	harap, err := os.ReadFile(jalur)
+	// errors.Is, bukan os.IsNotExist: yang kedua tidak membuka bungkus galat,
+	// sehingga galat yang dibungkus lapisan lain lolos ke require.NoError dan
+	// muncul sebagai kegagalan yang membingungkan alih-alih pesan yang jelas.
+	if errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("berkas golden tidak ada: %s\nJalankan dengan -update untuk membuatnya", jalur)
 	}
 	require.NoError(t, err)
 
-	assert.JSONEq(t, string(expected), string(got),
-		"response does not match golden file %s", goldenPath)
+	assert.JSONEq(t, string(harap), string(got),
+		"respons tidak cocok dengan berkas golden %s", jalur)
 }
 
 // --- Level 2: Full Server Test dengan Middleware Chain ---
@@ -283,32 +306,54 @@ func TestUserHandler_ConcurrentRequests(t *testing.T) {
 	ts := newTestServer(t)
 	client := ts.Client()
 
-	const numWorkers = 20
-	errs := make(chan error, numWorkers)
+	const jumlahPekerja = 20
+	galat := make(chan error, jumlahPekerja)
 
-	for i := 0; i < numWorkers; i++ {
+	// Semua goroutine dilepas bersamaan. Tanpa gerbang ini, goroutine
+	// pertama biasanya sudah selesai sebelum yang terakhir dibuat, sehingga
+	// "uji konkuren" praktis berjalan berurutan dan tidak pernah menekan
+	// jalur yang ingin diperiksa.
+	gerbang := make(chan struct{})
+
+	for i := 0; i < jumlahPekerja; i++ {
 		go func() {
-			req, _ := http.NewRequest(http.MethodGet, ts.URL+"/users/101", nil)
-			req.Header.Set("Authorization", "Bearer valid-test-token")
+			<-gerbang
+
+			req, err := http.NewRequest(http.MethodGet, ts.URL+"/users/101", nil)
+			if err != nil {
+				galat <- err // galat TIDAK dibuang dengan `_`
+				return
+			}
+			req.Header.Set("Authorization", "Bearer "+tokenUji)
 
 			resp, err := client.Do(req)
 			if err != nil {
-				errs <- err
+				galat <- err
 				return
 			}
 			defer resp.Body.Close()
 
-			if resp.StatusCode != http.StatusOK {
-				errs <- fmt.Errorf("unexpected status: %d", resp.StatusCode)
+			// Body DIKURAS sebelum ditutup. Tanpa ini koneksi tidak bisa
+			// dipakai ulang, sehingga 20 pekerja membuka 20 koneksi TCP dan
+			// yang diuji berubah menjadi kemampuan menerima koneksi, bukan
+			// keamanan handler terhadap akses bersamaan.
+			if _, err := io.Copy(io.Discard, resp.Body); err != nil {
+				galat <- err
 				return
 			}
-			errs <- nil
+			if resp.StatusCode != http.StatusOK {
+				galat <- fmt.Errorf("status tak terduga: %d", resp.StatusCode)
+				return
+			}
+			galat <- nil
 		}()
 	}
 
-	for i := 0; i < numWorkers; i++ {
-		if err := <-errs; err != nil {
-			t.Errorf("concurrent request failed: %v", err)
+	close(gerbang)
+
+	for i := 0; i < jumlahPekerja; i++ {
+		if err := <-galat; err != nil {
+			t.Errorf("permintaan konkuren gagal: %v", err)
 		}
 	}
 }
