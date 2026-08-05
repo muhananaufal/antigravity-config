@@ -326,9 +326,9 @@ Menguji lock bisa *tricky* dalam unit testing reguler. Yang terpenting adalah me
 package database_test
 
 import (
-	"context"
 	"errors"
 	"testing"
+
 	"yourproject/internal/database" // sesuaikan path import
 )
 

@@ -284,7 +284,6 @@ Menguji keberhasilan `singleflight` (yang sangat penting mencegah *stampede*) cu
 package cache_test
 
 import (
-	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"

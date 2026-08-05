@@ -8,9 +8,13 @@ Aplikasi modern seperti agregator metrik IoT, *telemetri microservices*, atau pe
 
 Jika kita memaksakan tabel PostgreSQL standar untuk ini, Anda akan menemui masalah mematikan bernama **Index Thrashing**. Saat tabel mencapai ratusan juta baris, indeks *B-Tree* waktu (`time`) akan menggelembung melebihi kapasitas RAM server. Saat memasukkan (insert) data baru, PostgreSQL terpaksa membaca/menulis ke penyimpanan disk (Swap) untuk memperbarui struktur *B-Tree*, yang menghancurkan (menurunkan drastis) *throughput* *insert* dari ribuan *row*/detik menjadi hanya puluhan.
 
-**TimescaleDB** (Ekstensi resmi PostgreSQL) meretas batasan ini dengan konsep **Hypertable**.
-Secara logis, `sensor_data` tampak sebagai tabel tunggal bagi aplikasi Go Anda. Namun secara fisik, TimescaleDB membelahnya (mempartisi) ke dalam ratusan tabel kecil berdasarkan interval waktu yang disebut **Chunks**.
-Hanya *Chunk* aktif (misal: "Hari Ini") beserta indeksnya yang berada sepenuhnya di memori RAM, memastikan sisipan (*insert*) selalu secepat kilat (O(1) Memory Access). Data historis tetap utuh di disk dan ditarik secara efisien lewat agregasi berkelanjutan (*Continuous Aggregates*).
+**TimescaleDB** (ekstensi PostgreSQL) mengatasi ini dengan **Hypertable**. Secara logis `sensor_data` tetap satu tabel bagi aplikasi Go Anda; secara fisik ia dipecah menjadi banyak tabel kecil per interval waktu — **chunks**.
+
+**Mekanismenya sering dijelaskan keliru, dan bedanya penting.** TimescaleDB **tidak** menyematkan chunk aktif di RAM, dan tidak ada jaminan "hanya chunk aktif yang ada di memori". Yang sebenarnya terjadi: setiap chunk punya index B-tree **sendiri** yang jauh lebih kecil. Karena penulisan terkonsentrasi pada satu chunk terbaru, index kecil itulah yang terus disentuh — sehingga ia bertahan di `shared_buffers` dan page cache OS secara alami. Index chunk lama jarang disentuh dan terdesak keluar cache dengan sendirinya.
+
+Konsekuensinya juga bukan "O(1)": insert tetap menulis WAL dan memperbarui index. Yang hilang adalah **degradasi** — throughput tidak lagi anjlok saat total data tumbuh, karena yang menentukan adalah ukuran index chunk aktif, bukan ukuran seluruh tabel.
+
+Perbedaan ini menentukan cara menyetelnya: yang Anda atur adalah `chunk_time_interval` agar chunk aktif muat nyaman di memori yang tersedia — bukan mengharapkan ekstensi mengelola RAM untuk Anda.
 
 ---
 
@@ -54,7 +58,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -101,8 +104,15 @@ func InitHypertable(ctx context.Context, pool *pgxpool.Pool, logger *slog.Logger
 		SELECT add_retention_policy('iot_metrics', INTERVAL '90 days', if_not_exists => TRUE);
 	`)
 	if err != nil {
-		// Log warning jika error karena terkadang scheduler Timescale dimatikan di env tertentu
-		logger.WarnContext(ctx, "failed to add retention policy, might already exist", slog.String("err", err.Error()))
+		// Kebijakan retensi yang gagal dipasang berarti disk akan penuh --
+		// perlahan, tanpa gejala, sampai penulisan berhenti total. Menelannya
+		// sebagai warning membuat kegagalan itu tidak pernah terlihat.
+		//
+		// Yang benar: kembalikan galatnya, dan biarkan pemanggil memutuskan.
+		// Untuk lingkungan yang memang tidak punya scheduler Timescale,
+		// keputusan itu diambil sadar lewat konfigurasi -- bukan dengan
+		// mengabaikan galat di semua lingkungan sekaligus.
+		return fmt.Errorf("pasang retention policy iot_metrics: %w", err)
 	}
 
 	return nil
@@ -117,23 +127,46 @@ type BufferedIngester struct {
 	log        *slog.Logger
 	ctx        context.Context
 	cancelFunc context.CancelFunc
+	selesai    chan struct{} // ditutup saat worker benar-benar berhenti
 }
 
-func NewBufferedIngester(pool *pgxpool.Pool, logger *slog.Logger) *BufferedIngester {
-	ctx, cancel := context.WithCancel(context.Background())
+// NewBufferedIngester membangun ingester dan menjalankan worker-nya.
+//
+// ctx pemanggil DIPAKAI sebagai induk -- bukan context.Background(). Tanpa
+// itu, ingester tidak ikut mati saat aplikasi shutdown dan goroutine
+// worker-nya bocor. `selesai` ditutup ketika worker benar-benar berhenti,
+// sehingga Close() bisa MENUNGGU sisa buffer terkuras, bukan sekadar
+// mengirim sinyal lalu pergi.
+func NewBufferedIngester(ctx context.Context, pool *pgxpool.Pool, logger *slog.Logger) *BufferedIngester {
+	ctx, cancel := context.WithCancel(ctx)
 	ingester := &BufferedIngester{
 		pool:       pool,
-		buffer:     make(chan MetricPayload, 50000), // Mampu menahan buffer saat DB spike
+		buffer:     make(chan MetricPayload, 50000), // menahan lonjakan saat DB tersendat
 		batchSize:  5000,
 		log:        logger,
 		ctx:        ctx,
 		cancelFunc: cancel,
+		selesai:    make(chan struct{}),
 	}
 
-	// Jalankan worker background flush
 	go ingester.worker()
 
 	return ingester
+}
+
+// Close menghentikan ingester dan MENUNGGU seluruh sisa buffer tersimpan.
+//
+// Tanpa metode ini, satu-satunya cara menghentikan worker adalah field
+// privat cancelFunc -- yang berarti pemanggil tidak punya cara sama sekali,
+// dan goroutine-nya bocor setiap kali ingester dibuat.
+func (i *BufferedIngester) Close(ctx context.Context) error {
+	i.cancelFunc()
+	select {
+	case <-i.selesai:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("ingester tidak selesai menguras buffer: %w", ctx.Err())
+	}
 }
 
 func (i *BufferedIngester) Ingest(payload MetricPayload) {
@@ -154,6 +187,8 @@ func (i *BufferedIngester) Ingest(payload MetricPayload) {
 }
 
 func (i *BufferedIngester) worker() {
+	defer close(i.selesai)
+
 	ticker := time.NewTicker(3 * time.Second) // Flush maksimum setiap 3 detik
 	defer ticker.Stop()
 
@@ -162,9 +197,25 @@ func (i *BufferedIngester) worker() {
 	for {
 		select {
 		case <-i.ctx.Done():
-			// Flush sisa buffer saat shutdown
-			i.flush(batch)
-			return
+			// KURAS CHANNEL, bukan hanya batch yang sedang dipegang.
+			//
+			// Versi yang hanya memanggil flush(batch) membuang seluruh isi
+			// channel -- sampai 50.000 metrik hilang di SETIAP deploy, tanpa
+			// satu pun galat. Pada ingester yang seluruh alasan keberadaannya
+			// adalah tidak kehilangan data, itu kegagalan yang paling mahal.
+			for {
+				select {
+				case p := <-i.buffer:
+					batch = append(batch, p)
+					if len(batch) >= i.batchSize {
+						i.flush(batch)
+						batch = batch[:0]
+					}
+				default:
+					i.flush(batch) // sisa terakhir
+					return
+				}
+			}
 		case p := <-i.buffer:
 			batch = append(batch, p)
 			if len(batch) >= i.batchSize {

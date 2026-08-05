@@ -246,9 +246,9 @@ package database_test
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
+
 	"yourproject/internal/database" // Ganti dengan path sesungguhnya
 )
 
