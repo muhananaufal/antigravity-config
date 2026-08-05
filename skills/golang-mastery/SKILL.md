@@ -5,7 +5,7 @@ description: Gunakan skill ini ketika merancang arsitektur, konkurensi, DB/SQLC,
 
 # Golang Mastery
 
-SSOT arsitektur & rekayasa sistem Golang enterprise & high-throughput (28 Domain, 198 File Mahakarya).
+SSOT arsitektur & rekayasa sistem Golang enterprise & high-throughput (30 Domain, 215 File Mahakarya).
 
 ## 🚦 Protokol Eksekusi (WAJIB dibaca sesuai situasi)
 
