@@ -61,3 +61,7 @@ Pelajaran yang sudah dibayar mahal. WAJIB dibaca sebelum task teknis (§3.1 `AGE
 - Retrofit format lintas ratusan berkas jauh lebih aman lewat **skrip idempoten + berkas bundle** daripada Edit satu per satu: bisa dry-run, bisa diulang tanpa efek ganda, dan encoding UTF-8-tanpa-BOM ditangani di satu tempat.
 - Verifikasi setiap batch WAJIB mencakup tiga hal sekaligus: cross-link resolve, nol BOM, dan nol U+FFFD. Yang ketiga sempat memberi alarm palsu — `security_fuzzing_go.md` memang sengaja mencetak karakter pengganti sebagai contoh. **Periksa riwayat git sebelum menyimpulkan kerusakan.**
 - `Get-Content` PS 5.1 menampilkan UTF-8 sebagai mojibake (`Â·`) walau berkasnya benar. Verifikasi encoding WAJIB lewat `[IO.File]::ReadAllBytes` + cek byte, bukan lewat mata di konsol.
+
+## Konvensi Kode & Framework
+
+- Saat mengecek atau membuat direktori upload di CodeIgniter, WAJIB sesuaikan dengan pola model konvensi proyek: gunakan path absolut `FCPATH . 'uploads/...'` dan hak akses `0755`, bukan path relatif (`./`) atau `0777`.

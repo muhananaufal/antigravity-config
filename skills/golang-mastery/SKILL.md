@@ -5,7 +5,7 @@ description: Gunakan skill ini ketika merancang arsitektur, konkurensi, DB/SQLC,
 
 # Golang Mastery
 
-SSOT arsitektur & rekayasa sistem Golang enterprise & high-throughput (30 Domain, 218 File Mahakarya).
+SSOT arsitektur & rekayasa sistem Golang enterprise & high-throughput (30 Domain, 221 File Mahakarya).
 
 ## 🚦 Protokol Eksekusi (WAJIB dibaca sesuai situasi)
 
@@ -59,7 +59,7 @@ Domain yang hampir selalu relevan untuk Go service manapun:
 | **Security** | `references/security_owasp/` | semua |
 | **Testing** | `references/testing_quality/` | semua |
 | **Architecture** | `references/arch_patterns/` | semua |
-| **Docker & DevOps** | `references/devops_control_planes/` | semua, termasuk `modular_3tier_container_topology.md` |
+| **Docker & Deploy** | `references/devops_control_planes/` | `docker_container_go.md`, `kubernetes_deployment_go.md`, `modular_3tier_container_topology.md` |
 | **Resilience Patterns** | `references/distributed_patterns_resilience/` | `retry_backoff_jitter.md`, `idempotency_key_engine.md`, `bulkhead_isolation.md` |
 | **Caching** | `references/caching_strategy/` | `cache_aside_singleflight.md`, `multilevel_cache_l1l2.md` |
 
@@ -75,6 +75,10 @@ Domain yang hampir selalu relevan untuk Go service manapun:
 | Melakukan code review, menyusun standar review, linter kustom tim | `references/engineering_practice/code_review_go.md` |
 | Menulis design doc / RFC fitur besar sebelum implementasi | `references/engineering_practice/technical_design_doc.md` |
 | Merancang error: sentinel vs tipe, `%w`, memetakan galat ke status, klasifikasi retry | `references/arch_patterns/error_handling_strategy.md` |
+| Pagination, cursor vs offset, halaman dalam lambat, item terlewat/ganda | `references/microservices_grpc/pagination_patterns.md` |
+| Profiling berkelanjutan, membandingkan profil, label pprof, "baris kode mana" | `references/observability_resilience/continuous_profiling.md` |
+| Manifest K8s Go: `GOMEMLIMIT`, throttling CPU, probe, PDB, HPA, grace period | `references/devops_control_planes/kubernetes_deployment_go.md` |
+| IaC lanjutan: Crossplane, provider Terraform, CNI plugin, GitOps, Backstage | `references/devops_control_planes/` |
 | Login SSO, authorization code + PKCE, verifikasi ID token, refresh token | `references/security_owasp/oauth2_oidc_flow.md` |
 | CORS, preflight, CSRF, `SameSite`, CSP, HSTS, header keamanan respons | `references/security_owasp/web_security_headers.md` |
 | Query lambat, membaca `EXPLAIN ANALYZE`, memilih index komposit, `Seq Scan` | `references/db_sqlc/index_design_explain_analyze.md` |
