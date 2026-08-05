@@ -101,7 +101,9 @@ Aturan sederhana: **kalau otentikasinya lewat cookie, Anda butuh perlindungan CS
 package webkeamanan
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
 	"net/http"
@@ -146,6 +148,20 @@ func CORS(k KonfigCORS) func(http.Handler) http.Handler {
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Vary WAJIB dipasang pada SETIAP respons — termasuk yang
+			// permintaannya TIDAK membawa Origin.
+			//
+			// Ini urutan yang salah di versi sebelumnya: Vary hanya
+			// ditambahkan setelah cabang `origin == ""` keluar lebih dulu.
+			// Akibatnya respons dari permintaan tanpa Origin — health check,
+			// curl, prefetch CDN, pemanasan cache — tersimpan di CDN TANPA
+			// Vary. Permintaan browser berikutnya dengan Origin yang sah
+			// menerima respons ter-cache itu, yang tidak memuat
+			// Access-Control-Allow-Origin, dan CORS gagal secara acak.
+			// Itulah persis gejala "izin CORS kadang benar kadang salah"
+			// pada tabel deteksi di bawah.
+			w.Header().Add("Vary", "Origin")
+
 			origin := r.Header.Get("Origin")
 
 			// Permintaan tanpa Origin bukan permintaan lintas asal
@@ -155,18 +171,18 @@ func CORS(k KonfigCORS) func(http.Handler) http.Handler {
 				return
 			}
 
-			// Vary WAJIB ada: tanpa ini, cache/CDN bisa menyajikan respons
-			// beserta header CORS milik origin LAIN.
-			w.Header().Add("Vary", "Origin")
-
 			if _, ok := diizinkan[origin]; !ok {
 				// Origin tidak dikenal: JANGAN pantulkan, JANGAN pakai "*".
-				// Preflight dijawab tanpa izin; permintaan biasa tetap
-				// diproses tetapi JS pemanggil tidak boleh membaca hasilnya.
 				if r.Method == http.MethodOptions {
 					w.WriteHeader(http.StatusForbidden)
 					return
 				}
+				// Permintaan biasa TETAP diproses — dan itu memang benar
+				// menurut CORS: yang dilindungi adalah kemampuan JS MEMBACA
+				// respons, bukan terjadinya efek samping. Permintaan POST
+				// sederhana dari origin jahat tetap mengeksekusi mutasinya.
+				// Yang menghentikan itu adalah CSRF, bukan CORS — dan inilah
+				// alasan keduanya harus ada bersama.
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -196,7 +212,10 @@ func CORS(k KonfigCORS) func(http.Handler) http.Handler {
 // ---------- CSRF: double-submit cookie ----------
 
 const (
-	namaCookieCSRF = "csrf_token"
+	// Awalan __Host- membuat cookie menjadi host-only di tingkat browser:
+	// Secure wajib, Path harus "/", dan atribut Domain DILARANG. Efeknya
+	// subdomain tidak bisa menuliskan cookie ini untuk domain induk.
+	namaCookieCSRF = "__Host-csrf_token"
 	namaHeaderCSRF = "X-CSRF-Token"
 )
 
@@ -209,22 +228,66 @@ func metodeAman(m string) bool {
 	return false
 }
 
-// PasangTokenCSRF menerbitkan token baru bila belum ada.
-// Cookie ini SENGAJA tidak HttpOnly: JavaScript aplikasi Anda harus bisa
-// membacanya untuk mengirimkannya kembali sebagai header.
-func PasangTokenCSRF(w http.ResponseWriter, r *http.Request) (string, error) {
-	if c, err := r.Cookie(namaCookieCSRF); err == nil && c.Value != "" {
-		return c.Value, nil
-	}
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
+// buatTokenCSRF menerbitkan token yang TERIKAT ke satu sesi lewat HMAC.
+//
+// Double-submit polos — "cocokkan header dengan cookie" — runtuh justru pada
+// keadaan yang Kasus Tepi 4 di berkas ini sendiri jelaskan: cookie dibagi
+// lintas subdomain. Penyerang yang menguasai satu subdomain (halaman
+// pelanggan, dokumentasi yang di-host pihak ketiga, subdomain terbengkalai
+// yang bisa diambil alih) dapat MENULIS cookie untuk domain induk. Ia lalu
+// tahu persis nilai yang ia tanam, dan bisa mengirim header yang cocok.
+//
+// Dua penutupnya, dan keduanya diperlukan:
+//   - Awalan `__Host-` membuat cookie host-only, sehingga subdomain tidak
+//     bisa menuliskannya untuk induk.
+//   - Ikatan HMAC ke ID sesi membuat token yang ditanam untuk sesi lain
+//     gagal verifikasi, bahkan seandainya penulisan cookie itu berhasil.
+//
+// Konsekuensi tambahan yang menyelesaikan kontradiksi lain di berkas ini:
+// karena verifikasi kini memakai HMAC dan bukan pencocokan dengan cookie,
+// nilai cookie-nya tidak perlu ikut terkirim pada permintaan lintas situs.
+// Pola lama gagal persis pada skenario `SameSite=None` — satu-satunya
+// skenario yang menurut tabel di §Konsep memang MEMBUTUHKAN token CSRF.
+func buatTokenCSRF(kunci []byte, idSesi string) (string, error) {
+	nonce := make([]byte, 16)
+	if _, err := rand.Read(nonce); err != nil {
 		return "", err
 	}
-	tok := base64.RawURLEncoding.EncodeToString(b)
+	mac := hmac.New(sha256.New, kunci)
+	mac.Write(nonce)
+	mac.Write([]byte(idSesi))
+	return base64.RawURLEncoding.EncodeToString(nonce) + "." +
+		base64.RawURLEncoding.EncodeToString(mac.Sum(nil)), nil
+}
+
+func periksaTokenCSRF(kunci []byte, idSesi, token string) bool {
+	bagian := strings.SplitN(token, ".", 2)
+	if len(bagian) != 2 {
+		return false
+	}
+	nonce, err := base64.RawURLEncoding.DecodeString(bagian[0])
+	if err != nil {
+		return false
+	}
+	mac := hmac.New(sha256.New, kunci)
+	mac.Write(nonce)
+	mac.Write([]byte(idSesi))
+	mau := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	return subtle.ConstantTimeCompare([]byte(mau), []byte(bagian[1])) == 1
+}
+
+// PasangTokenCSRF menerbitkan token untuk sesi ini.
+// Cookie-nya SENGAJA tidak HttpOnly: JS aplikasi harus bisa membacanya untuk
+// mengirimkannya kembali sebagai header.
+func PasangTokenCSRF(w http.ResponseWriter, kunci []byte, idSesi string) (string, error) {
+	tok, err := buatTokenCSRF(kunci, idSesi)
+	if err != nil {
+		return "", err
+	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     namaCookieCSRF,
 		Value:    tok,
-		Path:     "/",
+		Path:     "/", // wajib "/" karena awalan __Host-
 		Secure:   true,
 		HttpOnly: false, // disengaja: JS aplikasi perlu membacanya
 		SameSite: http.SameSiteLaxMode,
@@ -232,37 +295,40 @@ func PasangTokenCSRF(w http.ResponseWriter, r *http.Request) (string, error) {
 	return tok, nil
 }
 
-// CSRF menolak mutasi yang header-nya tidak cocok dengan cookie.
+// SumberOtentikasi memberi tahu middleware bagaimana permintaan ini
+// SEBENARNYA terautentikasi.
 //
-// Situs lain TIDAK BISA membaca cookie Anda karena same-origin policy,
-// sehingga mereka tidak bisa mengirim header yang cocok -- itulah dasar
-// perlindungan pola double-submit.
-func CSRF(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if metodeAman(r.Method) {
-			next.ServeHTTP(w, r)
-			return
-		}
-		// Otentikasi lewat header Authorization tidak rentan CSRF:
-		// browser tidak mengirim header itu secara otomatis.
-		if r.Header.Get("Authorization") != "" {
-			next.ServeHTTP(w, r)
-			return
-		}
+// Versi sebelumnya melewatkan pemeriksaan CSRF begitu header `Authorization`
+// sekadar ADA — sebuah keputusan keamanan yang diambil dari masukan yang
+// tidak pernah divalidasi. Bila aplikasi menerima bearer DAN cookie,
+// permintaan dengan bearer sampah plus cookie sesi yang sah akan
+// diautentikasi oleh cookie sementara CSRF-nya dilewati. Yang boleh
+// menentukan adalah kredensial yang benar-benar dipakai, bukan header yang
+// kebetulan terkirim.
+type SumberOtentikasi func(*http.Request) (idSesi string, lewatCookie bool)
 
-		c, err := r.Cookie(namaCookieCSRF)
-		if err != nil || c.Value == "" {
-			http.Error(w, "token CSRF tidak ada", http.StatusForbidden)
-			return
-		}
-		dariHeader := r.Header.Get(namaHeaderCSRF)
-		// Perbandingan konstan waktu: mencegah kebocoran lewat timing.
-		if subtle.ConstantTimeCompare([]byte(c.Value), []byte(dariHeader)) != 1 {
-			http.Error(w, "token CSRF tidak cocok", http.StatusForbidden)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
+// CSRF menolak mutasi berbasis cookie yang tokennya tidak sah.
+func CSRF(kunci []byte, sumber SumberOtentikasi) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if metodeAman(r.Method) {
+				next.ServeHTTP(w, r)
+				return
+			}
+			idSesi, lewatCookie := sumber(r)
+			if !lewatCookie {
+				// Bukan otentikasi berbasis cookie: browser tidak mengirim
+				// kredensialnya secara otomatis, jadi CSRF tidak berlaku.
+				next.ServeHTTP(w, r)
+				return
+			}
+			if !periksaTokenCSRF(kunci, idSesi, r.Header.Get(namaHeaderCSRF)) {
+				http.Error(w, "token CSRF tidak valid", http.StatusForbidden)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 // ---------- Security header ----------
@@ -272,17 +338,39 @@ type KonfigHeader struct {
 	// CSP untuk halaman HTML. Untuk API JSON, gunakan kebijakan yang
 	// melarang segalanya -- respons API tidak seharusnya dirender.
 	CSP string
+	// URIReportCSP mengaktifkan pelaporan pelanggaran. Tanpa ini, tabel
+	// deteksi di bawah menanyakan "laporan CSP" yang tidak pernah ada.
+	URIReportCSP string
 	// HSTSDetik = 0 mematikan HSTS. Nyalakan HANYA setelah yakin
 	// seluruh subdomain siap HTTPS: HSTS tidak bisa ditarik cepat.
 	HSTSDetik int
+	// DiBalikProksiTLS WAJIB true bila TLS diterminasi di ingress/ALB.
+	//
+	// Pada topologi itu — yang paling umum di Kubernetes — `r.TLS` bernilai
+	// nil di dalam pod, dan HSTS TIDAK PERNAH terkirim. Kegagalannya
+	// sepenuhnya senyap: konfigurasinya terlihat benar, header-nya hilang.
+	DiBalikProksiTLS bool
 }
 
 // HeaderAPI memberi kebijakan yang tepat untuk endpoint JSON.
 func HeaderAPI() KonfigHeader {
 	return KonfigHeader{
-		CSP:       "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
-		HSTSDetik: 31536000,
+		CSP:              "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+		HSTSDetik:        31536000,
+		DiBalikProksiTLS: true,
 	}
+}
+
+// lewatHTTPS menentukan apakah respons ini benar-benar berjalan di atas TLS.
+//
+// X-Forwarded-Proto hanya dipercaya bila kita MEMANG tahu ada proxy di depan.
+// Pada topologi tanpa proxy, header itu ditulis klien dan mempercayainya
+// berarti klien bisa memaksa kita mengirim HSTS lewat HTTP polos.
+func lewatHTTPS(r *http.Request, diBalikProksi bool) bool {
+	if r.TLS != nil {
+		return true
+	}
+	return diBalikProksi && strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
 }
 
 // Header memasang header keamanan pada setiap respons.
@@ -297,12 +385,22 @@ func Header(k KonfigHeader) func(http.Handler) http.Handler {
 			h.Set("Referrer-Policy", "strict-origin-when-cross-origin")
 			// Mematikan API browser yang tidak dibutuhkan API JSON.
 			h.Set("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
+			// Menolak respons ini disematkan lintas asal. Untuk API JSON ini
+			// murni keuntungan: ia menutup kelas kebocoran lintas-asal yang
+			// tidak tersentuh CORS, termasuk yang memanfaatkan sisi-kanal
+			// prosesor lewat konteks yang berbagi memori.
+			h.Set("Cross-Origin-Resource-Policy", "same-origin")
+
 			if k.CSP != "" {
+				csp := k.CSP
+				if k.URIReportCSP != "" {
+					csp += "; report-uri " + k.URIReportCSP
+				}
 				// frame-ancestors di CSP menggantikan X-Frame-Options
 				// dan lebih ekspresif.
-				h.Set("Content-Security-Policy", k.CSP)
+				h.Set("Content-Security-Policy", csp)
 			}
-			if k.HSTSDetik > 0 && r.TLS != nil {
+			if k.HSTSDetik > 0 && lewatHTTPS(r, k.DiBalikProksiTLS) {
 				h.Set("Strict-Transport-Security",
 					"max-age="+strconv.Itoa(k.HSTSDetik)+"; includeSubDomains")
 			}
@@ -396,10 +494,17 @@ func TestCORS_PreflightDijawab204DanBerhenti(t *testing.T) {
 	}
 }
 
+var kunciCSRFUji = []byte("kunci-hmac-csrf-yang-cukup-panjang")
+
+// sumberCookie menirukan lapisan otentikasi yang melaporkan bahwa permintaan
+// ini terautentikasi oleh COOKIE untuk sesi tertentu.
+func sumberCookie(idSesi string) SumberOtentikasi {
+	return func(*http.Request) (string, bool) { return idSesi, true }
+}
+
 func TestCSRF_MutasiTanpaTokenDitolak(t *testing.T) {
-	h := CSRF(handlerOK())
+	h := CSRF(kunciCSRFUji, sumberCookie("sesi-1"))(handlerOK())
 	r := httptest.NewRequest(http.MethodPost, "/transfer", nil)
-	r.AddCookie(&http.Cookie{Name: "sesi", Value: "abc"})
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 
@@ -408,43 +513,71 @@ func TestCSRF_MutasiTanpaTokenDitolak(t *testing.T) {
 	}
 }
 
-func TestCSRF_HeaderHarusCocokCookie(t *testing.T) {
-	h := CSRF(handlerOK())
-
-	r := httptest.NewRequest(http.MethodPost, "/transfer", nil)
-	r.AddCookie(&http.Cookie{Name: namaCookieCSRF, Value: "token-benar"})
-	r.Header.Set(namaHeaderCSRF, "token-penyerang")
-	w := httptest.NewRecorder()
-	h.ServeHTTP(w, r)
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("token tidak cocok harus 403, dapat %d", w.Code)
+// Uji yang menutup kelemahan double-submit polos: token yang DITANAM
+// penyerang lewat subdomain tidak akan terverifikasi, karena ia tidak terikat
+// ke sesi korban.
+func TestCSRF_TokenSesiLainDitolak(t *testing.T) {
+	tokLain, err := buatTokenCSRF(kunciCSRFUji, "sesi-penyerang")
+	if err != nil {
+		t.Fatal(err)
 	}
 
-	r2 := httptest.NewRequest(http.MethodPost, "/transfer", nil)
-	r2.AddCookie(&http.Cookie{Name: namaCookieCSRF, Value: "token-benar"})
-	r2.Header.Set(namaHeaderCSRF, "token-benar")
-	w2 := httptest.NewRecorder()
-	h.ServeHTTP(w2, r2)
-	if w2.Code != http.StatusOK {
-		t.Fatalf("token cocok harus lolos, dapat %d", w2.Code)
+	h := CSRF(kunciCSRFUji, sumberCookie("sesi-korban"))(handlerOK())
+	r := httptest.NewRequest(http.MethodPost, "/transfer", nil)
+	r.Header.Set(namaHeaderCSRF, tokLain)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("token milik sesi lain diterima (%d) — double-submit tanpa ikatan sesi bisa ditanam lewat subdomain", w.Code)
 	}
 }
 
-func TestCSRF_BearerTokenTidakButuhCSRF(t *testing.T) {
-	// Browser tidak mengirim header Authorization secara otomatis,
-	// jadi jalur ini memang tidak rentan CSRF.
-	h := CSRF(handlerOK())
+func TestCSRF_TokenSesiSendiriDiterima(t *testing.T) {
+	tok, err := buatTokenCSRF(kunciCSRFUji, "sesi-korban")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	h := CSRF(kunciCSRFUji, sumberCookie("sesi-korban"))(handlerOK())
 	r := httptest.NewRequest(http.MethodPost, "/transfer", nil)
-	r.Header.Set("Authorization", "Bearer xyz")
+	r.Header.Set(namaHeaderCSRF, tok)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("token sah ditolak, dapat %d", w.Code)
+	}
+}
+
+// Pelewatan CSRF ditentukan oleh kredensial yang BENAR-BENAR dipakai, bukan
+// oleh keberadaan header Authorization yang tidak pernah divalidasi.
+func TestCSRF_PelewatanBergantungKredensialBukanHeader(t *testing.T) {
+	// Lapisan auth melaporkan: permintaan ini terautentikasi oleh BEARER.
+	bearer := func(*http.Request) (string, bool) { return "", false }
+	h := CSRF(kunciCSRFUji, bearer)(handlerOK())
+
+	r := httptest.NewRequest(http.MethodPost, "/transfer", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 	if w.Code != http.StatusOK {
 		t.Fatalf("otentikasi bearer tidak butuh CSRF, dapat %d", w.Code)
 	}
+
+	// Header Authorization sampah + sesi cookie yang sah: CSRF TETAP berlaku.
+	// Versi sebelumnya melewatkannya hanya karena header itu ada.
+	h2 := CSRF(kunciCSRFUji, sumberCookie("sesi-1"))(handlerOK())
+	r2 := httptest.NewRequest(http.MethodPost, "/transfer", nil)
+	r2.Header.Set("Authorization", "Bearer sampah")
+	w2 := httptest.NewRecorder()
+	h2.ServeHTTP(w2, r2)
+	if w2.Code != http.StatusForbidden {
+		t.Fatalf("header Authorization sampah melewatkan CSRF pada sesi cookie, dapat %d", w2.Code)
+	}
 }
 
 func TestCSRF_MetodeAmanDilewatkan(t *testing.T) {
-	h := CSRF(handlerOK())
+	h := CSRF(kunciCSRFUji, sumberCookie("sesi-1"))(handlerOK())
 	for _, m := range []string{http.MethodGet, http.MethodHead, http.MethodOptions} {
 		r := httptest.NewRequest(m, "/data", nil)
 		w := httptest.NewRecorder()
@@ -452,6 +585,25 @@ func TestCSRF_MetodeAmanDilewatkan(t *testing.T) {
 		if w.Code != http.StatusOK {
 			t.Errorf("%s harus lolos tanpa token, dapat %d", m, w.Code)
 		}
+	}
+}
+
+func TestCookieCSRFMemakaiAwalanHost(t *testing.T) {
+	w := httptest.NewRecorder()
+	if _, err := PasangTokenCSRF(w, kunciCSRFUji, "sesi-1"); err != nil {
+		t.Fatal(err)
+	}
+	c := w.Result().Cookies()[0]
+
+	if !strings.HasPrefix(c.Name, "__Host-") {
+		t.Fatalf("nama cookie %q tanpa awalan __Host- — subdomain bisa menuliskannya untuk domain induk", c.Name)
+	}
+	if !c.Secure || c.Path != "/" || c.Domain != "" {
+		t.Errorf("awalan __Host- menuntut Secure, Path=/, dan tanpa Domain; dapat secure=%v path=%q domain=%q",
+			c.Secure, c.Path, c.Domain)
+	}
+	if c.HttpOnly {
+		t.Error("cookie CSRF harus terbaca JS agar bisa dikirim balik sebagai header")
 	}
 }
 
@@ -476,16 +628,55 @@ func TestHeader_APIMemasangKebijakanKetat(t *testing.T) {
 	}
 }
 
-func TestHeader_HSTSHanyaDiHTTPS(t *testing.T) {
-	// HSTS lewat HTTP polos diabaikan browser dan hanya menyesatkan
-	// pembaca konfigurasi.
+// HSTS di balik terminator TLS.
+//
+// Uji versi sebelumnya hanya memeriksa `r.TLS == nil` -> tanpa HSTS, dan
+// dengan itu ia MENGUNCI bug yang muncul pada topologi paling umum: ingress
+// atau ALB menghentikan TLS lalu meneruskan HTTP polos ke pod, sehingga
+// `r.TLS` selalu nil dan HSTS TIDAK PERNAH terkirim — senyap, dengan
+// konfigurasi yang terlihat benar.
+func TestHeader_HSTSDiBalikProksiTLS(t *testing.T) {
 	h := Header(HeaderAPI())(handlerOK())
+
 	r := httptest.NewRequest(http.MethodGet, "/data", nil) // r.TLS == nil
+	r.Header.Set("X-Forwarded-Proto", "https")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+
+	if !strings.Contains(w.Header().Get("Strict-Transport-Security"), "max-age=") {
+		t.Fatal("HSTS hilang di balik terminator TLS — topologi paling umum di Kubernetes")
+	}
+}
+
+func TestHeader_HSTSTidakDipasangDiHTTPPolos(t *testing.T) {
+	k := HeaderAPI()
+	k.DiBalikProksiTLS = false // benar-benar tanpa proxy di depan
+
+	h := Header(k)(handlerOK())
+	r := httptest.NewRequest(http.MethodGet, "/data", nil)
+	// Klien boleh mengirim header ini sesuka hati; tanpa proxy tepercaya
+	// ia TIDAK boleh dipercaya.
+	r.Header.Set("X-Forwarded-Proto", "https")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 
 	if w.Header().Get("Strict-Transport-Security") != "" {
-		t.Fatal("HSTS tidak boleh dipasang pada koneksi non-TLS")
+		t.Fatal("X-Forwarded-Proto dari klien dipercaya tanpa proxy tepercaya")
+	}
+}
+
+func TestCORS_VaryAdaMeskiTanpaOrigin(t *testing.T) {
+	// Respons tanpa Origin yang ter-cache TANPA Vary akan disajikan ulang
+	// kepada browser yang mengirim Origin sah — tanpa header
+	// Access-Control-Allow-Origin. Itulah "izin CORS kadang benar kadang
+	// salah" pada tabel deteksi.
+	h := CORS(CORSDefault("https://app.contoh.id"))(handlerOK())
+	r := httptest.NewRequest(http.MethodGet, "/data", nil) // tanpa Origin
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+
+	if !strings.Contains(w.Header().Get("Vary"), "Origin") {
+		t.Fatal("Vary: Origin hilang pada respons tanpa Origin — cache akan tercampur")
 	}
 }
 ```
@@ -562,9 +753,49 @@ Content-Security-Policy: script-src 'self' 'unsafe-inline'
 **✅ BENAR — nonce per permintaan untuk skrip inline yang memang perlu**
 
 ```go
-nonce, _ := acak16()
+b := make([]byte, 16)
+if _, err := rand.Read(b); err != nil {
+    http.Error(w, "internal", http.StatusInternalServerError)
+    return
+}
+nonce := base64.RawURLEncoding.EncodeToString(b)
 h.Set("Content-Security-Policy", "script-src 'self' 'nonce-"+nonce+"'")
 // lalu render: <script nonce="{{.Nonce}}">
+```
+
+Nonce WAJIB dibangkitkan ulang **per permintaan** dan dari `crypto/rand`. Nonce yang dipakai ulang antar-permintaan sama tidak bergunanya dengan `unsafe-inline`: penyerang yang pernah melihat satu halaman sudah tahu nilai yang harus ia sisipkan.
+
+**❌ SALAH — pelewatan CSRF berdasarkan keberadaan header `Authorization`**
+
+```go
+if r.Header.Get("Authorization") != "" {
+    next.ServeHTTP(w, r) // CSRF dilewati
+    return
+}
+```
+
+Alasannya benar — browser tidak mengirim `Authorization` otomatis — tetapi keputusannya diambil dari masukan yang **tidak pernah divalidasi**. Pada aplikasi yang menerima bearer *dan* cookie, permintaan dengan bearer sampah plus cookie sesi yang sah akan diautentikasi oleh cookie sementara CSRF-nya dilewati.
+
+**✅ BENAR — yang menentukan adalah kredensial yang benar-benar dipakai**
+
+```go
+idSesi, lewatCookie := sumberOtentikasi(r)
+if !lewatCookie { /* CSRF tidak berlaku */ }
+```
+
+**❌ SALAH — double-submit polos di domain yang punya subdomain**
+
+```go
+// bandingkan header dengan cookie, tanpa ikatan apa pun ke sesi
+subtle.ConstantTimeCompare([]byte(cookie.Value), []byte(header))
+```
+
+Cookie dibagi lintas subdomain (lihat Kasus Tepi 4). Penyerang yang menguasai satu subdomain — halaman pelanggan, dokumentasi yang di-host pihak ketiga, subdomain terbengkalai yang bisa diambil alih — dapat **menulis** cookie untuk domain induk, lalu mengirim header yang cocok dengan nilai yang ia tanam sendiri.
+
+**✅ BENAR — `__Host-` plus token yang terikat sesi lewat HMAC**
+
+```go
+tok, _ := buatTokenCSRF(kunci, idSesi) // nonce . HMAC(nonce||idSesi)
 ```
 
 ## Kasus Tepi Produksi
@@ -575,7 +806,9 @@ h.Set("Content-Security-Policy", "script-src 'self' 'nonce-"+nonce+"'")
 
 3. **HSTS sulit ditarik.** `max-age` satu tahun dengan `includeSubDomains` berarti browser menolak HTTP untuk seluruh subdomain selama setahun — termasuk subdomain internal yang belum siap TLS. Naikkan `max-age` bertahap, dan pastikan setiap subdomain siap sebelum `includeSubDomains`.
 
-4. **Cookie dibagi lintas subdomain.** Cookie yang disetel untuk `.contoh.id` terkirim ke `apa-pun.contoh.id`. Subdomain yang bisa dikendalikan pihak lain — halaman pelanggan, dokumentasi yang di-host pihak ketiga — menjadi jalur pengambilan sesi. Batasi domain cookie sesempit mungkin.
+4. **Cookie dibagi lintas subdomain — dan arah yang lebih sering luput.** Cookie yang disetel untuk `.contoh.id` terkirim ke `apa-pun.contoh.id`; itu arah yang biasa disadari orang. Arah sebaliknya lebih berbahaya: **subdomain dapat MENULIS cookie untuk domain induk.** Subdomain yang bisa dikendalikan pihak lain — halaman pelanggan, dokumentasi yang di-host pihak ketiga, subdomain terbengkalai yang bisa diambil alih — karena itu dapat menanam cookie apa pun ke aplikasi utama Anda, termasuk **token CSRF yang nilainya ia ketahui sendiri**. Di situlah pola double-submit polos runtuh. Penutupnya dua lapis: awalan `__Host-` (cookie jadi host-only, subdomain tidak bisa menuliskannya untuk induk) dan token yang **terikat ke sesi** lewat HMAC, sehingga token milik sesi lain gagal verifikasi bagaimanapun ia sampai ke sana.
+
+4b. **HSTS di balik terminator TLS.** Bila TLS dihentikan di ingress atau load balancer — topologi paling umum di Kubernetes — `r.TLS` bernilai **nil** di dalam pod, dan kondisi `if r.TLS != nil` membuat HSTS **tidak pernah terkirim**. Kegagalannya sepenuhnya senyap: konfigurasi terlihat benar, header hilang, dan tidak ada yang mengeluh sampai seseorang memeriksa `curl -I`. Percayai `X-Forwarded-Proto` — tetapi HANYA bila Anda memang tahu ada proxy tepercaya di depan; tanpa proxy, header itu ditulis klien dan mempercayainya berarti klien bisa memaksa Anda mengirim HSTS lewat HTTP polos.
 
 5. **`SameSite=None` menuntut `Secure`.** Browser modern menolak kombinasi `SameSite=None` tanpa `Secure`, dan cookie-nya diabaikan diam-diam. Gejalanya: pengguna tidak pernah bisa login lewat alur lintas situs, tanpa satu pun galat di server.
 
@@ -601,6 +834,9 @@ h.Set("Content-Security-Policy", "script-src 'self' 'nonce-"+nonce+"'")
 | Perubahan kebijakan CORS tidak berlaku | `Access-Control-Max-Age` | Browser masih memakai preflight yang di-cache |
 | Laporan CSP membanjir setelah rilis | sumber yang diblokir | Kebijakan lebih ketat daripada yang dipakai aplikasi |
 | Subdomain internal tidak bisa diakses | HSTS `includeSubDomains` | Subdomain belum siap HTTPS |
+| HSTS tidak muncul padahal dikonfigurasi | `r.TLS` di balik terminator TLS | TLS dihentikan di ingress; `r.TLS` nil di dalam pod |
+| CSRF lolos pada sebagian permintaan | dasar pelewatan CSRF | Diputuskan dari header yang tidak divalidasi |
+| Token CSRF sah tapi bukan milik pengguna itu | ikatan token ke sesi | Double-submit tanpa HMAC; subdomain menanam cookie |
 
 ```bash
 # Preflight adalah hal pertama yang diperiksa saat browser gagal tapi curl jalan

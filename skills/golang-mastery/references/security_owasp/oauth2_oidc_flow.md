@@ -93,11 +93,13 @@ package auth
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -106,10 +108,16 @@ import (
 
 // Galat yang dibedakan pemanggil.
 var (
-	ErrStateTidakCocok = errors.New("auth: state tidak cocok dengan sesi")
-	ErrNonceTidakCocok = errors.New("auth: nonce tidak cocok dengan sesi")
-	ErrTanpaIDToken    = errors.New("auth: respons tanpa id_token")
+	ErrStateTidakCocok         = errors.New("auth: state tidak cocok dengan sesi")
+	ErrNonceTidakCocok         = errors.New("auth: nonce tidak cocok dengan sesi")
+	ErrTanpaIDToken            = errors.New("auth: respons tanpa id_token")
+	ErrAlurTidakDikenal        = errors.New("auth: keadaan alur tidak ditemukan atau sudah dipakai")
+	ErrAlurKedaluwarsa         = errors.New("auth: keadaan alur kedaluwarsa")
+	ErrEmailBelumTerverifikasi = errors.New("auth: email belum diverifikasi IdP")
 )
+
+// maksUmurAlur membatasi jarak antara pengalihan ke IdP dan callback.
+const maksUmurAlur = 10 * time.Minute
 
 // Konfig menampung apa yang dibutuhkan alur.
 type Konfig struct {
@@ -121,7 +129,7 @@ type Konfig struct {
 }
 
 // KeadaanAlur adalah yang WAJIB disimpan di sesi sisi server antara
-// pengalihan ke IdP dan callback. Ketiganya diperiksa saat callback.
+// pengalihan ke IdP dan callback.
 type KeadaanAlur struct {
 	State    string
 	Nonce    string
@@ -129,11 +137,26 @@ type KeadaanAlur struct {
 	Dibuat   time.Time
 }
 
+// PenyimpanAlur menyimpan keadaan alur di antara dua permintaan.
+//
+// AmbilSekali sengaja mengambil DAN menghapus dalam satu operasi. Kasus Tepi 3
+// menuntut keadaan alur berumur pendek dan SEKALI PAKAI — tetapi versi
+// sebelumnya menyimpan field `Dibuat` lalu tidak pernah membacanya, dan tidak
+// punya mekanisme apa pun untuk mencegah pemakaian kedua. Field yang ada
+// tetapi tidak pernah diperiksa lebih buruk daripada tidak ada sama sekali:
+// ia membuat aturannya tampak sudah diterapkan.
+type PenyimpanAlur interface {
+	Simpan(ctx context.Context, k KeadaanAlur) error
+	AmbilSekali(ctx context.Context, state string) (KeadaanAlur, error)
+}
+
 // Klien membungkus verifier OIDC dan konfigurasi OAuth2.
 type Klien struct {
-	penyedia *oidc.Provider
-	verifier *oidc.IDTokenVerifier
-	oauth    oauth2.Config
+	penyedia    *oidc.Provider
+	verifier    *oidc.IDTokenVerifier
+	oauth       oauth2.Config
+	epRevocation string
+	epEndSession string
 }
 
 // Baru menemukan konfigurasi IdP lewat discovery dan menyiapkan verifier.
@@ -150,6 +173,18 @@ func Baru(ctx context.Context, k Konfig) (*Klien, error) {
 	if len(scope) == 0 {
 		scope = []string{oidc.ScopeOpenID, "profile", "email"}
 	}
+
+	// Discovery memuat lebih dari sekadar endpoint auth/token. Endpoint
+	// pencabutan dan RP-initiated logout dibaca di sini, karena Kasus Tepi 5
+	// menuntut keduanya — dan versi sebelumnya berhenti pada pernyataan bahwa
+	// keduanya dibutuhkan, tanpa jalan untuk memanggilnya.
+	var ekstra struct {
+		RevocationEndpoint string `json:"revocation_endpoint"`
+		EndSessionEndpoint string `json:"end_session_endpoint"`
+	}
+	// Tidak semua IdP menyediakannya; ketiadaannya bukan galat fatal.
+	_ = p.Claims(&ekstra)
+
 	return &Klien{
 		penyedia: p,
 		// Verifier memeriksa tanda tangan, issuer, audience, dan exp.
@@ -161,35 +196,41 @@ func Baru(ctx context.Context, k Konfig) (*Klien, error) {
 			Endpoint:     p.Endpoint(),
 			Scopes:       scope,
 		},
+		epRevocation: ekstra.RevocationEndpoint,
+		epEndSession: ekstra.EndSessionEndpoint,
 	}, nil
 }
 
-// MulaiAlur menghasilkan URL otorisasi beserta keadaan yang WAJIB disimpan
-// di sesi. State, nonce, dan verifier semuanya dari crypto/rand.
-func (c *Klien) MulaiAlur() (urlOtorisasi string, keadaan KeadaanAlur, err error) {
+// MulaiAlur menghasilkan URL otorisasi dan MENYIMPAN keadaan alur.
+//
+// Penyimpanan dilakukan di sini, bukan diserahkan ke pemanggil: keadaan yang
+// lupa disimpan menghasilkan callback yang selalu gagal, dan keadaan yang
+// disimpan di tempat yang salah menghasilkan hal yang lebih buruk.
+func (c *Klien) MulaiAlur(ctx context.Context, simpan PenyimpanAlur) (urlOtorisasi string, err error) {
 	state, err := acak32()
 	if err != nil {
-		return "", KeadaanAlur{}, fmt.Errorf("buat state: %w", err)
+		return "", fmt.Errorf("buat state: %w", err)
 	}
 	nonce, err := acak32()
 	if err != nil {
-		return "", KeadaanAlur{}, fmt.Errorf("buat nonce: %w", err)
+		return "", fmt.Errorf("buat nonce: %w", err)
 	}
-	verifier, err := acak32()
-	if err != nil {
-		return "", KeadaanAlur{}, fmt.Errorf("buat verifier: %w", err)
+	// oauth2.GenerateVerifier tersedia sejak x/oauth2 v0.15 dan menghasilkan
+	// verifier yang sudah sesuai RFC 7636 (43–128 karakter, himpunan
+	// unreserved). Merakit sendiri dengan sha256 + base64 tetap benar, tetapi
+	// menambah satu tempat yang bisa salah tanpa manfaat apa pun.
+	verifier := oauth2.GenerateVerifier()
+
+	k := KeadaanAlur{State: state, Nonce: nonce, Verifier: verifier, Dibuat: time.Now()}
+	if err := simpan.Simpan(ctx, k); err != nil {
+		return "", fmt.Errorf("simpan keadaan alur: %w", err)
 	}
 
-	// PKCE S256: yang dikirim adalah HASH-nya, bukan verifier-nya.
-	sum := sha256.Sum256([]byte(verifier))
-	challenge := base64.RawURLEncoding.EncodeToString(sum[:])
-
-	u := c.oauth.AuthCodeURL(state,
+	// S256ChallengeOption mengirim HASH verifier, bukan verifier-nya.
+	return c.oauth.AuthCodeURL(state,
 		oidc.Nonce(nonce),
-		oauth2.SetAuthURLParam("code_challenge", challenge),
-		oauth2.SetAuthURLParam("code_challenge_method", "S256"),
-	)
-	return u, KeadaanAlur{State: state, Nonce: nonce, Verifier: verifier, Dibuat: time.Now()}, nil
+		oauth2.S256ChallengeOption(verifier),
+	), nil
 }
 
 // Identitas adalah hasil login yang sudah terverifikasi.
@@ -208,15 +249,28 @@ type Identitas struct {
 //
 // URUTAN PEMERIKSAAN PENTING: state diperiksa SEBELUM penukaran, agar
 // permintaan CSRF tidak pernah sampai menghubungi IdP.
-func (c *Klien) SelesaikanAlur(ctx context.Context, k KeadaanAlur, stateDariURL, code string) (*Identitas, error) {
-	// 1. CSRF: state dari URL WAJIB cocok dengan yang disimpan di sesi.
-	if stateDariURL == "" || stateDariURL != k.State {
+func (c *Klien) SelesaikanAlur(ctx context.Context, simpan PenyimpanAlur, stateDariURL, code string) (*Identitas, error) {
+	if stateDariURL == "" {
 		return nil, ErrStateTidakCocok
 	}
 
-	// 2. Tukar code + verifier PKCE. IdP memeriksa S256(verifier) == challenge.
-	tok, err := c.oauth.Exchange(ctx, code,
-		oauth2.SetAuthURLParam("code_verifier", k.Verifier))
+	// 1. CSRF + sekali pakai. Pencarian berkunci-state MENGGANTIKAN
+	// perbandingan `stateDariURL != k.State`: state yang tidak dikenal tidak
+	// akan menemukan apa pun, dan AmbilSekali menghapusnya sehingga percobaan
+	// kedua dengan state yang sama pasti gagal.
+	k, err := simpan.AmbilSekali(ctx, stateDariURL)
+	if err != nil {
+		return nil, ErrAlurTidakDikenal
+	}
+
+	// 2. Umur alur. Kasus Tepi 3: keadaan yang tersimpan selamanya berarti
+	// authorization code lama masih bisa ditukar.
+	if time.Since(k.Dibuat) > maksUmurAlur {
+		return nil, ErrAlurKedaluwarsa
+	}
+
+	// 3. Tukar code + verifier PKCE. IdP memeriksa S256(verifier) == challenge.
+	tok, err := c.oauth.Exchange(ctx, code, oauth2.VerifierOption(k.Verifier))
 	if err != nil {
 		return nil, fmt.Errorf("tukar authorization code: %w", err)
 	}
@@ -226,14 +280,19 @@ func (c *Klien) SelesaikanAlur(ctx context.Context, k KeadaanAlur, stateDariURL,
 		return nil, ErrTanpaIDToken
 	}
 
-	// 3. Verifikasi tanda tangan (JWKS), iss, aud, dan exp.
+	// 4. Verifikasi tanda tangan (JWKS), iss, aud, dan exp.
 	idToken, err := c.verifier.Verify(ctx, mentah)
 	if err != nil {
 		return nil, fmt.Errorf("verifikasi id_token: %w", err)
 	}
 
-	// 4. Replay: nonce di dalam token WAJIB cocok dengan yang disimpan sesi.
-	if idToken.Nonce != k.Nonce {
+	// 5. Replay: nonce di dalam token WAJIB cocok dengan yang disimpan sesi.
+	//
+	// Dibandingkan konstan-waktu. Nonce adalah rahasia sesi yang nilainya
+	// datang dari luar dan dibandingkan penuh — persis bentuk yang di
+	// `microservices_grpc/grpc_interceptors_middleware.md` sudah dikoreksi
+	// menjadi subtle.ConstantTimeCompare untuk token bearer.
+	if subtle.ConstantTimeCompare([]byte(idToken.Nonce), []byte(k.Nonce)) != 1 {
 		return nil, ErrNonceTidakCocok
 	}
 
@@ -257,18 +316,104 @@ func (c *Klien) SelesaikanAlur(ctx context.Context, k KeadaanAlur, stateDariURL,
 	}, nil
 }
 
-// PasangCookieSesi menulis cookie sesi dengan atribut yang aman.
-// Nilai yang ditulis adalah ID sesi sisi server -- BUKAN token.
+// BolehTautkanLewatEmail menjawab satu pertanyaan yang salah dijawab akan
+// menjadi pengambilalihan akun.
+//
+// Ini kelas kerentanan paling umum pada integrasi "Sign in with ...": bila
+// akun lokal dicocokkan lewat EMAIL sementara IdP tidak memverifikasi email,
+// penyerang cukup mendaftar di IdP itu memakai alamat korban lalu masuk
+// sebagai korban. Versi sebelumnya membaca klaim `email_verified` lalu
+// menyimpannya tanpa pernah memakainya — dan klaim yang dibaca tanpa dipakai
+// tidak melindungi apa pun.
+//
+// Kunci identitas SELALU `sub`. Email hanya boleh dipakai untuk MENAUTKAN
+// akun lama bila terverifikasi DAN IdP-nya memang Anda percayai.
+func (i *Identitas) BolehTautkanLewatEmail() error {
+	if !i.EmailTerverif || i.Email == "" {
+		return ErrEmailBelumTerverifikasi
+	}
+	return nil
+}
+
+// PasangCookieSesi menulis cookie sesi. Nilainya ID sesi sisi server, BUKAN token.
+//
+// Awalan `__Host-` menegakkan Secure, Path=/, dan TANPA atribut Domain di
+// tingkat browser. Efeknya: subdomain — termasuk yang jatuh ke tangan
+// penyerang lewat subdomain takeover — tidak bisa menuliskan cookie ini.
 func PasangCookieSesi(w http.ResponseWriter, idSesi string, umur time.Duration) {
 	http.SetCookie(w, &http.Cookie{
-		Name:     "sesi",
+		Name:     "__Host-sesi",
 		Value:    idSesi,
 		Path:     "/",
 		MaxAge:   int(umur.Seconds()),
-		HttpOnly: true,                 // tidak terbaca JavaScript -> XSS tidak mencuri sesi
-		Secure:   true,                 // hanya lewat HTTPS
-		SameSite: http.SameSiteLaxMode, // Lax agar redirect balik dari IdP tetap membawa cookie
+		HttpOnly: true, // tidak terbaca JavaScript -> XSS tidak mencuri sesi
+		Secure:   true, // hanya lewat HTTPS
+		// Strict, bukan Lax. Cookie SESI tidak perlu ikut terkirim pada
+		// navigasi lintas situs mana pun — ia baru DITULIS setelah callback
+		// selesai, jadi ia tidak pernah dibaca saat kembali dari IdP.
+		SameSite: http.SameSiteStrictMode,
 	})
+}
+
+// PasangCookieAlur menulis cookie pembawa keadaan alur.
+//
+// INILAH cookie yang butuh Lax — bukan cookie sesi. Versi sebelumnya menaruh
+// alasan "agar redirect balik dari IdP tetap membawa cookie" pada cookie
+// sesi, padahal cookie sesi baru ditulis SESUDAH callback; yang dibaca saat
+// browser kembali dari IdP adalah cookie alur ini.
+//
+// Dan satu jebakan yang membuat alur gagal dengan pesan menyesatkan:
+// `SameSite=Lax` mengirim cookie pada navigasi GET tingkat atas, tetapi TIDAK
+// pada POST lintas situs. Bila IdP dikonfigurasi `response_mode=form_post`,
+// callback-nya adalah POST — cookie Lax tidak ikut terkirim, dan galat yang
+// muncul berbunyi "state tidak ditemukan", yang menuntun orang mencari bug di
+// tempat yang sama sekali salah.
+func PasangCookieAlur(w http.ResponseWriter, nilai string, responsFormPost bool) {
+	sameSite := http.SameSiteLaxMode
+	if responsFormPost {
+		sameSite = http.SameSiteNoneMode // wajib berpasangan dengan Secure
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     "__Host-alur",
+		Value:    nilai,
+		Path:     "/",
+		MaxAge:   int(maksUmurAlur.Seconds()),
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: sameSite,
+	})
+}
+
+// Cabut memanggil endpoint revocation IdP (RFC 7009).
+//
+// Kasus Tepi 5 menyatakan menghapus cookie sesi TIDAK mencabut access token
+// yang sudah diterbitkan — dan versi sebelumnya berhenti pada pernyataan itu
+// tanpa memberi jalan melakukannya.
+func (c *Klien) Cabut(ctx context.Context, token, tipe string) error {
+	if c.epRevocation == "" {
+		return errors.New("IdP tidak menyediakan revocation_endpoint")
+	}
+	form := url.Values{"token": {token}, "token_type_hint": {tipe}}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.epRevocation,
+		strings.NewReader(form.Encode()))
+	if err != nil {
+		return fmt.Errorf("bangun permintaan pencabutan: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetBasicAuth(c.oauth.ClientID, c.oauth.ClientSecret)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("panggil pencabutan: %w", err)
+	}
+	defer resp.Body.Close()
+	// RFC 7009: server mengembalikan 200 bahkan untuk token yang tidak
+	// dikenal, supaya tidak menjadi oracle keberadaan token.
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("pencabutan ditolak: %d", resp.StatusCode)
+	}
+	return nil
 }
 
 func acak32() (string, error) {
@@ -292,97 +437,211 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"golang.org/x/oauth2"
 )
 
-func keadaanUji() KeadaanAlur {
-	return KeadaanAlur{State: "state-benar", Nonce: "nonce-benar", Verifier: "verifier-benar", Dibuat: time.Now()}
+// konfigUjiOAuth dipakai empat uji di versi sebelumnya dan TIDAK PERNAH
+// didefinisikan — blok ujinya tidak kompilasi sama sekali.
+func konfigUjiOAuth() oauth2.Config {
+	return oauth2.Config{
+		ClientID:    "klien-uji",
+		RedirectURL: "https://app.contoh.id/callback",
+		Endpoint: oauth2.Endpoint{
+			AuthURL:  "https://idp.contoh.id/authorize",
+			TokenURL: "https://idp.contoh.id/token",
+		},
+		Scopes: []string{"openid", "email"},
+	}
+}
+
+type penyimpanMemori struct {
+	mu    sync.Mutex
+	entri map[string]KeadaanAlur
+}
+
+func newPenyimpanMemori() *penyimpanMemori {
+	return &penyimpanMemori{entri: map[string]KeadaanAlur{}}
+}
+
+func (p *penyimpanMemori) Simpan(_ context.Context, k KeadaanAlur) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.entri[k.State] = k
+	return nil
+}
+
+func (p *penyimpanMemori) AmbilSekali(_ context.Context, state string) (KeadaanAlur, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	k, ada := p.entri[state]
+	if !ada {
+		return KeadaanAlur{}, errors.New("tidak ditemukan")
+	}
+	delete(p.entri, state) // sekali pakai
+	return k, nil
 }
 
 func TestSelesaikanAlur_StateSalahDitolakSebelumMenghubungiIdP(t *testing.T) {
-	// Inti pengujian: permintaan CSRF tidak boleh sampai memicu panggilan
-	// jaringan ke IdP. Klien tanpa endpoint asli sudah cukup membuktikannya.
+	// Permintaan CSRF tidak boleh sampai memicu panggilan jaringan ke IdP.
+	// Klien tanpa endpoint asli sudah cukup membuktikannya: kalau Exchange
+	// sempat dipanggil, galat yang muncul bukan ErrAlurTidakDikenal.
 	c := &Klien{}
-	_, err := c.SelesaikanAlur(context.Background(), keadaanUji(), "state-penyerang", "code")
-	if !errors.Is(err, ErrStateTidakCocok) {
-		t.Fatalf("mau ErrStateTidakCocok, dapat %v", err)
+	simpan := newPenyimpanMemori()
+	_ = simpan.Simpan(context.Background(), KeadaanAlur{State: "state-benar", Dibuat: time.Now()})
+
+	_, err := c.SelesaikanAlur(context.Background(), simpan, "state-penyerang", "code")
+	if !errors.Is(err, ErrAlurTidakDikenal) {
+		t.Fatalf("mau ErrAlurTidakDikenal, dapat %v", err)
 	}
 }
 
 func TestSelesaikanAlur_StateKosongDitolak(t *testing.T) {
 	c := &Klien{}
-	_, err := c.SelesaikanAlur(context.Background(), keadaanUji(), "", "code")
+	_, err := c.SelesaikanAlur(context.Background(), newPenyimpanMemori(), "", "code")
 	if !errors.Is(err, ErrStateTidakCocok) {
 		t.Fatalf("state kosong WAJIB ditolak, dapat %v", err)
 	}
 }
 
-func TestMulaiAlur_MenghasilkanNilaiAcakYangBerbeda(t *testing.T) {
-	c := &Klien{oauth: konfigUjiOAuth()}
+// Keadaan alur hanya boleh dipakai SEKALI. Tanpa ini, authorization code yang
+// diserobot bisa ditukar berulang selama keadaannya masih tersimpan.
+func TestSelesaikanAlur_KeadaanSekaliPakai(t *testing.T) {
+	c := &Klien{}
+	simpan := newPenyimpanMemori()
+	_ = simpan.Simpan(context.Background(), KeadaanAlur{State: "s1", Dibuat: time.Now()})
 
-	_, a, err := c.MulaiAlur()
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, b, err := c.MulaiAlur()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if a.State == b.State || a.Nonce == b.Nonce || a.Verifier == b.Verifier {
-		t.Fatal("state/nonce/verifier WAJIB berbeda tiap alur")
-	}
-	if len(a.Verifier) < 43 {
-		t.Errorf("verifier PKCE minimal 43 karakter, dapat %d", len(a.Verifier))
+	// Percobaan pertama gagal di Exchange (klien kosong), tapi keadaannya
+	// SUDAH terpakai dan terhapus.
+	_, _ = c.SelesaikanAlur(context.Background(), simpan, "s1", "code")
+
+	_, err := c.SelesaikanAlur(context.Background(), simpan, "s1", "code")
+	if !errors.Is(err, ErrAlurTidakDikenal) {
+		t.Fatalf("pemakaian kedua = %v, mau ErrAlurTidakDikenal", err)
 	}
 }
 
-func TestMulaiAlur_MemakaiS256BukanPlain(t *testing.T) {
+// Field Dibuat harus benar-benar DIPERIKSA. Versi sebelumnya menyimpannya
+// lalu tidak pernah membacanya.
+func TestSelesaikanAlur_KeadaanKedaluwarsaDitolak(t *testing.T) {
+	c := &Klien{}
+	simpan := newPenyimpanMemori()
+	_ = simpan.Simpan(context.Background(), KeadaanAlur{
+		State:  "s-lama",
+		Dibuat: time.Now().Add(-maksUmurAlur - time.Minute),
+	})
+
+	_, err := c.SelesaikanAlur(context.Background(), simpan, "s-lama", "code")
+	if !errors.Is(err, ErrAlurKedaluwarsa) {
+		t.Fatalf("galat = %v, mau ErrAlurKedaluwarsa", err)
+	}
+}
+
+func TestMulaiAlur_NilaiAcakBerbedaDanS256(t *testing.T) {
 	c := &Klien{oauth: konfigUjiOAuth()}
-	u, k, err := c.MulaiAlur()
+	simpan := newPenyimpanMemori()
+	ctx := context.Background()
+
+	u1, err := c.MulaiAlur(ctx, simpan)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(u, "code_challenge_method=S256") {
+	u2, err := c.MulaiAlur(ctx, simpan)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	q1 := uraiKueri(t, u1)
+	q2 := uraiKueri(t, u2)
+	for _, p := range []string{"state", "nonce", "code_challenge"} {
+		if q1.Get(p) == q2.Get(p) {
+			t.Errorf("%s WAJIB berbeda tiap alur", p)
+		}
+		if q1.Get(p) == "" {
+			t.Errorf("%s tidak dikirim", p)
+		}
+	}
+	if q1.Get("code_challenge_method") != "S256" {
 		t.Fatal("metode PKCE WAJIB S256; 'plain' tidak memberi perlindungan")
 	}
-	// Yang dikirim WAJIB hash-nya, bukan verifier-nya.
+
+	// Yang dikirim WAJIB hash verifier, bukan verifier-nya.
+	simpan.mu.Lock()
+	k := simpan.entri[q1.Get("state")]
+	simpan.mu.Unlock()
+
 	sum := sha256.Sum256([]byte(k.Verifier))
-	mau := base64.RawURLEncoding.EncodeToString(sum[:])
-	if !strings.Contains(u, "code_challenge="+mau) {
+	if mau := base64.RawURLEncoding.EncodeToString(sum[:]); q1.Get("code_challenge") != mau {
 		t.Fatal("challenge harus S256(verifier)")
 	}
-	if strings.Contains(u, k.Verifier) {
+	if strings.Contains(u1, k.Verifier) {
 		t.Fatal("verifier BOCOR ke URL otorisasi")
 	}
-}
-
-func TestMulaiAlur_NonceIkutDikirim(t *testing.T) {
-	c := &Klien{oauth: konfigUjiOAuth()}
-	u, k, _ := c.MulaiAlur()
-	if !strings.Contains(u, "nonce="+k.Nonce) {
-		t.Fatal("nonce WAJIB dikirim, kalau tidak ID token bisa diputar ulang")
+	if len(k.Verifier) < 43 {
+		t.Errorf("verifier PKCE minimal 43 karakter, dapat %d", len(k.Verifier))
 	}
 }
 
-func TestPasangCookieSesi_AtributKeamanan(t *testing.T) {
+func TestCookieSesiDanCookieAlurPunyaSameSiteBerbeda(t *testing.T) {
 	w := httptest.NewRecorder()
 	PasangCookieSesi(w, "sesi-123", time.Hour)
+	PasangCookieAlur(w, "alur-abc", false)
+	PasangCookieAlur(w, "alur-post", true)
 
-	c := w.Result().Cookies()[0]
-	if !c.HttpOnly {
-		t.Error("HttpOnly wajib: tanpa itu XSS bisa mencuri sesi")
+	kue := map[string]*http.Cookie{}
+	for _, c := range w.Result().Cookies() {
+		kue[c.Name] = c
 	}
-	if !c.Secure {
-		t.Error("Secure wajib: tanpa itu cookie terkirim lewat HTTP polos")
+
+	sesi := kue["__Host-sesi"]
+	if sesi == nil {
+		t.Fatal("cookie sesi tidak memakai awalan __Host-")
 	}
-	if c.SameSite != http.SameSiteLaxMode {
-		t.Error("SameSite=Lax agar redirect balik dari IdP tetap membawa cookie")
+	if !sesi.HttpOnly || !sesi.Secure {
+		t.Error("HttpOnly dan Secure wajib pada cookie sesi")
 	}
-	if strings.Contains(c.Value, ".") {
-		t.Error("nilai cookie harus ID sesi, bukan token JWT")
+	// Cookie sesi TIDAK perlu Lax: ia ditulis setelah callback, tidak pernah
+	// dibaca saat browser kembali dari IdP.
+	if sesi.SameSite != http.SameSiteStrictMode {
+		t.Errorf("SameSite cookie sesi = %v, mau Strict", sesi.SameSite)
 	}
+	if strings.Count(sesi.Value, ".") == 2 {
+		t.Error("nilai cookie berbentuk JWT — seharusnya ID sesi sisi server")
+	}
+
+	alur := kue["__Host-alur"]
+	if alur == nil {
+		t.Fatal("cookie alur tidak ditulis")
+	}
+	// Cookie terakhir dengan nama sama menang di map: itu varian form_post.
+	if alur.SameSite != http.SameSiteNoneMode {
+		t.Errorf("SameSite cookie alur (form_post) = %v, mau None — Lax tidak terkirim pada POST lintas situs", alur.SameSite)
+	}
+}
+
+func TestBolehTautkanLewatEmail(t *testing.T) {
+	belum := &Identitas{Email: "korban@contoh.id", EmailTerverif: false}
+	if err := belum.BolehTautkanLewatEmail(); !errors.Is(err, ErrEmailBelumTerverifikasi) {
+		t.Fatalf("galat = %v, mau ErrEmailBelumTerverifikasi — penautan lewat email tak terverifikasi adalah pengambilalihan akun", err)
+	}
+	sudah := &Identitas{Email: "asli@contoh.id", EmailTerverif: true}
+	if err := sudah.BolehTautkanLewatEmail(); err != nil {
+		t.Fatalf("email terverifikasi ditolak: %v", err)
+	}
+}
+
+func uraiKueri(t *testing.T, u string) url.Values {
+	t.Helper()
+	parsed, err := url.Parse(u)
+	if err != nil {
+		t.Fatalf("urai URL: %v", err)
+	}
+	return parsed.Query()
 }
 ```
 
@@ -391,7 +650,8 @@ func TestPasangCookieSesi_AtributKeamanan(t *testing.T) {
 **❌ SALAH — memakai ID token sebagai bearer ke API**
 
 ```go
-req.Header.Set("Authorization", "Bearer "+identitas.IDToken)
+// idToken di sini adalah string mentah hasil tok.Extra("id_token")
+req.Header.Set("Authorization", "Bearer "+idToken)
 ```
 
 ID token diterbitkan **untuk aplikasi Anda** (`aud` = client ID Anda). API yang menerimanya sedang memvalidasi token yang bukan ditujukan kepadanya — dan bila ia mengabaikan `aud`, ia akan menerima token dari aplikasi mana pun di tenant IdP yang sama.
@@ -400,6 +660,24 @@ ID token diterbitkan **untuk aplikasi Anda** (`aud` = client ID Anda). API yang 
 
 ```go
 req.Header.Set("Authorization", "Bearer "+identitas.AccessToken)
+```
+
+> Perhatikan `Identitas` di §Kode **tidak punya** field ID token, dan itu disengaja: ID token sudah selesai tugasnya begitu identitas terverifikasi, jadi tidak menyimpannya membuat kesalahan di atas sulit dilakukan. (Versi sebelumnya menulis `identitas.IDToken` pada potongan ini — field yang tidak pernah ada, sehingga contohnya bahkan tidak kompilasi.)
+
+**❌ SALAH — menautkan akun lokal lewat email tanpa memeriksa `email_verified`**
+
+```go
+pengguna, _ := repo.CariByEmail(ctx, klaim.Email) // IdP memverifikasinya?
+```
+
+Ini kelas pengambilalihan akun yang paling sering muncul pada integrasi "Sign in with ...". Bila IdP tidak memverifikasi kepemilikan email, penyerang cukup mendaftar di IdP itu memakai alamat korban, lalu masuk sebagai korban ke aplikasi Anda. Membaca klaim `email_verified` dan menyimpannya tanpa pernah memeriksanya tidak melindungi apa pun.
+
+**✅ BENAR — `sub` sebagai kunci; email hanya untuk penautan, dan hanya bila terverifikasi**
+
+```go
+if err := identitas.BolehTautkanLewatEmail(); err != nil {
+    return err // jangan tautkan; minta verifikasi lewat jalur Anda sendiri
+}
 ```
 
 **❌ SALAH — memverifikasi ID token tanpa memeriksa `aud`**
@@ -465,7 +743,9 @@ pengguna, _ := repo.CariBySubjekIdP(ctx, idToken.Subject)
 
 2. **Clock skew antara Anda dan IdP.** Token dengan `iat` sedikit di masa depan akan ditolak bila jam server Anda tertinggal. Beberapa detik toleransi wajar; pastikan NTP berjalan di semua node.
 
-3. **`state` yang tidak kedaluwarsa.** Keadaan alur yang tersimpan selamanya berarti authorization code lama masih bisa ditukar. Beri masa hidup pendek — beberapa menit — dan hapus setelah dipakai sekali.
+3. **`state` yang tidak kedaluwarsa dan tidak sekali pakai.** Keadaan alur yang tersimpan selamanya berarti authorization code lama masih bisa ditukar. Dua hal yang harus benar-benar dieksekusi, bukan sekadar disimpan sebagai field: **masa hidup pendek** yang diperiksa saat callback (lihat `maksUmurAlur`), dan **pengambilan yang sekaligus menghapus** (`AmbilSekali`), sehingga percobaan kedua dengan state yang sama pasti gagal. Menyimpan `Dibuat` lalu tidak pernah membacanya justru lebih berbahaya daripada tidak menyimpannya: ia membuat aturannya tampak sudah diterapkan.
+
+3b. **`SameSite` cookie alur — dan `form_post` yang mematahkannya.** Cookie yang membawa `state`/`nonce`/`verifier` DIBACA saat browser kembali dari IdP, jadi ia butuh `SameSite=Lax`; cookie sesi baru DITULIS setelah callback selesai dan boleh `Strict`. Jebakannya: `Lax` mengirim cookie pada navigasi **GET** tingkat atas, tetapi **tidak** pada **POST** lintas situs. Bila IdP dikonfigurasi `response_mode=form_post`, callback-nya POST — cookie alur tidak ikut terkirim, dan galat yang muncul berbunyi "state tidak ditemukan", yang menuntun orang mencari bug di tempat yang sama sekali salah. Untuk mode itu, cookie alur wajib `SameSite=None; Secure`.
 
 4. **Refresh token rotation.** IdP modern menerbitkan refresh token baru setiap kali dipakai dan mencabut yang lama. Pemakaian ulang refresh token yang sudah dirotasi adalah sinyal pencurian, dan IdP akan mencabut seluruh rantai — aplikasi Anda harus menangani logout mendadak ini dengan anggun.
 
@@ -473,7 +753,11 @@ pengguna, _ := repo.CariBySubjekIdP(ctx, idToken.Subject)
 
 6. **`redirect_uri` yang tidak dicocokkan persis.** Sebagian IdP mengizinkan pencocokan longgar bila dikonfigurasi salah, dan itu memungkinkan pengalihan authorization code ke domain penyerang. Daftarkan URI persis, tanpa wildcard.
 
-7. **Discovery yang gagal saat start.** Bila IdP tidak terjangkau saat aplikasi start, `oidc.NewProvider` gagal dan pod tidak akan pernah siap. Untuk layanan yang harus tetap melayani permintaan tanpa login, tunda discovery atau ulangi di latar alih-alih menggagalkan boot.
+7. **Discovery yang gagal saat start.** Bila IdP tidak terjangkau saat aplikasi start, `oidc.NewProvider` gagal dan pod tidak akan pernah siap. Untuk layanan yang harus tetap melayani permintaan tanpa login, tunda discovery atau ulangi di latar alih-alih menggagalkan boot. `Baru()` di §Kode sengaja gagal keras — itu pilihan yang benar untuk layanan yang **seluruh** fungsinya menuntut login, dan pilihan yang salah untuk yang tidak. Putuskan berdasarkan itu, bukan berdasarkan kebiasaan.
+
+8. **`email_verified` yang dibaca tetapi tidak dipakai.** Kunci identitas selalu `sub`, dan itu menutup sebagian besar masalah. Yang tersisa adalah **penautan akun**: menghubungkan login IdP ke akun lokal yang sudah ada lewat alamat email. Bila IdP tidak memverifikasi kepemilikan email, penyerang cukup mendaftar di IdP itu memakai alamat korban untuk mengambil alih akun lokal korban. Periksa klaimnya, dan ketahui IdP mana yang benar-benar Anda percayai untuk memverifikasinya — sebagian tidak.
+
+9. **Pengalihan setelah login.** Menyimpan tujuan "kembali ke halaman sebelumnya" lalu mengalihkan ke sana tanpa validasi adalah open redirect, dan halaman login adalah tempat paling umum ia muncul. Simpan hanya path relatif — atau lebih baik, sebuah kunci yang Anda petakan sendiri ke daftar tujuan yang sah — jangan pernah URL utuh dari parameter kueri.
 
 ## Kapan JANGAN Pakai Ini
 
@@ -493,6 +777,9 @@ pengguna, _ := repo.CariBySubjekIdP(ctx, idToken.Subject)
 | Pengguna tetap punya akses setelah dinonaktifkan | umur access token | Tidak ada pencabutan; token berlaku sampai kedaluwarsa |
 | Refresh token dipakai dari dua IP berbeda | rotasi refresh token | Indikasi pencurian token |
 | Login gagal hanya di sebagian node | selisih jam node vs IdP | Clock skew menolak `iat`/`exp` |
+| "state tidak ditemukan" pada IdP tertentu saja | `response_mode` IdP itu | `form_post` adalah POST; cookie `SameSite=Lax` tidak ikut terkirim |
+| Satu akun IdP masuk sebagai pengguna lain | apakah penautan memeriksa `email_verified` | Pengambilalihan akun lewat email tak terverifikasi |
+| Authorization code lama masih bisa ditukar | umur & sekali-pakai keadaan alur | `Dibuat` disimpan tapi tidak pernah diperiksa |
 
 ```bash
 # Konfigurasi IdP yang benar-benar dipakai -- discovery adalah sumber kebenarannya
