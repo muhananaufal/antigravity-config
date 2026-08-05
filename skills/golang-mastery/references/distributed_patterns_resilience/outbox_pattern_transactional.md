@@ -1,5 +1,7 @@
 # Transactional Outbox Pattern
 
+> **Berlaku:** Go 1.21+ · PostgreSQL 14+ · **Lihat juga:** `distributed_patterns_resilience/saga_orchestration_choreography.md` · `db_sqlc/acid_transactions_isolation.md` · `microservices_grpc/webhook_delivery_engine.md` · `background_jobs_worker/river_postgres_jobs.md`
+
 ## 1. Konsep & Internal
 
 Dalam arsitektur *microservices* terdistribusi, sering kali satu *service* perlu mengubah *state* internalnya (menyimpan ke *database*) dan mempublikasikan notifikasi terkait perubahan tersebut ke sistem lain (mengirim *event* ke *message broker* seperti Kafka). 
@@ -337,4 +339,39 @@ func TestOutboxPattern_RelayWorkerRecovery(t *testing.T) {
 		t.Fatalf("Expected outbox to be empty after processing, got %d", count)
 	}
 }
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **Bila konsumen bisa menoleransi pesan yang hilang.** Outbox menambah tabel, poller, pemantauan, dan pembersihan. Bayar ongkos itu hanya bila satu pesan yang hilang benar-benar berarti kerugian.
+- **Tanpa pembersihan.** Tabel outbox yang tidak pernah dibersihkan membuat index membesar dan poller ikut melambat — sistem yang dirancang menjamin pengiriman perlahan menjadi sistem yang terlambat mengirim.
+- **Poller tanpa `FOR UPDATE SKIP LOCKED`.** Beberapa instans akan mengambil baris yang sama dan mengirim ganda, persis kebalikan dari yang ingin dijamin.
+- **Menjanjikan exactly-once.** Outbox memberi **at-least-once**. Konsumen tetap WAJIB idempoten. Menjanjikan lebih dari itu hanya menyesatkan tim sendiri dan tim yang mengonsumsi.
+- **Menyimpan payload besar di dalam baris outbox.** Baris raksasa membengkakkan tabel, memperbesar WAL, dan membuat replica tertinggal. Simpan referensi ke datanya, bukan salinan isinya.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Konsumen menerima kejadian terlambat | umur baris tertua yang belum terkirim | Poller kalah cepat dari laju produksi |
+| Konsumen menerima duplikat | apakah `SKIP LOCKED` dipakai | Beberapa poller mengambil baris yang sama |
+| Tabel outbox membesar terus | jumlah baris terkirim yang belum dihapus | Pembersihan tidak berjalan |
+| Replica lag naik saat trafik tinggi | ukuran payload per baris | Payload besar membanjiri WAL |
+| Kejadian hilang setelah crash | apakah tulis outbox satu transaksi dengan data | Outbox ditulis di luar transaksi bisnis |
+
+```sql
+-- Backlog dan umurnya: ini metrik utama kesehatan outbox
+SELECT count(*) FILTER (WHERE terkirim_pada IS NULL)             AS belum_terkirim,
+       min(dibuat_pada) FILTER (WHERE terkirim_pada IS NULL)     AS tertua,
+       count(*) FILTER (WHERE terkirim_pada IS NOT NULL)         AS sudah_terkirim,
+       pg_size_pretty(pg_total_relation_size('outbox'))          AS ukuran
+FROM outbox;
+
+-- Baris yang sudah terlalu lama menunggu -- pasang alert di angka ini
+SELECT count(*) FROM outbox
+WHERE terkirim_pada IS NULL AND dibuat_pada < now() - interval '5 minutes';
+```
+
+```bash
+curl -s localhost:9090/metrics | grep -E 'outbox_(pending|published_total|lag_seconds)'
 ```

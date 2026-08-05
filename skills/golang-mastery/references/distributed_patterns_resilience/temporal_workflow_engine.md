@@ -1,5 +1,7 @@
 # Temporal Workflow Engine (Durable Execution)
 
+> **Berlaku:** Go 1.21+ · Temporal SDK v1.25+ · **Lihat juga:** `distributed_patterns_resilience/saga_orchestration_choreography.md` · `distributed_patterns_resilience/idempotency_key_engine.md` · `background_jobs_worker/cron_scheduler_go.md` · `distributed_patterns_resilience/outbox_pattern_transactional.md`
+
 ## 1. Konsep & Internal
 
 Dalam sistem terdistribusi, saat kita memanggil serangkaian *API* jarak jauh, selalu ada risiko aplikasi (atau kontainer/pod kita sendiri) akan mengalami *crash* di tengah-tengah transaksi (*misal memori penuh, OOM kill, atau rolling deploy*). Jika aplikasi mati setelah memanggil *API Reserve Flight* namun sebelum *API Charge Credit Card*, _state_ Anda menjadi inkonsisten dan "menggantung" tanpa rekam jejak yang jelas.
@@ -257,4 +259,37 @@ func TestTripSagaWorkflow_FailureAndCompensation(t *testing.T) {
 	// Memastikan semua fungsi mock dipanggil, termasuk CancelHotel (Compensation)
 	env.AssertExpectations(t)
 }
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **Untuk pekerjaan latar sederhana.** Temporal membawa cluster, database sendiri, worker, dan model pemrograman yang harus dipelajari seluruh tim. Untuk mengirim email atau mengubah ukuran gambar, antrean biasa sudah cukup.
+- **Kode workflow yang tidak deterministik.** Workflow diputar ulang dari riwayatnya. `time.Now()`, `rand`, iterasi `map`, dan panggilan jaringan langsung di dalam workflow akan menghasilkan kegagalan replay. Semuanya WAJIB lewat API Temporal atau dipindahkan ke activity.
+- **Mengubah kode workflow yang sedang berjalan tanpa versioning.** Riwayat lama akan diputar ulang dengan kode baru dan gagal. `workflow.GetVersion` ada persis untuk masalah ini, dan harus dipakai sebelum perubahan, bukan sesudah insiden.
+- **Payload besar di input atau output activity.** Semuanya tersimpan di riwayat. Riwayat yang besar memperlambat replay, memperbesar database, dan bisa menembus batas ukuran.
+- **Sebagai antrean berthroughput sangat tinggi.** Temporal unggul pada alur berumur panjang dan bercabang. Untuk jutaan pesan sederhana per detik, ia bukan alat yang tepat.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| `NonDeterministicError` setelah deploy | riwayat workflow yang gagal | Kode berubah tanpa `GetVersion`, atau ada sumber nondeterminisme |
+| Workflow menumpuk berstatus Running | backlog task queue | Jumlah worker tidak cukup |
+| Replay sangat lambat | `historyLength` | Riwayat membengkak karena payload besar atau loop panjang |
+| Activity diulang terus | kebijakan retry activity | Galat permanen diperlakukan sebagai sementara |
+| Database Temporal tumbuh cepat | retensi namespace | Riwayat tidak pernah diarsipkan |
+
+```bash
+temporal workflow list --query 'ExecutionStatus="Running"' --limit 20
+temporal workflow list --query 'ExecutionStatus="Failed"'  --limit 20
+
+temporal workflow describe --workflow-id <id>
+temporal workflow show --workflow-id <id> | head -40
+
+# Riwayat yang membengkak memperlambat setiap replay
+temporal workflow describe --workflow-id <id> -o json \
+  | jq '.workflowExecutionInfo.historyLength, .workflowExecutionInfo.historySizeBytes'
+
+# Backlog per task queue: kalau menumpuk, tambah worker
+temporal task-queue describe --task-queue antrean-pesanan
 ```

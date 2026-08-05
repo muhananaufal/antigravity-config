@@ -1,5 +1,7 @@
 # Feature Flags (LaunchDarkly Pattern)
 
+> **Berlaku:** Go 1.21+ · **Lihat juga:** `engineering_practice/adr_decision_records.md` · `db_sqlc/zero_downtime_migrations.md` · `engineering_practice/technical_design_doc.md` · `observability_resilience/prometheus_metrics_red.md`
+
 ## 1. Konsep & Internal
 
 Dalam rilis perangkat lunak tradisional, fitur yang sudah dikembangkan (di-*merge* ke *master*) akan dirilis semuanya kepada *semua pengguna* pada hari H *deployment*. Hal ini sangat berisiko. Jika fitur terdapat *bug*, aplikasi akan *down*, dan Anda harus melakukan *Rollback Deployment* (yang memakan waktu).
@@ -393,4 +395,33 @@ func TestClient_ConcurrentReadWrite(t *testing.T) {
 	// Jika berhasil mencapai titik ini tanpa panic (atau `go test -race` lulus),
 	// artinya concurrency in-memory cache di-handle dengan baik oleh RWMutex.
 }
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **Flag tanpa tanggal pensiun.** Setiap flag yang bertahan mengalikan jumlah jalur kode yang secara teori harus diuji. Sepuluh flag boolean adalah 1.024 kombinasi — dan tim Anda menguji satu atau dua di antaranya.
+- **Flag untuk konfigurasi.** Nilai yang jarang berubah dan tidak dipakai untuk peluncuran bertahap adalah konfigurasi. Menaruhnya di sistem flag membuat perubahannya lolos dari code review dan riwayat git.
+- **Flag di jalur panas tanpa cache lokal.** Panggilan jaringan per permintaan menambah latensi dan memperkenalkan satu titik kegagalan baru di jalur yang paling tidak boleh gagal.
+- **Flag tanpa nilai bawaan yang aman.** Bila layanan flag tidak terjangkau, perilaku sistem harus tetap terdefinisi dan aman — bukan bergantung pada apa yang kebetulan ada di cache.
+- **Flag untuk memisahkan logika yang seharusnya menjadi dua endpoint atau dua layanan.** Percabangan besar di dalam satu fungsi lebih sulit dibaca, diuji, dan dihapus daripada dua jalur yang jelas terpisah.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Jumlah flag terus bertambah, tidak pernah berkurang | umur tiap flag | Tidak ada proses pensiun |
+| Bug hanya muncul pada kombinasi tertentu | kombinasi flag yang aktif | Ruang kombinasi tidak pernah diuji |
+| Latensi naik setelah memasang flag | apakah evaluasi memanggil jaringan | Evaluasi flag masuk ke jalur panas |
+| Perilaku berubah saat layanan flag terganggu | nilai bawaan | Fallback tidak terdefinisi |
+| Perubahan perilaku tanpa jejak di git | apa yang disimpan di flag | Konfigurasi disamarkan sebagai flag |
+
+```bash
+# Berapa banyak titik evaluasi flag yang ada di kode
+grep -rn 'BoolVariation\|IsEnabled\|Variation(' --include='*.go' . | wc -l
+
+# Flag yang masih dirujuk kode tapi sudah 100% aktif = kandidat dihapus
+grep -rhoE '"[a-z0-9-]+_flag"|"flag\.[a-z0-9_.-]+"' --include='*.go' . | sort | uniq -c | sort -rn
+
+curl -s localhost:9090/metrics | grep -E 'feature_flag_(evaluation|error)_total'
+kubectl logs -l app=api --since=1h | grep -ci 'flag evaluation failed'
 ```

@@ -1,5 +1,7 @@
 # Multi-Tenancy Data Isolation
 
+> **Berlaku:** Go 1.21+ · PostgreSQL 14+ Row Level Security · **Lihat juga:** `db_sqlc/sharding_partitioning.md` · `db_sqlc/database_migration_go.md` · `distributed_patterns_resilience/bulkhead_isolation.md` · `observability_resilience/distributed_tracing_baggage.md`
+
 ## 1. Konsep & Internal
 
 Dalam arsitektur *Software as a Service (SaaS)*, aplikasi sering digunakan oleh banyak pelanggan (*Tenants*), seperti perusahaan A, perusahaan B, dst. Namun, menjalankan *server* dan *database* yang benar-benar terpisah untuk tiap pelanggan (*Silo Model*) tidak efisien dari sisi biaya (*infrastructure cost*) maupun upaya *deployment*.
@@ -265,4 +267,41 @@ func TestGetTenantID_Security(t *testing.T) {
 		t.Fatalf("Expected error when tenant is missing from context to prevent accidental full table scans")
 	}
 }
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **Isolasi hanya lewat `WHERE tenant_id = ?` di kode aplikasi.** Satu query yang lupa menyertakannya membocorkan data lintas tenant, dan tidak ada satu pun alat yang akan menangkapnya sebelum pelanggan yang melapor. Tegakkan di database dengan Row Level Security.
+- **Schema-per-tenant untuk ribuan tenant.** Setiap migrasi harus berjalan ribuan kali, dan katalog PostgreSQL sendiri menjadi beban. Pola ini masuk akal untuk puluhan tenant besar, bukan ribuan tenant kecil.
+- **Database-per-tenant kecuali regulasi menuntutnya.** Ongkos operasional — backup, migrasi, koneksi, pemantauan, sertifikat — dikalikan jumlah tenant, dan pertumbuhannya linear tanpa batas.
+- **Tanpa batas sumber daya per tenant.** Satu tenant yang menjalankan laporan besar akan memperlambat semua tenant lain, dan dari luar itu tampak seperti "sistemnya lambat".
+- **Menerima `tenant_id` dari input pengguna tanpa memverifikasinya terhadap identitas terautentikasi.** Itu IDOR tingkat tenant — kelas kerentanan paling merusak yang bisa dimiliki sebuah SaaS.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Pelanggan melihat data pelanggan lain | tabel yang tidak punya policy RLS | Isolasi hanya ditegakkan di aplikasi |
+| Sistem melambat untuk semua tenant | konsumsi sumber daya per tenant | Tidak ada batas per tenant |
+| Migrasi butuh berjam-jam | jumlah schema | Schema-per-tenant pada skala yang salah |
+| Log tidak bisa dipilah per tenant | apakah `tenant_id` ada di log | Investigasi insiden per pelanggan jadi mustahil |
+| Query lambat hanya untuk satu tenant | sebaran ukuran data per tenant | Ada tenant raksasa yang butuh penanganan khusus |
+
+```sql
+-- Apakah RLS benar-benar aktif, dan dipaksakan juga untuk pemilik tabel?
+SELECT relname, relrowsecurity AS rls_aktif, relforcerowsecurity AS rls_dipaksa
+FROM pg_class
+WHERE relnamespace = 'public'::regnamespace AND relkind = 'r'
+ORDER BY relrowsecurity;
+
+SELECT schemaname, tablename, policyname, qual FROM pg_policies;
+
+-- Tabel yang PUNYA kolom tenant_id tapi TANPA RLS: inilah celah kebocorannya
+SELECT c.relname
+FROM pg_class c
+JOIN pg_attribute a ON a.attrelid = c.oid AND a.attname = 'tenant_id' AND NOT a.attisdropped
+WHERE c.relkind = 'r' AND c.relnamespace = 'public'::regnamespace AND NOT c.relrowsecurity;
+
+-- Sebaran ukuran per tenant: mencari tenant raksasa sebelum jadi masalah
+SELECT tenant_id, count(*) FROM pesanan GROUP BY 1 ORDER BY 2 DESC LIMIT 10;
 ```

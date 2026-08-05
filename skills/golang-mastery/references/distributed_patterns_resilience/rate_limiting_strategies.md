@@ -1,5 +1,7 @@
 # Rate Limiting (Token Bucket / Sliding Window)
 
+> **Berlaku:** Go 1.21+ · Redis 7+ · **Lihat juga:** `observability_resilience/rate_limiting_patterns.md` · `distributed_patterns_resilience/bulkhead_isolation.md` · `caching_strategy/redis_advanced_patterns.md` · `observability_resilience/circuit_breaker_hystrix.md`
+
 ## 1. Konsep & Internal
 
 **Rate Limiting** adalah teknik untuk mengontrol laju lalu lintas jaringan yang dikirimkan atau diterima oleh suatu *service*. Jika klien mengirim permintaan (request) melampaui batas yang diizinkan (limit), server akan menolaknya (biasanya dengan HTTP 429 *Too Many Requests*).
@@ -322,4 +324,34 @@ func TestIPRateLimiter_GarbageCollection(t *testing.T) {
 		t.Fatalf("IP 10.0.0.2 should NOT have been cleaned up")
 	}
 }
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **Fixed window untuk batas yang benar-benar ketat.** Klien bisa mengirim dua kali kuota di perbatasan jendela — semuanya di akhir jendela pertama, lalu semuanya lagi di awal jendela kedua. Untuk batas yang harus dijamin, pakai sliding window atau token bucket.
+- **Sliding window log pada trafik tinggi.** Ia menyimpan timestamp setiap permintaan; memori dan biaya Redis tumbuh sebanding dengan trafik yang justru sedang ingin Anda batasi.
+- **Token bucket dengan burst jauh lebih besar dari laju rata-rata.** Burst besar berarti hilir tetap bisa dihantam sekaligus — persis kejadian yang limiter ini dipasang untuk mencegah.
+- **Batas per-IP untuk pengguna yang sudah terautentikasi.** IP dibagi bersama (NAT kantor, operator seluler) dan berpindah-pindah. Untuk pengguna yang login, batasi per identitas.
+- **Tanpa jalur khusus untuk trafik internal.** Health check, pemantauan, dan job internal yang ikut kena limit akan menghasilkan alarm palsu tepat saat insiden sedang berlangsung.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Lonjakan `429` menumpuk di perbatasan menit | distribusi waktu penolakan | Fixed window; klien memanfaatkan batas jendela |
+| Memori Redis naik sebanding trafik | struktur data limiter | Sliding window log menyimpan tiap timestamp |
+| Hilir tetap kebanjiran meski limiter aktif | ukuran burst | Burst terlalu besar dibanding laju rata-rata |
+| Satu kantor terblokir seluruhnya | identitas yang dipakai | Batas per-IP untuk pengguna di belakang NAT |
+| Health check gagal saat trafik puncak | apakah ada pengecualian internal | Probe ikut kena limit |
+
+```bash
+# Penolakan menumpuk di detik-detik tertentu = fixed window
+kubectl logs -l app=api --since=1h \
+  | jq -r 'select(.status==429) | .waktu' | cut -c15-19 | sort | uniq -c | sort -rn | head
+
+# Struktur limiter dan ongkos memorinya
+redis-cli --bigkeys | grep -i ratelimit
+redis-cli info memory | grep -E 'used_memory_human|maxmemory_policy'
+
+curl -s localhost:9090/metrics | grep -E 'rate_limit_(allowed|rejected)_total'
 ```

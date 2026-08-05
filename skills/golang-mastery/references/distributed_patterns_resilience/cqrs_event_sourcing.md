@@ -1,5 +1,7 @@
 # CQRS & Event Sourcing
 
+> **Berlaku:** Go 1.21+ · PostgreSQL 14+ · **Lihat juga:** `arch_patterns/cqrs_event_sourcing_impl.md` · `distributed_patterns_resilience/outbox_pattern_transactional.md` · `db_sqlc/read_replica_routing.md` · `arch_patterns/ddd_aggregate_repository.md`
+
 ## 1. Konsep & Internal
 
 Aplikasi tradisional menggunakan satu model (entitas) yang sama untuk operasi *Read* (membaca) dan *Write* (menulis). Namun, seiring berkembangnya sistem, operasi baca (query) sering kali jauh lebih banyak (100:1) dibanding operasi tulis (command). Kebutuhan query sering kali kompleks (JOIN multi-table), sementara write harus cepat dan menjaga konsistensi data.
@@ -350,4 +352,35 @@ func TestEventStore_ConcurrencyConflict(t *testing.T) {
 		t.Fatalf("expected concurrency conflict error, got: %v", err)
 	}
 }
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **Untuk CRUD biasa.** CQRS menambah dua model, mekanisme sinkronisasi, dan eventual consistency yang harus dijelaskan ke setiap orang baru. Bila kebutuhannya menyimpan dan membaca baris, semua itu ongkos tanpa imbalan.
+- **Event sourcing tanpa rencana versioning skema event.** Event bersifat permanen dan akan dibaca ulang selamanya. Format yang salah di bulan pertama menjadi beban seumur hidup sistem.
+- **Bila regulasi menuntut penghapusan data pribadi.** Menghapus dari log append-only bertentangan dengan sifatnya. Crypto-shredding bisa menjadi jalan keluar, tetapi harus dirancang sejak awal — bukan ditambal setelah permintaan penghapusan datang.
+- **Read model yang diasumsikan konsisten seketika.** Pengguna akan melihat hasil tulisannya belum muncul. API dan UI harus dirancang menerima itu, atau baca-setelah-tulis diarahkan ke sisi tulis.
+- **CQRS "sebagian" tanpa batas yang jelas.** Sebagian jalur konsisten, sebagian tidak, dan tidak ada yang tahu mana yang mana. Itu lebih buruk daripada memilih salah satu secara konsisten.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Pengguna melapor perubahan tidak muncul | lag proyeksi | Read model tertinggal dari event store |
+| Proyeksi berhenti diperbarui | checkpoint proyeksi | Konsumer proyeksi mati atau tersangkut satu event |
+| Rebuild proyeksi butuh berjam-jam | apakah ada snapshot | Seluruh riwayat diputar ulang dari awal |
+| Event lama gagal dideserialisasi | versi skema event | Skema berubah tanpa jalur migrasi |
+| Event store tumbuh tak terkendali | ukuran per agregat | Tidak ada snapshot maupun arsip |
+
+```sql
+-- Lag tiap proyeksi terhadap event store: metrik kesehatan utama
+SELECT nama_proyeksi, posisi_terakhir,
+       now() - diperbarui_pada AS lag
+FROM proyeksi_checkpoint ORDER BY lag DESC;
+
+-- Agregat dengan riwayat terpanjang: kandidat snapshot
+SELECT agregat_id, count(*) AS jumlah_event, max(versi) AS versi_terakhir
+FROM event_store GROUP BY 1 ORDER BY 2 DESC LIMIT 10;
+
+SELECT pg_size_pretty(pg_total_relation_size('event_store')) AS ukuran;
 ```

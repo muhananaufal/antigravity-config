@@ -1,5 +1,7 @@
 # Bulkhead Pattern (Isolasi Kegagalan)
 
+> **Berlaku:** Go 1.21+ · `golang.org/x/sync/semaphore` · **Lihat juga:** `observability_resilience/circuit_breaker_hystrix.md` · `concurrency/worker_pool_errgroup.md` · `db_sqlc/connection_pool_tuning.md` · `observability_resilience/rate_limiting_patterns.md`
+
 ## 1. Konsep & Internal
 
 Nama **Bulkhead** diambil dari desain lambung kapal laut yang dibagi menjadi beberapa kompartemen (partisi) kedap air. Jika lambung bocor di satu bagian, air hanya akan mengisi kompartemen tersebut. Kapal tidak akan tenggelam seluruhnya.
@@ -264,4 +266,32 @@ func TestBulkhead_ContextCancellationPropagation(t *testing.T) {
 		t.Fatal("Task should have started execution")
 	}
 }
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **Ketika hanya ada satu dependensi.** Bulkhead memisahkan sumber daya agar satu dependensi yang lambat tidak menghabiskan semuanya. Dengan satu dependensi, tidak ada yang dipisahkan — yang dibutuhkan hanya batas dan timeout.
+- **Partisi yang terlalu banyak.** Sepuluh bulkhead masing-masing berkapasitas dua berarti tidak satu pun punya kapasitas memadai saat lonjakan normal, dan Anda menciptakan kemacetan yang sebelumnya tidak ada.
+- **Bulkhead tanpa timeout.** Membatasi **jumlah** tidak membatasi **durasi**. Sepuluh slot yang semuanya menggantung tetap berarti jalur itu mati — hanya dengan angka yang lebih rapi.
+- **Sebagai pengganti perbaikan hilir yang lambat.** Ia membatasi luas kerusakan, bukan menghilangkan penyebabnya. Bila hilir selalu lambat, bulkhead hanya membuat kegagalannya lebih sopan.
+- **Dengan ukuran partisi yang ditebak.** Angkanya harus diturunkan dari kapasitas hilir dan target latensi. Angka bulat yang enak dilihat bukan dasar yang sah.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Satu dependensi lambat menjatuhkan semua jalur | apakah bulkhead terpasang | Sumber daya dibagi tanpa isolasi |
+| Permintaan ditolak padahal sistem tidak sibuk | ukuran partisi | Partisi terlalu kecil untuk beban normal |
+| Slot penuh tapi tidak ada kemajuan | durasi pemakaian slot | Tidak ada timeout; slot tertahan selamanya |
+| Waktu tunggu slot mendominasi latensi | rasio tunggu vs kerja | Kapasitas hilir yang jadi batas, bukan bulkhead |
+| Bulkhead tidak pernah penuh | ukuran vs trafik nyata | Partisi terlalu longgar; tidak melindungi apa pun |
+
+```bash
+curl -s localhost:9090/metrics | grep -E 'bulkhead_(active|rejected_total|wait_seconds)'
+
+# Aktifkan dulu: runtime.SetBlockProfileRate(1)
+go tool pprof -top http://localhost:6060/debug/pprof/block
+
+# Goroutine yang mengantre semaphore
+curl -s 'localhost:6060/debug/pprof/goroutine?debug=1' | grep -i -B2 -A3 semaphore
 ```

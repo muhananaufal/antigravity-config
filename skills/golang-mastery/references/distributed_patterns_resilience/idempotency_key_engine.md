@@ -1,5 +1,7 @@
 # Idempotency Key Engine
 
+> **Berlaku:** Go 1.21+ · PostgreSQL 14+ / Redis 7+ · **Lihat juga:** `distributed_patterns_resilience/retry_backoff_jitter.md` · `distributed_patterns_resilience/outbox_pattern_transactional.md` · `db_sqlc/acid_transactions_isolation.md` · `microservices_grpc/webhook_delivery_engine.md`
+
 ## 1. Konsep & Internal
 
 Dalam sistem terdistribusi, komunikasi jaringan sering kali mengalami kegagalan *transient* (misal: *timeout*, koneksi terputus). Ketika sebuah klien (seperti aplikasi *mobile* atau *microservice* lain) gagal menerima respons, ia sering kali melakukan *retry* (coba ulang).
@@ -291,4 +293,38 @@ func TestIdempotencyEngine_KeyMismatch(t *testing.T) {
 		t.Fatalf("Should not proceed")
 	}
 }
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **Kunci yang dibuat server.** Kunci WAJIB berasal dari klien dan bertahan lintas percobaan. Kunci yang dibuat server berubah pada setiap permintaan dan karena itu tidak menyaring apa pun.
+- **Menyimpan hasil tanpa masa berlaku.** Tabelnya tumbuh selamanya dan pencariannya melambat. Tetapkan retensi yang lebih panjang daripada jendela retry klien, lalu bersihkan terjadwal.
+- **Idempotensi berbasis hash body.** Dua permintaan yang sah dan kebetulan identik — misalnya dua transfer Rp50.000 berturut-turut — akan digabung menjadi satu. Itu bukan deduplikasi, itu kehilangan transaksi.
+- **Mencatat kunci di luar transaksi yang mengubah data.** Bila keduanya tidak atomik, ada celah di mana operasinya sudah terjadi tetapi kuncinya belum tercatat — dan percobaan berikutnya mengulanginya.
+- **Sebagai pengganti penguncian.** Idempotensi menjamin "tidak dua kali", bukan "tidak bersamaan". Dua permintaan serentak dengan kunci sama tetap membutuhkan constraint unik atau penguncian baris.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Efek ganda meski idempotensi terpasang | apakah kunci dicatat dalam transaksi yang sama | Ada celah antara eksekusi dan pencatatan kunci |
+| Tabel kunci membengkak | umur baris tertua | Tidak ada pembersihan |
+| Banyak baris berstatus "sedang diproses" | umur baris tersebut | Proses mati di tengah; butuh pemulihan otomatis |
+| Permintaan sah ditolak sebagai duplikat | dasar penentuan duplikat | Deduplikasi berbasis isi, bukan kunci klien |
+| `409` melonjak saat klien melakukan retry | perilaku klien | Kunci tidak dipertahankan lintas percobaan |
+
+```sql
+-- Pertumbuhan dan umur: kalau baris tertua berumur bulanan, pembersihan tidak jalan
+SELECT count(*) AS jumlah, min(dibuat_pada) AS tertua,
+       pg_size_pretty(pg_total_relation_size('idempotency_key')) AS ukuran
+FROM idempotency_key;
+
+-- Baris yang tersangkut: proses mati sebelum menyelesaikan operasi
+SELECT status, count(*) FROM idempotency_key GROUP BY 1;
+SELECT * FROM idempotency_key
+WHERE status = 'diproses' AND dibuat_pada < now() - interval '10 minutes' LIMIT 20;
+```
+
+```bash
+curl -s localhost:9090/metrics | grep -E 'idempotency_(hit|miss|conflict)_total'
 ```

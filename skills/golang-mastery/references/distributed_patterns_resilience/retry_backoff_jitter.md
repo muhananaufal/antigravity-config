@@ -1,5 +1,7 @@
 # Retry dengan Exponential Backoff + Jitter
 
+> **Berlaku:** Go 1.21+ · `cenkalti/backoff/v4` · **Lihat juga:** `observability_resilience/circuit_breaker_hystrix.md` · `distributed_patterns_resilience/idempotency_key_engine.md` · `microservices_grpc/http_client_production.md` · `distributed_patterns_resilience/bulkhead_isolation.md`
+
 ## 1. Konsep & Internal
 
 Dalam lingkungan *cloud-native*, kesalahan jaringan (transient errors) seperti *packet loss*, *timeout* sementara, atau latensi *spike* tidak dapat dihindari. Melakukan panggilan ulang (*retry*) ke layanan yang gagal sangat krusial. 
@@ -284,4 +286,33 @@ func TestDoWithRetry_NoRetryOnNonTransient(t *testing.T) {
 		t.Fatalf("expected to fail fast on first attempt for non-transient, got %d attempts", attempts)
 	}
 }
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **Pada operasi non-idempoten tanpa idempotency key.** Permintaan yang sebenarnya sudah sampai — hanya responsnya yang hilang di jaringan — akan dieksekusi dua kali. Pada pembayaran, itu uang pelanggan.
+- **Pada galat yang pasti tidak akan berubah.** `400`, `401`, `403`, `404`, dan kegagalan validasi tidak menjadi benar karena diulang. Mengulanginya hanya membakar kuota dan menunda kegagalan yang sudah pasti.
+- **Tanpa jitter.** Semua klien yang gagal pada detik yang sama akan mencoba lagi pada detik yang sama. Backoff eksponensial tanpa jitter menghasilkan gelombang serempak yang menjaga hilir tetap mati.
+- **Berlapis di beberapa tingkat.** Klien HTTP retry 3×, service mesh retry 3×, pemanggil retry 3× — itu 27 permintaan untuk satu operasi logis, tepat ketika hilir paling tidak sanggup menerimanya.
+- **Dengan total waktu melebihi deadline pemanggil.** Pemanggil sudah pergi; percobaan berikutnya hanya membebani hilir tanpa ada yang menerima hasilnya. Anggaran retry WAJIB muat di dalam sisa deadline.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Trafik ke hilir jauh melebihi trafik masuk | rasio permintaan keluar/masuk | Retry berlapis mengalikan beban |
+| Hilir tidak pernah pulih setelah gangguan singkat | apakah ada jitter | Gelombang serempak menghantam terus-menerus |
+| Efek ganda di sistem penerima | idempotency key | Retry pada operasi yang tidak idempoten |
+| Latensi p99 melonjak berlipat dari p50 | jumlah percobaan per permintaan | Retry menambah waktu, bukan mengurangi kegagalan |
+| Retry pada galat `4xx` | klasifikasi galat | Galat permanen ikut diulang |
+
+```bash
+curl -s localhost:9090/metrics | grep -E 'retry_(attempts|exhausted)_total'
+
+# Sebaran jumlah percobaan: puncak di angka maksimum berarti retry sia-sia
+kubectl logs -l app=api --since=1h | jq -r 'select(.percobaan) | .percobaan' | sort -n | uniq -c
+
+# PromQL untuk mendeteksi retry berlapis:
+#   sum(rate(http_client_requests_total[5m])) / sum(rate(http_server_requests_total[5m]))
+#   nilai jauh di atas 1 berarti satu permintaan masuk menghasilkan banyak keluar
 ```

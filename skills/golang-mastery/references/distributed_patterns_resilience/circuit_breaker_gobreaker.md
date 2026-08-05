@@ -1,5 +1,7 @@
 # Circuit Breaker Pattern dalam Go (sony/gobreaker)
 
+> **Berlaku:** Go 1.21+ · `sony/gobreaker` · **Lihat juga:** `observability_resilience/circuit_breaker_hystrix.md` · `distributed_patterns_resilience/retry_backoff_jitter.md` · `distributed_patterns_resilience/bulkhead_isolation.md` · `microservices_grpc/http_client_production.md`
+
 ## 1. Konsep & Internal
 
 Dalam sistem terdistribusi, kegagalan adalah hal yang pasti. Ketika sebuah service memanggil downstream service yang sedang mengalami degradasi (lambat atau *timeout*), terus-menerus mengirim request akan:
@@ -333,4 +335,34 @@ func TestCircuitBreaker_StateTransitions(t *testing.T) {
 		t.Fatalf("expected state CLOSED, got %v", cb.State())
 	}
 }
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **`ReadyToTrip` berbasis jumlah galat mutlak.** Lima galat berarti hal yang sangat berbeda pada 10 permintaan dan pada 10.000. Pakai rasio kegagalan, **dengan** syarat jumlah minimum agar tidak trip karena tiga permintaan pertama kebetulan gagal.
+- **Satu instans `CircuitBreaker` untuk beberapa host atau endpoint.** Hitungannya bercampur, sehingga host yang sehat ikut diputus karena tetangganya sakit. Satu breaker per dependensi logis.
+- **`MaxRequests` dibiarkan nol pada half-open.** Nilai nol berarti hanya **satu** permintaan yang diizinkan menguji. Untuk hilir yang butuh beberapa permintaan agar terbukti sehat, pemulihannya menjadi sangat lambat atau tidak pernah terjadi.
+- **Menghitung `context.Canceled` dan `DeadlineExceeded` milik pemanggil sebagai kegagalan hilir.** Klien yang pergi bukan bukti bahwa hilir sakit — dan memperlakukannya begitu akan memutus dependensi yang sebenarnya baik-baik saja.
+- **Breaker tanpa `OnStateChange` yang mencatat.** Perubahan keadaan yang tidak tercatat membuat insiden tidak bisa direkonstruksi: Anda tahu ada yang gagal, tapi tidak tahu kapan breaker membuka dan berapa lama.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Breaker trip pada trafik rendah | syarat jumlah minimum | Ambang mutlak tanpa batas bawah permintaan |
+| Host sehat ikut diputus | jumlah instans breaker | Satu breaker dipakai untuk banyak host |
+| Breaker terbuka sangat lama | `MaxRequests` pada half-open | Terlalu sedikit permintaan uji untuk membuktikan pemulihan |
+| Breaker terbuka saat klien banyak membatalkan | klasifikasi galat context | Pembatalan pemanggil dihitung sebagai kegagalan |
+| Insiden tidak bisa direkonstruksi | log `OnStateChange` | Perubahan keadaan tidak dicatat |
+
+```bash
+# Catat OnStateChange sebagai log terstruktur, lalu rekonstruksi lini masanya
+kubectl logs -l app=api --since=6h \
+  | jq -r 'select(.msg=="cb_state") | "\(.waktu) \(.nama) \(.dari)->\(.ke)"' | tail -40
+
+# Berapa sering tiap breaker berpindah keadaan
+kubectl logs -l app=api --since=24h \
+  | jq -r 'select(.msg=="cb_state") | .nama' | sort | uniq -c | sort -rn
+
+curl -s localhost:9090/metrics | grep -E 'gobreaker|circuit_breaker_(state|requests)'
 ```

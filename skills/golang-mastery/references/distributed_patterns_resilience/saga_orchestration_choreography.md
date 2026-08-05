@@ -1,5 +1,7 @@
 # Saga Pattern: Orchestration vs Choreography
 
+> **Berlaku:** Go 1.21+ · **Lihat juga:** `distributed_patterns_resilience/outbox_pattern_transactional.md` · `distributed_patterns_resilience/temporal_workflow_engine.md` · `distributed_patterns_resilience/idempotency_key_engine.md` · `db_sqlc/acid_transactions_isolation.md`
+
 ## 1. Konsep & Internal
 
 Dalam arsitektur *microservices*, transaksi bisnis yang mencakup beberapa layanan tidak bisa lagi menggunakan *Distributed Transaction* tradisional (seperti 2-Phase Commit / 2PC) karena dapat memblokir basis data, tidak skalabel, dan mengurangi *availability* (Hukum Brewer / CAP Theorem).
@@ -292,4 +294,37 @@ func TestOrchestrator_CompensationFailure(t *testing.T) {
 		t.Fatalf("Expected critical error format, got %v", err)
 	}
 }
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **Bila seluruh langkah berada di satu database.** Transaksi ACID biasa jauh lebih sederhana, benar-benar atomik, dan tidak butuh kompensasi. Saga adalah jawaban untuk batas yang **tidak bisa** dilewati satu transaksi — bukan gaya arsitektur yang dipilih karena terdengar modern.
+- **Tanpa kompensasi yang benar-benar bisa dijalankan.** "Batalkan pengiriman" untuk paket yang sudah berada di truk bukan kompensasi. Urutkan langkah sehingga yang tidak bisa dibatalkan berada paling akhir.
+- **Choreography untuk alur berlangkah banyak.** Tidak ada satu tempat pun yang mengetahui keadaan keseluruhan; menelusuri satu kegagalan berarti membaca log lima layanan dan menyusun urutannya sendiri.
+- **Tanpa penyimpanan keadaan yang durabel.** Proses yang mati di tengah harus bisa melanjutkan dari titik terakhir. Keadaan yang hanya ada di memori berarti saga menggantung selamanya tanpa ada yang tahu.
+- **Menjanjikan isolasi.** Saga tidak punya isolasi: keadaan antara terlihat oleh pembaca lain. Bila itu tidak bisa diterima secara bisnis, desainnya yang harus berubah — bukan dokumentasinya.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Saga menggantung berjam-jam | umur instans berstatus berjalan | Proses mati dan tidak ada yang melanjutkan |
+| Kompensasi gagal berulang | apakah kompensasi idempoten | Kompensasi yang gagal separuh tidak bisa diulang |
+| Data tampak setengah jadi bagi pengguna | langkah mana yang sudah selesai | Ketiadaan isolasi terlihat oleh pengguna |
+| Sulit menelusuri kegagalan | choreography vs orchestration | Tidak ada satu tempat yang memegang keadaan |
+| Langkah terakhir sering gagal | urutan langkah | Operasi yang tidak bisa dikompensasi terlalu awal |
+
+```sql
+-- Saga yang tersangkut: ini yang WAJIB dipantau, bukan hanya tingkat kegagalan
+SELECT status, count(*), min(dimulai_pada) AS tertua
+FROM saga_instance GROUP BY 1;
+
+SELECT id, jenis, langkah_sekarang, now() - dimulai_pada AS umur
+FROM saga_instance
+WHERE status = 'berjalan' AND dimulai_pada < now() - interval '1 hour'
+ORDER BY dimulai_pada LIMIT 20;
+
+-- Langkah mana yang paling sering gagal, dan kompensasinya berhasil atau tidak
+SELECT langkah, status, count(*) FROM saga_step
+WHERE status IN ('gagal','kompensasi_gagal') GROUP BY 1,2 ORDER BY 3 DESC;
 ```

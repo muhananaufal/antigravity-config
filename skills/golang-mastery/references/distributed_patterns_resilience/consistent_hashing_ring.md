@@ -1,5 +1,7 @@
 # Consistent Hashing Ring
 
+> **Berlaku:** Go 1.21+ · **Lihat juga:** `db_sqlc/sharding_partitioning.md` · `caching_strategy/multilevel_cache_l1l2.md` · `distributed_patterns_resilience/multi_tenancy_isolation.md` · `concurrency/distributed_locks_redis.md`
+
 ## 1. Konsep & Internal
 
 Dalam sistem terdistribusi, kita sering kali perlu mendistribusikan data atau *traffic* secara merata ke dalam sebuah kluster *server* (misal: Redis Cache, *Database Sharding*, atau *Load Balancing* lengket).
@@ -415,4 +417,35 @@ func TestConsistentHash_Distribution(t *testing.T) {
 		}
 	}
 }
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **Untuk sharding database.** Rebalancing memindahkan baris **acak**, dan Anda tidak bisa memeriksa mana yang pindah sebelum beralih. Peta logical shard yang eksplisit memberi kendali yang tidak dimiliki ring — lihat `db_sqlc/sharding_partitioning.md`.
+- **Tanpa virtual node.** Dengan sedikit node fisik, sebaran titik di ring sangat timpang; satu node bisa memegang tiga kali beban tetangganya tanpa ada yang salah dalam kodenya.
+- **Dengan fungsi hash yang tidak stabil antar proses.** Setiap instans akan memetakan kunci yang sama ke node berbeda. `maphash` — yang benihnya acak per proses — tidak boleh dipakai di sini.
+- **Ketika daftar node berubah sangat sering.** Setiap perubahan memindahkan sebagian kunci. Pada armada yang autoscale agresif, hit rate cache tidak pernah sempat stabil.
+- **Sebagai jaminan penempatan.** Consistent hashing **meminimalkan** perpindahan, bukan meniadakannya. Data yang benar-benar tidak boleh berpindah membutuhkan pemetaan eksplisit.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Satu node jauh lebih sibuk | sebaran kunci antar node | Virtual node terlalu sedikit |
+| Hit rate cache anjlok setelah scaling | jumlah kunci yang berpindah | Perubahan topologi memindahkan kunci |
+| Kunci yang sama dilayani node berbeda | fungsi hash yang dipakai | Hash tidak stabil antar proses |
+| Hit rate tidak pernah stabil | frekuensi perubahan node | Autoscaling terlalu agresif untuk pola ini |
+| Node yang dihapus masih menerima trafik | pembaruan daftar node | Ring tidak disinkronkan di semua klien |
+
+```bash
+# Sebaran beban antar node: ini bukti paling langsung apakah ring seimbang
+kubectl top pods -l app=cache
+
+# Jumlah kunci per node (Redis Cluster)
+redis-cli --cluster check localhost:6379 | grep -E 'slots|keys'
+
+curl -s localhost:9090/metrics | grep -E 'ring_(nodes|vnodes|keys_moved_total)'
+
+# Hit rate sebelum dan sesudah perubahan topologi
+redis-cli info stats | grep -E 'keyspace_hits|keyspace_misses'
 ```
