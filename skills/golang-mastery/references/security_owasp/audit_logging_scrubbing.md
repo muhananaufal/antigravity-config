@@ -11,7 +11,17 @@ Data *Audit Log* sangat penting untuk keamanan sistem, memfasilitasi forensik sa
 3. **Structured JSON Logs**: Log mentah (string concat) mustahil disaring atau diagregasi oleh SIEM. Setiap record log harus menjadi JSON yang ketat.
 4. **Log Tampering & Immutable Audit Trails**: Jika *attacker* memegang akses *root* server, hal pertama yang dilakukan adalah menghapus atau mengedit file log (*covering tracks*). Anda membutuhkan mekanisme *Forward Secrecy* pada log, sering diimplementasikan via:
    - Pengiriman *UDP syslog* ke server *append-only* terpisah (Write-Once Read-Many/WORM storage).
-   - **Cryptographic Hash Chaining**: Tiap baris log menyimpan nilai hash *HMAC-SHA256* yang merupakan hasil persilangan data log saat ini dengan nilai hash *dari baris log sebelumnya*. Mirip struktur *Blockchain*, jika attacker mengedit satu baris saja di tengah file log, seluruh *hash* pada baris-baris setelahnya akan rusak.
+   - **Cryptographic Hash Chaining**: tiap baris menyimpan HMAC-SHA256 atas isi baris itu **beserta hash baris sebelumnya**. Mengubah satu baris di tengah merusak seluruh hash sesudahnya.
+
+   Tiga syarat yang menentukan apakah rantai itu benar-benar melindungi sesuatu — dan ketiganya mudah terlewat:
+
+   | Syarat | Bila dilanggar |
+   | :--- | :--- |
+   | Seluruh ruas yang mengikat ikut ditandatangani, **termasuk timestamp** | Waktu kejadian bisa dipindahkan bebas tanpa merusak rantai — dan dalam forensik, "kapan" sering merupakan seluruh pertanyaannya |
+   | Tiap ruas diberi **awalan panjang** sebelum di-MAC | `("A","BC")` dan `("AB","C")` menghasilkan masukan MAC yang identik; dua peristiwa berbeda bisa punya hash yang sama |
+   | **Nomor urut** disimpan di tiap entri | Penghapusan entri di tengah menghasilkan rantai yang tetap konsisten bila hanya hash yang diperiksa |
+
+   Dan satu keterbatasan yang harus diketahui sejak awal: **rantai hash tidak mendeteksi pemotongan.** Penyerang yang membuang N entri **terakhir** meninggalkan rantai yang sempurna valid — dan itulah justru yang akan ia lakukan, karena jejaknya ada di ujung. Satu-satunya jawaban adalah menerbitkan *checkpoint* (nilai hash kepala beserta nomor urutnya) secara berkala ke penyimpanan lain yang tidak dikuasai penyerang yang sama.
 
 ## 2. Diagram ASCII: Alur Audit Trail & Immutable Chaining
 
@@ -91,8 +101,18 @@ func WriteLogVulnerable(msg string) {
 ## 4. Edge Cases & Defensive Programming Khusus Go
 
 1. **Panic Data Leakage di Stack Trace**: Saat Go mengalami `panic()`, *runtime* mencetak *stack trace* ke *stderr*. Parameter fungsi (misal pointer ke struct kredensial) akan ikut dicetak dalam bentuk heksadesimal atau plain string. Jangan lewatkan obyek kredensial murni antar layer, *override* fungsi `String()` pada tipe struct sensitif Anda.
-2. **Kinerja CPU pada Scrubbing Regex**: Menjalankan regular expression yang rumit pada setiap byte JSON (misal payload berukuran 5MB) pada kecepatan 10.000 Request/detik akan membuat CPU Go Anda hangus (99% usage). Terapkan *Scrubbing* pada *Key Map* level, bukan string regex level, dan batasi ukuran log payload yang diproses (*truncate max 2000 chars*).
-3. **Konkurensi & Mutex pada HMAC Chain**: Perhitungan Chaining harus berurutan (*Sequential*). Di Go, *Goroutine* API handler sifatnya konkuren (paralel). Jika dua API handler berjalan bersamaan, perebutan variabel `PrevHash` (Race Condition) akan menghancurkan rantai hash. Pastikan penulisan rantai dilindungi oleh `sync.Mutex` atau gunakan arsitektur saluran (*Channel Actor Model*) di background.
+2. **Kinerja Scrubbing — tetapi penyaringan nama saja TIDAK cukup**: menjalankan regex rumit atas payload 5 MB pada 10.000 rps memang membakar CPU. Urutan yang benar bukan "pakai nama field saja", melainkan: **saring nama field dulu** (murah, O(jumlah kunci)), **potong nilai** ke batas wajar (2000 karakter), lalu **jalankan pola nilai pada sisa yang sudah pendek**. Dengan urutan itu, regex hanya pernah melihat string kecil.
+
+   Menghapus langkah pola nilai sepenuhnya adalah persis yang dilarang bagian "Kapan JANGAN Pakai Ini" di berkas ini, dan yang didaftarkan tabel deteksi sebagai penyebab "rahasia ditemukan di sistem log": rahasia berpindah field, dan field baru muncul tanpa penyaringnya pernah tahu. Nama field melindungi dari kelalaian yang sudah Anda antisipasi; pola nilai melindungi dari yang belum.
+
+   Satu detail kecil yang merusak bukti: potonglah pada batas **rune**, bukan byte. `v[:512]` memotong rune multi-byte di tengah, dan UTF-8 yang tidak valid diganti `U+FFFD` saat encoding JSON — isi log berubah diam-diam, dan pada log audit isi yang berubah berarti bukti yang rusak.
+3. **Konkurensi & Mutex pada HMAC Chain**: perhitungan rantai harus berurutan, sementara handler API berjalan konkuren; perebutan `PrevHash` menghancurkan rantainya. Lindungi dengan `sync.Mutex`.
+
+   Yang sering ikut salah: **jangan menahan kunci itu selama I/O sink.** Menulis ke Elasticsearch atau disk di dalam kunci rantai menyerialkan seluruh pencatatan audit di belakang tulisan paling lambat, dan pada laju tinggi audit logging berubah menjadi penyempitan layanan — yang pada gilirannya membuat orang tergoda mematikannya. Hitung rantainya di dalam kunci (mikrodetik), lalu serahkan entri ke sink di luar kunci.
+
+4. **Kunci HMAC tidak boleh menjadi bagian dari rantai yang diterbitkan.** Kesalahan yang paling mudah dilakukan dan paling fatal adalah menjadikan hash akar sebagai turunan langsung dari kunci — misalnya `lastHash = hex(secretKey)`. Nilai itu terbit sebagai `prev_hash` pada entri pertama, sehingga **kunci HMAC tercetak polos di baris log pertama**, dan siapa pun yang bisa membaca log audit dapat memalsukan seluruh rantai. Titik awal rantai harus nilai publik yang memang tidak rahasia.
+
+5. **Rantai per proses bukan rantai per sistem.** Setiap replika memelihara rantainya sendiri, dan restart memulai rantai baru. Sertakan pengenal aliran (`idAliran`) di hash akar agar rantai antar-replika tidak tertukar, dan simpan checkpoint kepala per aliran — tanpa itu, "rantai valid" hanya berarti valid menurut proses yang kebetulan sedang berjalan.
 
 ## 5. Production-Ready Go Code
 
@@ -105,181 +125,423 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
-	"testing"
 	"time"
+	"unicode/utf8"
 )
 
-// AuditEvent merepresentasikan skema standar SIEM log
+var (
+	ErrRantaiPutus    = errors.New("rantai audit terputus")
+	ErrHashTidakCocok = errors.New("hash tidak cocok: entri telah diubah")
+	ErrUrutanLoncat   = errors.New("nomor urut melompat: ada entri yang dihapus")
+)
+
+const batasNilai = 2000 // sesuai Kasus Tepi 2
+
 type AuditEvent struct {
-	Timestamp   string            `json:"ts"`
-	Action      string            `json:"action"`
-	ActorID     string            `json:"actor_id"`
-	Payload     map[string]string `json:"payload"`
-	PrevHash    string            `json:"prev_hash"`
-	CurrentHash string            `json:"hash"`
+	// Seq menutup celah yang tidak bisa ditutup rantai hash: penghapusan
+	// entri di TENGAH menghasilkan rantai yang tetap konsisten bila hanya
+	// hash yang diperiksa. Nomor urut membuat lubangnya terlihat.
+	Seq       uint64            `json:"seq"`
+	Timestamp string            `json:"ts"`
+	Action    string            `json:"action"`
+	ActorID   string            `json:"actor_id"`
+	// Hasil ada karena percobaan yang GAGAL adalah sinyal paling berharga
+	// saat investigasi. Bagian "Kapan JANGAN Pakai Ini" menuntutnya dan
+	// perintah bash di bawah menyaring `.hasil` — field yang sebelumnya
+	// tidak pernah dipancarkan kode mana pun.
+	Hasil    string            `json:"hasil"` // "sukses" | "gagal"
+	Payload  map[string]string `json:"payload"`
+	PrevHash string            `json:"prev_hash"`
+	Hash     string            `json:"hash"`
 }
 
-// engine global state (untuk sinkronisasi chaining hash)
-type SecureLogger struct {
-	mu        sync.Mutex
-	lastHash  string
-	hmacKey   []byte
-	logSink   []AuditEvent // Simulasi I/O output (misal write ke Elasticsearch)
+// hashAkar adalah titik awal rantai.
+//
+// Ia TIDAK BOLEH diturunkan dari kunci HMAC. Versi sebelumnya menyetel
+// `lastHash = hex.EncodeToString(secretKey)`, dan nilai itu ditulis ke
+// keluaran sebagai `prev_hash` pada entri PERTAMA — artinya **kunci HMAC
+// diterbitkan dalam bentuk polos di baris log pertama**. Siapa pun yang bisa
+// membaca log audit — dan log audit dibaca banyak orang — bisa memalsukan
+// seluruh rantai sejak awal. Titik awal yang benar adalah nilai publik yang
+// memang tidak rahasia.
+func hashAkar(idAliran string) string {
+	h := sha256.Sum256([]byte("audit-chain-root:" + idAliran))
+	return hex.EncodeToString(h[:])
 }
 
-// NewSecureLogger membuat logger dengan base root hash dari Vault Key
-func NewSecureLogger(secretKey []byte) *SecureLogger {
-	return &SecureLogger{
-		lastHash: hex.EncodeToString(secretKey),
-		hmacKey:  secretKey,
-		logSink:  make([]AuditEvent, 0),
+// hitungHash menghitung HMAC atas SELURUH ruas yang mengikat, dengan awalan
+// panjang di setiap ruas.
+//
+// Dua koreksi kriptografis terhadap versi sebelumnya:
+//
+//  1. **Timestamp ikut ditandatangani.** Sebelumnya tidak — sehingga penyerang
+//     dapat memindahkan waktu kejadian mana pun tanpa merusak rantai. Dalam
+//     forensik, "kapan" sering merupakan seluruh pertanyaannya; memindahkan
+//     satu aksi keluar dari jendela insiden sudah cukup untuk menghapus
+//     kaitannya.
+//
+//  2. **Setiap ruas diawali panjangnya.** Penulisan berurutan tanpa pembatas
+//     bersifat ambigu: `action="A", actor="BC"` menghasilkan masukan MAC yang
+//     IDENTIK dengan `action="AB", actor="C"`. Penyerang yang bisa memengaruhi
+//     dua ruas bersebelahan dapat menyusun peristiwa berbeda dengan hash yang
+//     sama persis — dan verifikasi akan menyatakannya sah.
+func hitungHash(kunci []byte, e AuditEvent) (string, error) {
+	// json.Marshal atas map[string]string mengurutkan kunci, sehingga
+	// keluarannya deterministik. Itu SYARAT, bukan kebetulan: begitu Payload
+	// berubah menjadi tipe yang serialisasinya tidak stabil, verifikasi akan
+	// gagal untuk data yang sebenarnya utuh.
+	payload, err := json.Marshal(e.Payload)
+	if err != nil {
+		// Galat ini TIDAK boleh dibuang. Marshal yang gagal menghasilkan
+		// masukan MAC yang lebih pendek: hash tetap terbentuk, dan
+		// perlindungannya diam-diam berkurang.
+		return "", fmt.Errorf("marshal payload: %w", err)
 	}
+
+	mac := hmac.New(sha256.New, kunci)
+	var lp [8]byte
+	tulis := func(b []byte) {
+		binary.BigEndian.PutUint64(lp[:], uint64(len(b)))
+		mac.Write(lp[:])
+		mac.Write(b)
+	}
+	binary.BigEndian.PutUint64(lp[:], e.Seq)
+	mac.Write(lp[:])
+	tulis([]byte(e.PrevHash))
+	tulis([]byte(e.Timestamp))
+	tulis([]byte(e.Action))
+	tulis([]byte(e.ActorID))
+	tulis([]byte(e.Hasil))
+	tulis(payload)
+
+	return hex.EncodeToString(mac.Sum(nil)), nil
 }
 
-// scrubPII menyisir struktur Map secara aman (O(N) keys) tanpa Regex mahal
+var kunciSensitif = []string{
+	"password", "sandi", "token", "secret", "rahasia", "ssn", "nik",
+	"credit_card", "kartu", "cvv", "authorization", "api_key",
+}
+
+// polaNilaiRahasia menangkap rahasia dari BENTUKNYA, bukan dari nama fieldnya.
+//
+// Penyaringan berbasis nama saja adalah yang dilarang bagian "Kapan JANGAN
+// Pakai Ini" di berkas ini, dan yang didaftarkan tabel deteksi sebagai
+// penyebab "rahasia ditemukan di sistem log" — tetapi versi sebelumnya hanya
+// melakukan itu. Rahasia berpindah field, dan field baru muncul tanpa
+// penyaringnya pernah tahu.
+var polaNilaiRahasia = regexp.MustCompile(
+	`sk_live_[0-9A-Za-z]+|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|` +
+		`eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]+|-----BEGIN [A-Z ]*PRIVATE KEY-----|` +
+		`\b[45][0-9]{15}\b`)
+
+func namaSensitif(k string) bool {
+	rendah := strings.ToLower(k)
+	for _, s := range kunciSensitif {
+		if strings.Contains(rendah, s) {
+			return true
+		}
+	}
+	return false
+}
+
 func scrubPII(data map[string]string) map[string]string {
-	sensitiveKeys := []string{"password", "token", "ssn", "secret", "credit_card", "cvv"}
-	scrubbed := make(map[string]string, len(data))
-
+	hasil := make(map[string]string, len(data))
 	for k, v := range data {
-		isSensitive := false
-		lowerK := strings.ToLower(k)
-		for _, sk := range sensitiveKeys {
-			if strings.Contains(lowerK, sk) {
-				isSensitive = true
-				break
-			}
+		if namaSensitif(k) {
+			hasil[k] = "[REDACTED]"
+			continue
 		}
-
-		if isSensitive {
-			scrubbed[k] = "[REDACTED]"
-		} else {
-			// Limit panjang string untuk mencegah OOM saat SIEM menelan log raksasa
-			if len(v) > 512 {
-				scrubbed[k] = v[:512] + "...[TRUNCATED]"
-			} else {
-				scrubbed[k] = v
-			}
-		}
+		hasil[k] = potongAman(polaNilaiRahasia.ReplaceAllString(v, "[REDACTED]"))
 	}
-	return scrubbed
+	return hasil
 }
 
-// LogEvent melakukan masking data dan merekatkan hash kriptografis log ke chain sebelumnya
-func (s *SecureLogger) LogEvent(ctx context.Context, action, actor string, payload map[string]string) error {
+// potongAman memotong pada batas RUNE, bukan byte.
+//
+// `v[:512]` memotong di tengah rune multi-byte dan menghasilkan UTF-8 tidak
+// valid. Go menggantinya dengan U+FFFD saat encoding JSON, sehingga isinya
+// rusak diam-diam — dan pada log audit, isi yang rusak berarti bukti yang
+// rusak. (Versi sebelumnya juga memakai 512 sementara prosanya menyebut 2000.)
+func potongAman(s string) string {
+	if len(s) <= batasNilai {
+		return s
+	}
+	potong := s[:batasNilai]
+	for len(potong) > 0 && !utf8.ValidString(potong) {
+		potong = potong[:len(potong)-1]
+	}
+	return potong + "...[TRUNCATED]"
+}
+
+// Sink menulis entri ke penyimpanan audit.
+//
+// Ia dipanggil DI LUAR kunci rantai. Menahan kunci selama I/O jaringan
+// menyerialkan seluruh pencatatan audit di belakang tulisan paling lambat —
+// dan pada laju tinggi itu menjadikan audit logging sebagai penyempitan
+// layanan, yang pada gilirannya membuat orang tergoda mematikannya.
+type Sink interface {
+	Tulis(ctx context.Context, e AuditEvent) error
+}
+
+type SecureLogger struct {
+	mu       sync.Mutex
+	seq      uint64
+	lastHash string
+	hmacKey  []byte
+	sink     Sink
+}
+
+func NewSecureLogger(kunciHMAC []byte, idAliran string, sink Sink) *SecureLogger {
+	return &SecureLogger{
+		lastHash: hashAkar(idAliran),
+		hmacKey:  kunciHMAC,
+		sink:     sink,
+	}
+}
+
+func (s *SecureLogger) LogEvent(ctx context.Context, action, actor, hasil string, payload map[string]string) error {
 	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("context timeout: %w", err)
+		return fmt.Errorf("context batal: %w", err)
 	}
 
-	scrubbedData := scrubPII(payload)
+	bersih := scrubPII(payload)
 
-	// Lock mutex memastikan strict ordering event agar HashChain valid.
-	// Di environment High-Throughput, gunakan background worker (Go Channel)
+	// Hanya bagian yang WAJIB berurutan yang dikerjakan di dalam kunci.
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	event := AuditEvent{
+	s.seq++
+	e := AuditEvent{
+		Seq:       s.seq,
 		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
 		Action:    action,
 		ActorID:   actor,
-		Payload:   scrubbedData,
+		Hasil:     hasil,
+		Payload:   bersih,
 		PrevHash:  s.lastHash,
 	}
+	h, err := hitungHash(s.hmacKey, e)
+	if err != nil {
+		s.seq-- // jangan tinggalkan lubang nomor urut
+		s.mu.Unlock()
+		return err
+	}
+	e.Hash = h
+	s.lastHash = h
+	s.mu.Unlock()
 
-	// Sign data = PrevHash + Action + ActorID + JSON(Payload)
-	mac := hmac.New(sha256.New, s.hmacKey)
-	mac.Write([]byte(event.PrevHash))
-	mac.Write([]byte(event.Action))
-	mac.Write([]byte(event.ActorID))
-	
-	payloadBytes, _ := json.Marshal(event.Payload)
-	mac.Write(payloadBytes)
-
-	event.CurrentHash = hex.EncodeToString(mac.Sum(nil))
-	s.lastHash = event.CurrentHash // Majukan chain-nya
-
-	// (Di environment real, encode ke JSON dan tulis ke disk / stdout)
-	s.logSink = append(s.logSink, event)
-
+	// I/O di luar kunci. Bila penulisan gagal, rantai TETAP maju — sengaja:
+	// entri yang hilang lalu menjadi lubang nomor urut yang TERDETEKSI,
+	// jauh lebih baik daripada rantai yang mulus tetapi diam-diam kehilangan
+	// peristiwa.
+	if err := s.sink.Tulis(ctx, e); err != nil {
+		return fmt.Errorf("tulis entri audit seq %d: %w", e.Seq, err)
+	}
 	return nil
 }
 
-// GetLogs digunakan untuk keperluan simulasi read-only I/O
-func (s *SecureLogger) GetLogs() []AuditEvent {
+// Kepala mengembalikan hash terakhir, untuk diterbitkan sebagai checkpoint.
+func (s *SecureLogger) Kepala() (uint64, string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.logSink
+	return s.seq, s.lastHash
 }
 
-// ==========================================
-// Unit Tests (Testing Security Boundaries)
-// ==========================================
+// Verifikasi memeriksa seluruh rantai.
+//
+// Keterbatasan yang tidak boleh disembunyikan: rantai hash mendeteksi
+// **perubahan**, tetapi TIDAK mendeteksi **pemotongan**. Penyerang yang
+// menghapus N entri TERAKHIR meninggalkan rantai yang sempurna valid — dan
+// itulah justru yang akan ia lakukan, karena jejaknya ada di ujung. Nomor
+// urut menutup lubang di tengah; untuk ujung rantai, satu-satunya jawaban
+// adalah menerbitkan checkpoint (nilai Kepala) secara berkala ke penyimpanan
+// lain yang tidak dikuasai penyerang yang sama.
+func Verifikasi(kunci []byte, idAliran string, rantai []AuditEvent) error {
+	harap := hashAkar(idAliran)
+	for i, e := range rantai {
+		if e.Seq != uint64(i+1) {
+			return fmt.Errorf("%w: entri ke-%d bernomor %d", ErrUrutanLoncat, i, e.Seq)
+		}
+		if e.PrevHash != harap {
+			return fmt.Errorf("%w: entri seq %d", ErrRantaiPutus, e.Seq)
+		}
+		h, err := hitungHash(kunci, e)
+		if err != nil {
+			return fmt.Errorf("entri seq %d: %w", e.Seq, err)
+		}
+		if !hmac.Equal([]byte(h), []byte(e.Hash)) {
+			return fmt.Errorf("%w: entri seq %d", ErrHashTidakCocok, e.Seq)
+		}
+		harap = e.Hash
+	}
+	return nil
+}
+```
 
-func TestAuditLogSecurityBoundaries(t *testing.T) {
+```go
+package audit
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"sync"
+	"testing"
+	"unicode/utf8"
+)
+
+type sinkMemori struct {
+	mu    sync.Mutex
+	entri []AuditEvent
+}
+
+func (s *sinkMemori) Tulis(_ context.Context, e AuditEvent) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.entri = append(s.entri, e)
+	return nil
+}
+
+// Salin mengembalikan SALINAN. Versi sebelumnya mengembalikan slice internal
+// apa adanya, sehingga pemanggil bisa mengubah entri milik logger — dan
+// ujinya memang melakukannya.
+func (s *sinkMemori) Salin() []AuditEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]AuditEvent(nil), s.entri...)
+}
+
+const idAliran = "api-produksi"
+
+var kunciUji = []byte("kunci-hmac-audit-yang-cukup-panjang")
+
+func loggerUji() (*SecureLogger, *sinkMemori) {
+	s := &sinkMemori{}
+	return NewSecureLogger(kunciUji, idAliran, s), s
+}
+
+// Uji terpenting di berkas ini. Versi sebelumnya menyetel hash akar ke
+// hex(kunci HMAC), sehingga kunci itu terbit sebagai prev_hash pada entri
+// pertama — dan seluruh mekanisme anti-tamper runtuh bagi siapa pun yang
+// bisa membaca log.
+func TestKunciHMACTidakPernahMunculDiKeluaran(t *testing.T) {
+	lg, sink := loggerUji()
+	if err := lg.LogEvent(context.Background(), "LOGIN", "usr_1", "sukses", nil); err != nil {
+		t.Fatalf("LogEvent: %v", err)
+	}
+
+	e := sink.Salin()[0]
+	kunciHex := "6b756e63692d686d61632d61756469742d79616e672d63756b75702d70616e6a616e67"
+	for nama, nilai := range map[string]string{"prev_hash": e.PrevHash, "hash": e.Hash} {
+		if strings.Contains(nilai, kunciHex) || strings.Contains(nilai, string(kunciUji)) {
+			t.Fatalf("kunci HMAC bocor lewat %s: %s", nama, nilai)
+		}
+	}
+}
+
+// Timestamp WAJIB ikut ditandatangani. Tanpa itu, penyerang memindahkan waktu
+// kejadian apa pun tanpa merusak rantai.
+func TestPerubahanTimestampTerdeteksi(t *testing.T) {
+	lg, sink := loggerUji()
 	ctx := context.Background()
-	secretKey := []byte("master-secret-vault-key-very-long")
-	logger := NewSecureLogger(secretKey)
-
-	// --- 1. Boundary: Scrubbing Confidential PII ---
-	payload1 := map[string]string{
-		"target_user": "jane_doe",
-		"password":    "janeS3cret!@#", // MUST BE SCRUBBED
-		"token_id":    "eyJhbGc...",    // MUST BE SCRUBBED
-	}
-	_ = logger.LogEvent(ctx, "ADMIN_RESET_PASS", "usr_admin", payload1)
-	
-	logs := logger.GetLogs()
-	if len(logs) == 0 {
-		t.Fatalf("Log not written")
-	}
-	
-	if logs[0].Payload["password"] != "[REDACTED]" {
-		t.Errorf("Password was not redacted! Data leak: %s", logs[0].Payload["password"])
-	}
-	if logs[0].Payload["token_id"] != "[REDACTED]" {
-		t.Errorf("Token was not redacted!")
-	}
-	if logs[0].Payload["target_user"] != "jane_doe" {
-		t.Errorf("Non-sensitive data tampered")
+	for i := 0; i < 3; i++ {
+		if err := lg.LogEvent(ctx, "AKSI", "usr_1", "sukses", nil); err != nil {
+			t.Fatalf("LogEvent: %v", err)
+		}
 	}
 
-	// --- 2. Boundary: Truncating Huge Payload (DOS limit) ---
-	hugeString := strings.Repeat("A", 1000)
-	payload2 := map[string]string{"notes": hugeString}
-	_ = logger.LogEvent(ctx, "UPDATE_NOTES", "usr_admin", payload2)
-
-	logs = logger.GetLogs()
-	if !strings.HasSuffix(logs[1].Payload["notes"], "[TRUNCATED]") {
-		t.Errorf("Huge payload was not truncated")
+	rantai := sink.Salin()
+	if err := Verifikasi(kunciUji, idAliran, rantai); err != nil {
+		t.Fatalf("rantai utuh dinyatakan rusak: %v", err)
 	}
 
-	// --- 3. Boundary: Chain Integrity & Tamper Detection ---
-	// LogEvent memajukan PrevHash dengan benar
-	if logs[1].PrevHash != logs[0].CurrentHash {
-		t.Errorf("Blockchain broken: Event[1].PrevHash (%s) != Event[0].Hash (%s)", logs[1].PrevHash, logs[0].CurrentHash)
+	rantai[1].Timestamp = "2020-01-01T00:00:00Z"
+	if err := Verifikasi(kunciUji, idAliran, rantai); !errors.Is(err, ErrHashTidakCocok) {
+		t.Fatalf("galat = %v, mau ErrHashTidakCocok — timestamp tidak ikut ditandatangani", err)
+	}
+}
+
+// Ruas tanpa awalan panjang bersifat ambigu: ("A","BC") dan ("AB","C")
+// menghasilkan masukan MAC yang identik.
+func TestRuasTidakAmbigu(t *testing.T) {
+	a := AuditEvent{Seq: 1, PrevHash: "p", Timestamp: "t", Action: "A", ActorID: "BC", Hasil: "sukses"}
+	b := AuditEvent{Seq: 1, PrevHash: "p", Timestamp: "t", Action: "AB", ActorID: "C", Hasil: "sukses"}
+
+	ha, err := hitungHash(kunciUji, a)
+	if err != nil {
+		t.Fatalf("hitungHash a: %v", err)
+	}
+	hb, err := hitungHash(kunciUji, b)
+	if err != nil {
+		t.Fatalf("hitungHash b: %v", err)
+	}
+	if ha == hb {
+		t.Fatal("dua peristiwa berbeda menghasilkan hash identik — ruas tidak diberi awalan panjang")
+	}
+}
+
+// Penghapusan di TENGAH terdeteksi lewat nomor urut, bukan lewat hash.
+func TestPenghapusanDiTengahTerdeteksi(t *testing.T) {
+	lg, sink := loggerUji()
+	ctx := context.Background()
+	for i := 0; i < 4; i++ {
+		if err := lg.LogEvent(ctx, "AKSI", "usr_1", "sukses", nil); err != nil {
+			t.Fatalf("LogEvent: %v", err)
+		}
 	}
 
-	// Simulasi Tampering: Hacker mengedit logSink database/stdout di masa depan
-	logs[0].Action = "ADMIN_RESET_PASS_TAMPERED"
+	rantai := sink.Salin()
+	dipotong := append(rantai[:1:1], rantai[2:]...) // buang entri seq 2
+	if err := Verifikasi(kunciUji, idAliran, dipotong); !errors.Is(err, ErrUrutanLoncat) {
+		t.Fatalf("galat = %v, mau ErrUrutanLoncat", err)
+	}
+}
 
-	// Kita bangun ulang hash (Simulasi Audit verifier tools script)
-	mac := hmac.New(sha256.New, secretKey)
-	mac.Write([]byte(logs[0].PrevHash))
-	mac.Write([]byte(logs[0].Action)) // Hacker merubah variabel ini
-	mac.Write([]byte(logs[0].ActorID))
-	pBytes, _ := json.Marshal(logs[0].Payload)
-	mac.Write(pBytes)
-	
-	recalculatedHash := hex.EncodeToString(mac.Sum(nil))
+// Rahasia dikenali dari BENTUK NILAI, bukan hanya dari nama field.
+func TestPenyaringanBerbasisBentukNilai(t *testing.T) {
+	lg, sink := loggerUji()
+	muatan := map[string]string{
+		"password": "rahasia-asli",
+		"catatan":  "kunci deploy: AKIAIOSFODNN7EXAMPLE dan token ghp_" + strings.Repeat("a", 36),
+		"nama":     "jane doe",
+	}
+	if err := lg.LogEvent(context.Background(), "DEPLOY", "usr_1", "sukses", muatan); err != nil {
+		t.Fatalf("LogEvent: %v", err)
+	}
 
-	// Karena teks dirubah, recalculatedHash TIDAK SAMA DENGAN logs[0].CurrentHash
-	if recalculatedHash == logs[0].CurrentHash {
-		t.Fatalf("Tampering protection failed, hash matches despite changes")
+	e := sink.Salin()[0]
+	if e.Payload["password"] != "[REDACTED]" {
+		t.Errorf("field bernama sensitif tidak disamarkan: %q", e.Payload["password"])
+	}
+	// Field bernama "catatan" tidak terdaftar sensitif; hanya penyaringan
+	// berbasis pola yang bisa menangkap isinya.
+	if strings.Contains(e.Payload["catatan"], "AKIAIOSFODNN7EXAMPLE") {
+		t.Errorf("kunci AWS lolos ke log: %q", e.Payload["catatan"])
+	}
+	if strings.Contains(e.Payload["catatan"], "ghp_aaaa") {
+		t.Errorf("token GitHub lolos ke log: %q", e.Payload["catatan"])
+	}
+	if e.Payload["nama"] != "jane doe" {
+		t.Errorf("data non-sensitif ikut berubah: %q", e.Payload["nama"])
+	}
+}
+
+func TestPemotonganAmanUTF8(t *testing.T) {
+	panjang := strings.Repeat("é", batasNilai) // 2 byte per rune
+	hasil := potongAman(panjang)
+
+	if !strings.HasSuffix(hasil, "...[TRUNCATED]") {
+		t.Fatal("nilai panjang tidak dipotong")
+	}
+	inti := strings.TrimSuffix(hasil, "...[TRUNCATED]")
+	if !utf8.ValidString(inti) {
+		t.Fatal("pemotongan menghasilkan UTF-8 tidak valid — bukti audit rusak diam-diam")
 	}
 }
 ```
@@ -301,6 +563,17 @@ func TestAuditLogSecurityBoundaries(t *testing.T) {
 | Audit log bisa dihapus operator | kontrol akses penyimpanan audit | Tidak ada pemisahan kewenangan |
 | Investigasi buntu di percobaan gagal | apakah kegagalan dicatat | Hanya keberhasilan yang diaudit |
 | Biaya penyimpanan log melonjak | apa yang dicatat per permintaan | Seluruh badan permintaan ikut tersimpan |
+| Rantai valid tetapi peristiwa hilang | nomor urut & checkpoint kepala | Pemotongan di ujung tidak terdeteksi rantai hash |
+| Waktu kejadian tidak masuk akal tapi hash cocok | apakah timestamp ikut di-MAC | Ruas waktu di luar cakupan tanda tangan |
+| `prev_hash` entri pertama terlihat seperti kunci | asal hash akar | Kunci HMAC diterbitkan di baris log pertama |
+| Latensi API naik seiring volume audit | apakah I/O sink di dalam kunci rantai | Pencatatan diserialkan di belakang tulisan terlambat |
+
+```bash
+# Rantai hash TIDAK mendeteksi pemotongan di ujung -- bandingkan nomor urut
+# terakhir dengan checkpoint yang diterbitkan ke penyimpanan terpisah.
+kubectl logs -l app=api --since=24h | jq -rs 'map(.seq) | max'
+aws s3 cp s3://audit-checkpoints/api-produksi/latest.json - | jq -r '.seq'
+```
 
 ```bash
 # Deteksi rahasia berdasarkan BENTUK NILAI -- bukan nama field

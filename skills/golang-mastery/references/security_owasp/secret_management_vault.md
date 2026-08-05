@@ -39,7 +39,16 @@ Penyimpanan *secret* (DB password, API Keys AWS) di *source code*, dalam Git (`.
 
 ### ❌ Anti-Pattern 1: Hardcoding Kredensial di `os.Getenv` dan Konstan
 
-**Mengapa berbahaya (Exploit Vector)**: Jika password DB diambil dari `os.Getenv("DB_PASS")` satu kali saat bootup, nilainya tidak bisa dirubah tanpa *restart* (mematikan) aplikasi (*Downtime*). Variabel lingkungan di Linux sangat berisiko bocor saat admin salah mengetik `docker inspect` atau `env` dan melampirkannya di JIRA tiket. 
+**Mengapa berbahaya:** dua masalah berbeda yang sering tercampur, dan keduanya nyata.
+
+**Rotasi.** Nilai yang dibaca sekali saat boot tidak bisa berubah tanpa restart, sehingga kredensial berumur satu jam kehilangan seluruh gunanya.
+
+**Paparan.** Variabel lingkungan jauh lebih terbuka daripada yang disangka orang, dan tidak satu pun jalur di bawah ini melibatkan seseorang yang ceroboh menempel isi `env` ke tiket:
+- `/proc/<pid>/environ` terbaca oleh proses lain dengan UID yang sama di dalam kontainer;
+- seluruh environment **diwariskan ke setiap proses anak** — satu `exec.Command` untuk `pg_dump` menyerahkan semuanya;
+- ia muncul di `kubectl describe pod`, di manifes Deployment, dan sering ikut terkirim ke pelapor galat pihak ketiga yang mengumpulkan "konteks lingkungan" secara otomatis.
+
+Berkas di tmpfs bisa dibatasi izinnya, tidak diwariskan ke proses anak, dan bisa diperbarui tanpa restart.
 
 ```go
 // VULNERABLE: Konstan atau ENV statis selamanya
@@ -52,14 +61,20 @@ func connectDBVulnerable() {
 ```
 
 ```go
-// ✅ GOOD: Mengikat Config dari event file-watcher Vault yang dinamis. 
-func connectDBSafe(cm *ConfigManager) {
-	cfg := cm.GetConfig()
-	// Password diekstrak sebagai string saat dibutuhkan oleh driver DB saja
-	db, _ := sql.Open("postgres", "user="+cfg.DBUser+" password="+string(cfg.DBPass))
-	// Lanjutkan inisialisasi pool...
+// ✅ GOOD: konfigurasi terikat ke berkas yang diperbarui Vault Agent, dan
+// DSN-nya sendiri tetap bertipe rahasia.
+func connectDBSafe(ctx context.Context, cm *ConfigManager, ttlLease time.Duration) (*sql.DB, error) {
+	// Galat sql.Open TIDAK dibuang: driver kerap menyertakan DSN di dalam
+	// pesannya, dan DSN memuat kata sandi. Lihat BukaPool di §5, yang
+	// menyamarkannya sebelum galat itu keluar.
+	return BukaPool(ctx, cm.GetConfig(), ttlLease)
 }
 ```
+
+Dua hal yang membedakan potongan ini dari bentuk yang biasa ditulis:
+
+- **DSN diperlakukan sebagai rahasia, bukan hanya kata sandinya.** Melindungi field `DBPass` lalu menyusun `"user=... password=..."` sebagai `string` telanjang hanya memindahkan kebocoran satu lapis — dan DSN justru nilai yang paling sering ikut tercetak, baik di log "menghubungkan ke ...", di pesan galat driver, maupun sebagai atribut span.
+- **Galat dari driver disamarkan sebelum keluar.** Ini titik kebocoran yang paling mudah terlewat: kode Anda tidak pernah mencetak kata sandi, tetapi galat dari pustaka pihak ketiga bisa membawanya, dan galat itu berakhir di log persis seperti yang lain.
 
 ### ❌ Anti-Pattern 2: Kebocoran Data (Data Bleed) di Struct Formatting
 
@@ -91,9 +106,15 @@ func debugLogSafe() {
 
 ## 4. Edge Cases & Defensive Programming Khusus Go
 
-1. **Race Condition Saat Reload**: Ada 1 detik kritis di mana Viper mendeteksi pembaruan file dan goroutine config mencoba mem-pointer konfigurasi baru, sementara ratusan handler HTTP goroutine sedang menggunakan config lama. Anda **HARUS** melindungi struct konfig dengan `sync.RWMutex` atau `atomic.Value`, karena Read/Write pointer memori secara simultan di Go = Panic.
+1. **Race Condition Saat Reload — dan akibat sebenarnya, yang lebih buruk daripada panic**: saat watcher menukar konfigurasi sementara ratusan handler membacanya, Anda memang WAJIB memakai `atomic.Pointer` atau `sync.RWMutex`. Tetapi alasannya sering dinyatakan keliru: **baca/tulis pointer secara simultan di Go BUKAN panic.** Yang panic adalah akses map secara konkuren (`concurrent map writes`); race pada pointer atau struct adalah *undefined behavior* yang diam.
+
+   Dan diamnya itulah masalahnya. `Config` adalah struct multi-kata, sehingga penyalinan tanpa sinkronisasi bisa menghasilkan **nilai robek** — gabungan sebagian field lama dan sebagian field baru. Yang Anda dapat bukan crash yang jelas, melainkan koneksi dengan **username baru dan kata sandi lama**, yang gagal autentikasi secara acak dan terlihat seperti masalah jaringan. Panic akan jauh lebih mudah didiagnosis.
 2. **Koneksi Mati & EOF vs Lease Expiry**: Kredensial Vault aktif selama 60 menit. Di golang database connection pool, anda punya setting `SetConnMaxLifetime`. Jika `SetConnMaxLifetime` Anda disetel selama 70 menit, aplikasi Go akan me-reuse koneksi yang *sudah ditutup Vault secara sepihak*. Anda akan mendapat banyak error `EOF` acak di production. Set `SetConnMaxLifetime` di Go **lebih kecil** daripada TTL lease Vault (e.g. 50 Menit).
-3. **Vault Down saat Bootstrap**: Jika sistem *Vault Agent* telat booting di *Pod*, aplikasi Go membaca JSON dan mendapat *File Not Found*. Go akan panic dan CrashLoop. Go harus meresponsnya dengan *Retry-Backoff* atau setidaknya menunggu signal File di awal.
+3. **Vault Down saat Bootstrap**: bila Vault Agent telat menyala, aplikasi membaca JSON dan mendapat *file not found*, lalu masuk CrashLoop. Tangani dengan retry-backoff atau tunggu berkasnya muncul. Perhatikan perbedaannya dengan butir berikutnya: gagal saat **bootstrap** memang harus mencegah proses menyala; gagal saat **rotasi** tidak boleh menjatuhkan proses yang sudah sehat.
+
+4. **Pemuatan ulang yang tidak divalidasi lebih berbahaya daripada tidak memuat ulang.** Urutannya menentukan segalanya. Bila konfigurasi ditukar lebih dulu dan hook penerapan dijalankan sesudahnya, maka saat kredensial baru ternyata belum aktif di sisi basis data, konfigurasi yang **sudah diketahui salah** terlanjur terpasang — dan yang lama, yang masih bekerja, sudah hilang. Terapkan dulu (buka pool baru, `Ping`), tukar hanya bila berhasil, dan **pertahankan yang lama** bila gagal.
+
+5. **Pool lama tidak boleh ditutup seketika.** Diagram di §2 menggambarkan "Old SQL.DB Pool (Closing...)" berdampingan dengan pool baru yang aktif, dan jeda itu bukan hiasan: `Close()` yang dipanggil tepat setelah penukaran memutus query yang sedang berjalan di tengah jalan. Tukar pointer-nya dulu agar permintaan baru memakai pool baru, lalu tutup yang lama setelah jeda selebar timeout permintaan terpanjang Anda.
 
 ## 5. Production-Ready Go Code
 
@@ -104,155 +125,310 @@ package secret
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
-	"sync"
-	"testing"
+	"sync/atomic"
+	"time"
 )
 
-// SecretString adalah custom-type pertahanan aktif pencegah Data Bleed (Memory Dump).
+const disamarkan = "[REDACTED-SECRET]"
+
+// SecretString mencegah rahasia bocor lewat FORMATTING dan SERIALISASI.
+//
+// Batas kemampuannya harus dinyatakan jujur: ia **tidak** melindungi dari
+// memory dump. Nilai `string` di Go tidak bisa dinolkan — ia immutable,
+// dikelola GC, dan bisa disalin diam-diam saat objeknya dipindahkan. Menyebut
+// tipe ini "pencegah memory dump leak" menjanjikan sesuatu yang tidak
+// diberikannya. Yang benar-benar dicegahnya adalah kebocoran TAK SENGAJA
+// lewat log, respons API, dan pesan galat — dan justru itulah bentuk sebagian
+// besar kebocoran rahasia yang benar-benar terjadi.
 type SecretString string
 
-// String men-override print `%s` dan `%v` (fmt package)
-func (s SecretString) String() string {
-	return "[REDACTED-SECRET]"
-}
+// String menangani %v, %s, dan %q.
+func (s SecretString) String() string { return disamarkan }
 
-// MarshalJSON men-override serialization (json package)
-func (s SecretString) MarshalJSON() ([]byte, error) {
-	return json.Marshal("[REDACTED-SECRET]")
-}
+// GoString menangani %#v — dan inilah yang HILANG dari versi sebelumnya.
+//
+// fmt tidak memanggil String() untuk %#v; ia memakai refleksi dan mencetak
+// nilai mentahnya. Verb itu justru yang paling sering diketik orang ketika
+// sedang men-debug sebuah struct, sehingga celahnya terbuka persis pada saat
+// ia paling mungkin dipakai.
+func (s SecretString) GoString() string { return `"` + disamarkan + `"` }
 
-// Config struktur yang diikat oleh file hasil render Sidecar Vault
+// MarshalJSON menangani encoding/json dan slog.JSONHandler.
+func (s SecretString) MarshalJSON() ([]byte, error) { return json.Marshal(disamarkan) }
+
+// MarshalText menangani encoder berbasis teks (YAML, env, sebagian handler
+// slog) yang memilih TextMarshaler lebih dulu sebelum jatuh ke fmt.
+func (s SecretString) MarshalText() ([]byte, error) { return []byte(disamarkan), nil }
+
+// Ungkap adalah SATU-SATUNYA jalan menuju nilai aslinya. Namanya sengaja
+// mencolok supaya setiap pemakaiannya menonjol saat code review.
+func (s SecretString) Ungkap() string { return string(s) }
+
+// Config diikat dari berkas hasil render Vault Agent.
 type Config struct {
 	DBHost string       `json:"db_host"`
 	DBUser string       `json:"db_user"`
 	DBPass SecretString `json:"db_pass"`
 }
 
-// ConfigManager menangani Hot-Reload (Rotasi Rahasia) secara Thread-Safe.
+// DSN mengembalikan SecretString, BUKAN string biasa.
+//
+// DSN memuat kata sandi di dalam dirinya, dan DSN adalah nilai yang paling
+// sering ikut tercetak — di log "menghubungkan ke ...", di pesan galat driver,
+// dan di atribut span tracing. Melindungi field kata sandi tetapi membiarkan
+// DSN sebagai string telanjang hanya memindahkan kebocoran satu lapis.
+func (c Config) DSN() SecretString {
+	return SecretString(fmt.Sprintf("host=%s user=%s password=%s sslmode=verify-full",
+		c.DBHost, c.DBUser, c.DBPass.Ungkap()))
+}
+
+// galatTersamar menyembunyikan rahasia dari pesan galat TANPA memutus rantai
+// errors.Is/errors.As — mengganti galat dengan errors.New yang baru akan
+// menghilangkan kemampuan pemanggil memeriksa jenis galatnya.
+type galatTersamar struct {
+	pesan string
+	asal  error
+}
+
+func (g galatTersamar) Error() string { return g.pesan }
+func (g galatTersamar) Unwrap() error { return g.asal }
+
+func samarkan(err error, cfg Config) error {
+	rahasia := cfg.DBPass.Ungkap()
+	if err == nil || rahasia == "" {
+		return err
+	}
+	return galatTersamar{pesan: strings.ReplaceAll(err.Error(), rahasia, disamarkan), asal: err}
+}
+
+// BukaPool membuka pool dan MEMBUKTIKAN kredensialnya bekerja.
+//
+// Kasus Tepi 2: bila SetConnMaxLifetime lebih panjang dari TTL lease Vault,
+// Go memakai ulang koneksi yang sudah dicabut Vault dari sisi server, dan
+// gejalanya adalah galat `EOF` acak yang nyaris mustahil dilacak ke sebabnya.
+func BukaPool(ctx context.Context, cfg Config, ttlLease time.Duration) (*sql.DB, error) {
+	db, err := sql.Open("pgx", cfg.DSN().Ungkap())
+	if err != nil {
+		return nil, fmt.Errorf("buka pool untuk host %s: %w", cfg.DBHost, samarkan(err, cfg))
+	}
+
+	db.SetConnMaxLifetime(ttlLease * 3 / 4) // margin sebelum lease dicabut
+	db.SetMaxOpenConns(25)
+	db.SetMaxIdleConns(25)
+
+	pingCtx, batal := context.WithTimeout(ctx, 5*time.Second)
+	defer batal()
+	if err := db.PingContext(pingCtx); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("kredensial baru tidak dapat dipakai: %w", samarkan(err, cfg))
+	}
+	return db, nil
+}
+
+// Terapkan menerima konfigurasi baru dan harus MEMBUKTIKAN bahwa ia bekerja.
+// Nilai kembaliannya menjadi sumber daya aktif yang baru.
+type Terapkan func(ctx context.Context, cfg Config) (*sql.DB, error)
+
 type ConfigManager struct {
-	mu     sync.RWMutex
-	config Config
-	
-	// OnChange listener untuk men-trigger swap resource (seperti koneksi DB)
-	OnChange func(ctx context.Context, newCfg Config) error
+	config    atomic.Pointer[Config]
+	pool      atomic.Pointer[sql.DB]
+	terapkan  Terapkan
+	jedaTutup time.Duration
 }
 
-func NewConfigManager(initial Config) *ConfigManager {
-	return &ConfigManager{
-		config: initial,
+// NewConfigManager memasang konfigurasi awal, dan GAGAL bila konfigurasi itu
+// tidak bisa diterapkan — lebih baik proses tidak pernah menyala daripada
+// menyala dengan kredensial yang tidak berfungsi.
+//
+// Terapkan diterima di konstruktor, bukan sebagai field publik yang bisa
+// ditugaskan belakangan. Field publik yang ditulis setelah konstruksi dan
+// dibaca dari goroutine watcher adalah data race yang menunggu terjadi.
+func NewConfigManager(ctx context.Context, awal Config, terapkan Terapkan, jedaTutup time.Duration) (*ConfigManager, error) {
+	cm := &ConfigManager{terapkan: terapkan, jedaTutup: jedaTutup}
+	if err := cm.Muat(ctx, awal); err != nil {
+		return nil, err
 	}
+	return cm, nil
 }
 
-// ReloadConfig dipanggil oleh fsnotify/Viper (goroutine latar) saat file json diupdate.
-func (cm *ConfigManager) ReloadConfig(ctx context.Context, newConfig Config) error {
+// Muat memasang konfigurasi baru HANYA bila penerapannya berhasil.
+//
+// Urutan inilah yang terbalik pada versi sebelumnya: config ditukar lebih
+// dulu, hook dijalankan sesudahnya. Ketika hook gagal — kredensial baru dari
+// Vault ternyata belum aktif, atau basis data menolaknya — konfigurasi yang
+// SUDAH DIKETAHUI SALAH terlanjur terpasang dan yang lama, yang masih bekerja
+// dengan baik, sudah hilang. Setiap permintaan sesudahnya memakai kredensial
+// buruk itu, dan tidak ada jalan mundur.
+func (cm *ConfigManager) Muat(ctx context.Context, baru Config) error {
 	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("context cancelled before reload: %w", err)
+		return fmt.Errorf("context batal sebelum muat: %w", err)
 	}
 
-	// 1. Thread-safe atomic pointer swap
-	cm.mu.Lock()
-	cm.config = newConfig
-	cm.mu.Unlock()
+	poolBaru, err := cm.terapkan(ctx, baru)
+	if err != nil {
+		// Konfigurasi lama DIPERTAHANKAN.
+		slog.ErrorContext(ctx, "konfigurasi baru ditolak, tetap memakai yang lama", "galat", err)
+		return fmt.Errorf("terapkan konfigurasi baru: %w", err)
+	}
 
-	// 2. Eksekusi Hook secara graceful (misal: Init pool DB baru)
-	if cm.OnChange != nil {
-		if err := cm.OnChange(ctx, newConfig); err != nil {
-			return fmt.Errorf("hook onchange failed: %w", err)
-		}
+	lama := cm.pool.Swap(poolBaru)
+	cm.config.Store(&baru)
+
+	if lama != nil {
+		// Pool lama TIDAK ditutup seketika. Query yang sedang berjalan masih
+		// memegang koneksinya. Ditutup setelah jeda, saat permintaan yang
+		// sudah terlanjur dimulai sudah selesai.
+		go func() {
+			time.Sleep(cm.jedaTutup)
+			if err := lama.Close(); err != nil {
+				slog.Error("gagal menutup pool lama", "galat", err)
+			}
+		}()
 	}
 	return nil
 }
 
-// GetConfig membaca secret dengan read lock yang aman
-func (cm *ConfigManager) GetConfig() Config {
-	cm.mu.RLock()
-	defer cm.mu.RUnlock()
-	return cm.config
-}
+func (cm *ConfigManager) GetConfig() Config { return *cm.config.Load() }
+func (cm *ConfigManager) DB() *sql.DB       { return cm.pool.Load() }
+```
 
-// ==========================================
-// Unit Tests (Testing Security Boundaries)
-// ==========================================
+```go
+package secret
 
-func TestSecretRedactionBoundary(t *testing.T) {
-	// Boundary: Pastikan SecretString membungkam fungsi Print maupun JSON Marshal
-	cfg := Config{
-		DBHost: "postgres.int",
-		DBUser: "vault-role",
-		DBPass: "REAL_DATABASE_PASSWORD_XYZ",
-	}
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+)
 
-	// Tes 1: Memory dump formatter %v (Sering muncul di Log Panic)
-	rawLog := fmt.Sprintf("Config dumped: %v", cfg)
-	if strings.Contains(rawLog, "REAL_DATABASE_PASSWORD_XYZ") {
-		t.Fatalf("CRITICAL LEAK: Password exposed in fmt.Sprintf log! Output: %s", rawLog)
-	}
-	if !strings.Contains(rawLog, "[REDACTED-SECRET]") {
-		t.Errorf("Expected [REDACTED-SECRET] in log output")
-	}
+const sandiUji = "REAL_DATABASE_PASSWORD_XYZ"
 
-	// Tes 2: JSON Serialization API Leak (Sering terjadi jika model API beririsan dengan Config)
-	bytesJson, err := json.Marshal(cfg)
+func TestRahasiaTidakBocorLewatFormat(t *testing.T) {
+	cfg := Config{DBHost: "postgres.int", DBUser: "vault-role", DBPass: sandiUji}
+
+	// Setiap jalur keluar diuji terpisah. Versi sebelumnya hanya menguji %v
+	// dan json.Marshal — dan %#v, verb yang paling sering diketik saat
+	// men-debug struct, LOLOS membawa kata sandi apa adanya.
+	jsonBytes, err := json.Marshal(cfg)
 	if err != nil {
-		t.Fatalf("Marshal error: %v", err)
+		t.Fatalf("Marshal: %v", err)
 	}
-	
-	jsonString := string(bytesJson)
-	if strings.Contains(jsonString, "REAL_DATABASE_PASSWORD_XYZ") {
-		t.Fatalf("CRITICAL LEAK: Password exposed in JSON payload! Output: %s", jsonString)
+	teksBytes, err := cfg.DBPass.MarshalText()
+	if err != nil {
+		t.Fatalf("MarshalText: %v", err)
 	}
-	if !strings.Contains(jsonString, "[REDACTED-SECRET]") {
-		t.Errorf("Expected [REDACTED-SECRET] in JSON output")
-	}
-}
 
-func TestDynamicReloadBoundary_RaceConditionSafe(t *testing.T) {
-	ctx := context.Background()
-	
-	initial := Config{DBUser: "v_1", DBPass: "old_pass"}
-	cm := NewConfigManager(initial)
-	
-	// Hook simulasi Re-Connection Database Pool Baru
-	hookFired := false
-	cm.OnChange = func(c context.Context, newCfg Config) error {
-		hookFired = true
-		if newCfg.DBUser != "v_2" {
-			return fmt.Errorf("expected new user v_2, got %s", newCfg.DBUser)
+	jalur := map[string]string{
+		"%v":            fmt.Sprintf("%v", cfg),
+		"%+v":           fmt.Sprintf("%+v", cfg),
+		"%s":            fmt.Sprintf("%s", cfg.DBPass),
+		"%q":            fmt.Sprintf("%q", cfg.DBPass),
+		"%#v":           fmt.Sprintf("%#v", cfg),
+		"json.Marshal":  string(jsonBytes),
+		"MarshalText":   string(teksBytes),
+		"DSN":           fmt.Sprintf("%v", cfg.DSN()),
+	}
+	for nama, keluaran := range jalur {
+		if strings.Contains(keluaran, sandiUji) {
+			t.Errorf("BOCOR lewat %s: %s", nama, keluaran)
 		}
-		return nil
-	}
-
-	// Simulasi event file system write dari HashiCorp Vault Agent
-	newCfg := Config{DBUser: "v_2", DBPass: "new_pass"}
-	err := cm.ReloadConfig(ctx, newCfg)
-	if err != nil {
-		t.Fatalf("Reloading failed: %v", err)
-	}
-
-	if !hookFired {
-		t.Errorf("OnChange hook was not triggered properly")
-	}
-
-	// Verifikasi State Thread-Safe terbaca
-	activeCfg := cm.GetConfig()
-	if activeCfg.DBUser != "v_2" {
-		t.Errorf("Config was not swapped, got %s", activeCfg.DBUser)
+		if !strings.Contains(keluaran, disamarkan) {
+			t.Errorf("%s tidak memuat penanda penyamaran: %s", nama, keluaran)
+		}
 	}
 }
 
-func TestConfigManager_ContextCancellation(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // Cancel ctx immediately
+func TestGalatDisamarkanTanpaMemutusRantai(t *testing.T) {
+	cfg := Config{DBPass: sandiUji}
+	asal := errors.New("koneksi gagal: password=" + sandiUji)
+	tersamar := samarkan(asal, cfg)
 
-	cm := NewConfigManager(Config{DBUser: "init"})
-	err := cm.ReloadConfig(ctx, Config{DBUser: "new"})
-	
-	if err == nil {
-		t.Fatal("Expected error due to cancelled context, got nil")
+	if strings.Contains(tersamar.Error(), sandiUji) {
+		t.Fatalf("kata sandi masih ada di pesan galat: %s", tersamar)
 	}
+	// errors.Is harus tetap bekerja — penyamaran tidak boleh menghapus
+	// kemampuan pemanggil memeriksa jenis galat.
+	if !errors.Is(tersamar, asal) {
+		t.Fatal("rantai galat terputus oleh penyamaran")
+	}
+}
+
+// Konfigurasi yang penerapannya GAGAL tidak boleh menggantikan yang sehat.
+func TestKonfigurasiBurukTidakMenggantikanYangSehat(t *testing.T) {
+	ctx := context.Background()
+	gagalkan := false
+	terapkan := func(context.Context, Config) (*sql.DB, error) {
+		if gagalkan {
+			return nil, errors.New("kredensial ditolak basis data")
+		}
+		return nil, nil // pool nil cukup untuk uji ini
+	}
+
+	cm, err := NewConfigManager(ctx, Config{DBUser: "v_1"}, terapkan, time.Millisecond)
+	if err != nil {
+		t.Fatalf("NewConfigManager: %v", err)
+	}
+
+	gagalkan = true
+	if err := cm.Muat(ctx, Config{DBUser: "v_2"}); err == nil {
+		t.Fatal("konfigurasi yang gagal diterapkan justru diterima")
+	}
+	if got := cm.GetConfig().DBUser; got != "v_1" {
+		t.Fatalf("DBUser = %q setelah pemuatan gagal, mau tetap v_1 — kredensial buruk terpasang dan yang sehat hilang", got)
+	}
+}
+
+// Uji yang benar-benar konkuren. Versi sebelumnya bernama
+// "RaceConditionSafe" tetapi seluruhnya berjalan di satu goroutine, sehingga
+// `go test -race` tidak punya apa pun untuk diperiksa.
+func TestPembacaanKonkurenSaatRotasi(t *testing.T) {
+	ctx := context.Background()
+	terapkan := func(context.Context, Config) (*sql.DB, error) { return nil, nil }
+
+	cm, err := NewConfigManager(ctx, Config{DBUser: "v_0"}, terapkan, time.Millisecond)
+	if err != nil {
+		t.Fatalf("NewConfigManager: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	berhenti := make(chan struct{})
+
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-berhenti:
+					return
+				default:
+					if cm.GetConfig().DBUser == "" {
+						t.Error("konfigurasi terbaca kosong di tengah rotasi")
+						return
+					}
+				}
+			}
+		}()
+	}
+
+	for i := 1; i <= 50; i++ {
+		if err := cm.Muat(ctx, Config{DBUser: fmt.Sprintf("v_%d", i)}); err != nil {
+			t.Errorf("Muat ke-%d: %v", i, err)
+		}
+	}
+	close(berhenti)
+	wg.Wait()
 }
 ```
 
@@ -273,6 +449,10 @@ func TestConfigManager_ContextCancellation(t *testing.T) {
 | Rotasi tidak berefek sampai restart | apakah rahasia diperbarui berkala | Diambil sekali saat start |
 | Token Vault tidak pernah kedaluwarsa | TTL token | Token statis; kompromi berarti akses permanen |
 | Rahasia ditemukan di riwayat git | `git log` pada berkas konfigurasi | Menghapus berkasnya tidak menghapus riwayatnya |
+| Rahasia muncul di log padahal tipenya `SecretString` | verb format yang dipakai | `%#v` tidak memanggil `String()`; butuh `GoString()` |
+| Kata sandi terlihat di pesan galat driver | apakah galat disamarkan sebelum keluar | Kode Anda tidak mencetaknya — pustaka pihak ketiga yang mencetaknya |
+| Autentikasi DB gagal acak setelah rotasi | urutan tukar-config vs uji koneksi | Konfigurasi buruk terpasang, yang sehat sudah hilang |
+| Galat `EOF` acak beberapa menit sekali | `SetConnMaxLifetime` vs TTL lease | Koneksi yang sudah dicabut Vault dipakai ulang |
 
 ```bash
 # Rahasia yang terlihat sebagai env -- setiap baris di sini adalah temuan
