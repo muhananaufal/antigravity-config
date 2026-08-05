@@ -1,5 +1,7 @@
 # Idempotency pada Payment Engine (Distributed Systems)
 
+> **Berlaku:** Go 1.21+ · **Lihat juga:** `distributed_patterns_resilience/idempotency_key_engine.md` · `fintech_reliability/reconciliation_engine.md` · `fintech_reliability/double_entry_ledger.md` · `distributed_patterns_resilience/retry_backoff_jitter.md`
+
 ## Concept/Internals
 Sifat fundamental jaringan internet adalah *unreliable* (tidak dapat diandalkan). *Client* (seperti mobile app atau upstream microservice) mengirim HTTP POST untuk transaksi pembayaran $100. Jaringan terputus, *client* mendapat error `timeout` tapi *sebenarnya* server berhasil memproses uangnya di backend. *Client*, yang menganggap itu gagal, secara otomatis melakukan *retry* (coba ulang). Bencana terjadi: Saldo kepotong $200!
 
@@ -316,3 +318,41 @@ if !result { /* Sudah terkunci oleh orang lain! */ }
 1. **Payload Mismatch on Identical Key**: *Client bug* bisa mengirim Payload A dengan Key X (gagal koneksi di jalan), lalu mengirim Payload B dengan Key X lagi. Jika sistem meloloskan Key X langsung (berdasarkan logika Cached), Payload B diabaikan secara magis! Oleh karena itu, kita **wajib menghitung hash dari Payload A** dan membandingkannya di *request* ulangan. Jika beda, tendang dengan HTTP 409 Conflict.
 2. **Key Expiry & Pruning**: Idempotency key di tabel SQL akan tumbuh miliaran data per bulan dan merusak peforma DB. *Records* ini harus kadaluarsa dalam periode logis yang wajar untuk *retry window* (umumnya 24 s/d 72 jam). Gunakan TTL di Redis atau mekanisme table partitioning (Hapus drop partisi 3 hari lalu) di PostgreSQL.
 3. **Dead In-Progress State**: Jika node worker Go *crash/OOM Killed* tepat setelah menset status `IN_PROGRESS` tapi *sebelum* merubah ke `COMPLETED`, key tersebut selamanya menjadi *zombie* (terkunci tak bernyawa). Selesaikan dengan *soft TTL* di lock-nya: tambahkan cap waktu, bila IN_PROGRESS berlangsung melebihi batas (misal > 2 menit), ijinkan *goroutine* penantang untuk mengambil alih kunci (menganggap *crash* sebelumnya dan aman mengeksekusi ulang secara transaksional).
+
+## Kapan JANGAN Pakai Ini
+
+- **Kunci idempotensi yang diturunkan dari jumlah pembayaran.** Dua pembayaran sah dengan jumlah sama — dan itu sering terjadi — akan digabung menjadi satu. Kunci WAJIB berasal dari niat klien, bukan dari isi transaksi.
+- **Menganggap timeout dari penyedia berarti gagal.** Timeout adalah keadaan **tidak diketahui**. Uang mungkin sudah berpindah. Ia WAJIB direkonsiliasi dengan query status ke penyedia, bukan diasumsikan salah satu arah.
+- **Retry tanpa memakai idempotency key milik penyedia.** Setiap penyedia pembayaran punya mekanismenya sendiri. Mengandalkan hanya milik Anda tidak mencegah penyedia memproses dua kali.
+- **Menyelesaikan pembayaran berdasarkan respons sinkron saja.** Respons sinkron adalah petunjuk. Webhook dan rekonsiliasi harian adalah kebenaran, dan ketiganya bisa berbeda.
+- **Menyimpan keadaan pembayaran hanya di satu sisi.** Ketidaksesuaian antara catatan Anda dan penyedia harus bisa **dideteksi**, dan itu menuntut perbandingan berkala yang terjadwal.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Pelanggan terdebit dua kali | komposisi kunci idempotensi | Kunci tidak stabil lintas percobaan |
+| Pembayaran tersangkut "diproses" | penanganan timeout penyedia | Keadaan tidak diketahui tidak pernah direkonsiliasi |
+| Catatan Anda dan penyedia berbeda | rekonsiliasi harian | Tidak ada pembandingan berkala |
+| Pembayaran sah ditolak sebagai duplikat | apakah kunci memuat jumlah | Deduplikasi berbasis isi transaksi |
+| Webhook diproses berkali-kali | idempotensi di sisi penerima webhook | Webhook diulang penyedia, itu normal |
+
+```sql
+-- Pembayaran yang tersangkut di keadaan tidak diketahui: WAJIB direkonsiliasi
+SELECT status, count(*), min(dibuat_pada) AS tertua
+FROM pembayaran GROUP BY 1;
+
+SELECT id, referensi_penyedia, now() - dibuat_pada AS umur
+FROM pembayaran
+WHERE status IN ('diproses','tidak_diketahui') AND dibuat_pada < now() - interval '15 minutes'
+ORDER BY dibuat_pada LIMIT 20;
+
+-- Kemungkinan debit ganda: satu niat, dua referensi penyedia
+SELECT niat_id, count(DISTINCT referensi_penyedia) AS jumlah
+FROM pembayaran GROUP BY 1 HAVING count(DISTINCT referensi_penyedia) > 1;
+```
+
+```bash
+kubectl logs -l app=payment --since=24h | grep -c 'timeout penyedia'
+curl -s localhost:9090/metrics | grep -E 'payment_(duplicate|unknown|reconciled)_total'
+```

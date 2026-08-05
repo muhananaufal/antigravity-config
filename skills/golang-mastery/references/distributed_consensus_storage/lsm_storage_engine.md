@@ -1,5 +1,7 @@
 # LSM Storage Engine & Internals (Log-Structured Merge-Tree)
 
+> **Berlaku:** Go 1.21+ · **Lihat juga:** `distributed_consensus_storage/wal_write_ahead_logging.md` · `distributed_consensus_storage/kv_badger_embedded.md` · `db_sqlc/index_design_explain_analyze.md` · `runtime_internals/memory_allocator_arenas.md`
+
 ## 1. Konsep Utama & Internals
 
 LSM-Tree adalah fondasi (Storage Engine) dari datastore modern berskala besar (seperti Cassandra, RocksDB, LevelDB, dan BadgerDB). Database tradisional biasanya menggunakan struktur B-Tree yang ideal untuk *Reads* (karena operasi pencariannya cepat) namun terseok-seok pada rasio *Writes* tinggi dikarenakan fragmentasi dan pembaruan acak (Random IO) pada Disk berputar.
@@ -246,3 +248,33 @@ if record.Value == "__DELETED__" {
 3. **WAL (Write Ahead Log) Corruption / Panic**
    Listrik datacenter terputus dan proses sinkronisasi fsync dari WAL file tidak utuh (terpotong pada karakter byte terakhir). Ketika Node di-*restart*, inisialisasi awal (startup phase) akan gagal dan *panic* saat mengurai file WAL untuk *recovery*.
    *Defensive Check:* Selalu sertakan validasi CRC-32 (Cyclic Redundancy Check) *checksum header* untuk setiap baris / *chunk* record di WAL. Jika parser menemukan *mismatch* CRC (misal file kepotong/corrupt ekornya), *Trunk* (potong) record *corrupt* tersebut, terima *partial loss* minor untuk beberapa record terakhir (maksimum sekian millisecond per batch), dan biarkan engine tetap *StartUp* memutar sisa database.
+
+## Kapan JANGAN Pakai Ini
+
+- **Untuk beban yang didominasi baca acak.** LSM menukar amplifikasi baca demi throughput tulis. Bila pola Anda adalah banyak baca acak dan sedikit tulis, B-tree lebih tepat — dan PostgreSQL sudah menyediakannya.
+- **Tanpa memantau amplifikasi tulis dan kesehatan kompaksi.** Kompaksi yang tertinggal membuat setiap baca menyentuh lebih banyak level, dan latensi baca memburuk perlahan tanpa satu pun perubahan kode.
+- **Menulis LSM sendiri.** Jumlah detail yang harus benar sangat besar, dan kesalahan pada level mana pun berarti kehilangan data. Pakai yang sudah teruji di produksi orang lain.
+- **Menghapus tanpa memahami masa hidup tombstone.** Penghapusan tidak langsung membebaskan ruang; ia menambah penanda yang baru hilang setelah kompaksi mencapai level terbawah.
+- **Mengasumsikan latensi seragam.** Kompaksi menghasilkan lonjakan p99 yang teratur. Itu sifat LSM, bukan bug — dan harus dimasukkan ke dalam anggaran latensi Anda.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Latensi baca memburuk perlahan | jumlah level dan file per level | Kompaksi tertinggal dari laju tulis |
+| p99 melonjak berkala | jadwal kompaksi | Kompaksi berjalan; ini sifat LSM |
+| Ruang disk tidak turun setelah hapus | tombstone yang belum dikompaksi | Penghapusan belum mencapai level terbawah |
+| Amplifikasi tulis tinggi | byte tertulis vs byte logis | Konfigurasi level tidak cocok dengan beban |
+| Baca menyentuh banyak file | bloom filter | Filter tidak efektif atau tidak aktif |
+
+```bash
+# Statistik engine: level, file per level, dan antrean kompaksi
+curl -s localhost:9090/metrics | grep -E 'lsm_(levels|compaction|sstables|write_amp)'
+
+# Berapa banyak byte fisik ditulis dibanding byte logis
+iostat -x 1 5 | head -20
+du -sh /var/lib/app/data/
+
+# Kompaksi yang tertinggal terlihat sebagai jumlah file di level 0
+ls /var/lib/app/data/*.sst 2>/dev/null | wc -l
+```

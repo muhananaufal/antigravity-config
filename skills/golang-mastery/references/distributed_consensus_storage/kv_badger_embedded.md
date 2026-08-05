@@ -1,5 +1,7 @@
 # Embedded KV Storage: BadgerDB Pattern
 
+> **Berlaku:** Go 1.21+ · `dgraph-io/badger/v4` · **Lihat juga:** `distributed_consensus_storage/lsm_storage_engine.md` · `distributed_consensus_storage/wal_write_ahead_logging.md` · `devops_control_planes/docker_container_go.md` · `runtime_internals/gc_mark_sweep_internals.md`
+
 ## 1. Konsep Utama & Internals
 
 `BadgerDB` (oleh Dgraph) adalah sistem penyimpanan *key-value* (KV) sangat cepat berbasis Go yang ditulis dari nol, beroperasi murni secara tertanam (embedded) layaknya RocksDB atau BoltDB. Badger tidak memerlukan server / port terpisah; ia menyatu bersama memori aplikasi Go (In-Process Datastore).
@@ -264,3 +266,33 @@ go func() {
 3. **Iterator Prefetching & Memori Bloat**
    Saat Anda melakukan Query (Iterate) dari A sampai Z, Badger secara agresif men-*prefetch* Value Log agar iterasi kencang. Jika database besarnya ratusan GB, iterator bisa mengkonsumsi RAM signifikan jika tidak disetting.
    *Defensive Check:* Setel `PrefetchValues = false` pada opsi `badger.IteratorOptions` apabila Anda hanya ingin mencari Keys saja, atau memproses Key dengan sangat lamban. Ini mencegah badger memenuhi RAM sembari Anda mengerjakan logic panjang per item-nya.
+
+## Kapan JANGAN Pakai Ini
+
+- **Bila data perlu diakses banyak proses.** Badger mengunci direktorinya untuk satu proses. Dua replika aplikasi yang menunjuk ke volume yang sama akan gagal start, dan pada volume bersama yang salah konfigurasi bisa merusak data.
+- **Tanpa rencana backup dan pemulihan.** Embedded berarti tidak ada operator database yang menjaganya. Backup, verifikasi backup, dan latihan pemulihan menjadi tanggung jawab Anda sepenuhnya.
+- **Menyimpan nilai besar tanpa memahami value log.** Badger memisahkan kunci dan nilai; nilai besar masuk value log yang butuh garbage collection tersendiri, dan ruangnya tidak dibebaskan otomatis.
+- **Tanpa menjalankan `RunValueLogGC` secara terjadwal.** Ruang disk tidak akan pernah kembali, dan pertumbuhannya baru disadari ketika volume penuh.
+- **Di pod tanpa volume persisten.** Data hilang setiap kali pod dijadwalkan ulang — dan penjadwalan ulang bisa terjadi kapan saja tanpa pemberitahuan.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Aplikasi gagal start dengan galat lock | berapa proses membuka direktori | Dua instans menunjuk volume yang sama |
+| Disk terus tumbuh meski data dihapus | value log GC | GC tidak pernah dijalankan |
+| Data hilang setelah pod dipindah | jenis volume | `emptyDir` alih-alih PVC |
+| Latensi tidak stabil | kompaksi LSM di bawahnya | Sifat LSM; masukkan ke anggaran latensi |
+| Pemulihan gagal saat dibutuhkan | apakah backup pernah diuji | Backup tidak pernah diverifikasi |
+
+```bash
+# Ukuran direktori dan pemisahan sst/vlog
+du -sh /var/lib/app/badger/
+ls -la /var/lib/app/badger/ | awk '{print $5, $9}' | sort -rn | head
+
+# Volume harus persisten -- emptyDir berarti data hilang tiap penjadwalan ulang
+kubectl get pod <pod> -o jsonpath='{.spec.volumes}' | jq
+
+# Value log GC WAJIB terjadwal, dan hasilnya harus terlihat di metrik
+curl -s localhost:9090/metrics | grep -E 'badger_(vlog|gc|lsm)'
+```

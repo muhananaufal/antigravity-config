@@ -1,5 +1,7 @@
 # Rate Card & Pricing Engine di Sistem Keuangan
 
+> **Berlaku:** Go 1.21+ · **Lihat juga:** `fintech_reliability/decimal_arithmetic_money.md` · `fintech_reliability/financial_reporting_olap.md` · `distributed_patterns_resilience/feature_flags_launchdarkly.md` · `engineering_practice/adr_decision_records.md`
+
 Billing Engine fintech harus menghitung fee untuk jutaan transaksi secara deterministik, akurat, dan tanpa float rounding error. Setiap merchant punya Rate Card yang dinegosiasikan khusus — hardcoding logika per-merchant adalah anti-scalable.
 
 ---
@@ -281,3 +283,38 @@ if merchant == "Grab" {
 1. **Overlapping Tier Treshold (Missing Logic)**: Saat mendefinisikan *Tiered Pricing* bulanan, ada batas *volume*. (Tier A: $0 - $1000). (Tier B: $1001 - $5000). Ada rentang tak bertuan di sini! Jika transaksi senilai persis `$1000.50`, aturan mana yang berlaku? Evaluasi batas *greater-than* (>) vs *greater-than-or-equal* (>=) harus kedap celah, dan mesin penilai *Rule Engine* harus melontarkan panik `ErrNoRuleFound` jika data jatuh di zona bolong ini alih-alih me-return `0 fee`.
 2. **Dynamic Tax (PPN) Override**: *Pricing Engine* tidak hidup sendirian. Pajak Nilai Tambah (PPN/VAT) berubah per kebijakan pemerintah negara (contoh dari 10% menjadi 11%). Jangan pernah menyatukan "Margin Profit" dengan "Pajak" ke dalam 1 tarif persentase gabungan, karena saat Anda melapor PPN ke kantor pajak, Anda tidak bisa memisahkannya dengan bersih. Kalkulasikan Margin dulu, baru tindihkan *(stack)* hitungan Pajak di atas Margin tersebut sebagai *Layer* tambahan di Engine.
 3. **Refund Reconciliation Trap**: Saat merchant melakukan operasi `Refund / Batal Belanja` kepada pembeli senilai Rp 50.000, mesin tidak boleh memotong *fee* baru. Sebaliknya, mesin harus mampu mengambil *Rate Card* bersejarah (pada tanggal ketika transaksi awal itu diketuk, **BUKAN** Rate Card merchant hari ini) untuk mengkalkulasi pengembalian uang komisi *(Clawback/Refund Fee)*. Jangan menggunakan `JOIN` ke tabel Rate-Merchant aktif terkini, gunakan relasi *Snapshot* pada transaksi asli.
+
+## Kapan JANGAN Pakai Ini
+
+- **Aturan harga di kode tanpa versi.** Harga yang berlaku pada saat transaksi WAJIB bisa direkonstruksi berbulan-bulan kemudian, saat pelanggan atau auditor bertanya. Deploy bukan mekanisme pencatatan.
+- **Menghitung ulang harga historis dengan aturan yang berlaku sekarang.** Itu mengubah masa lalu. Transaksi menyimpan harga yang **disepakati saat itu**, bukan referensi ke aturan yang bisa berubah.
+- **Pembulatan yang berbeda antara estimasi dan tagihan.** Selisih kecil yang konsisten berubah menjadi keluhan pelanggan dan kehilangan kepercayaan yang jauh lebih mahal daripada selisihnya.
+- **Aturan yang saling tumpang tindih tanpa urutan yang ditetapkan.** Hasilnya jadi bergantung pada urutan evaluasi yang tidak pernah diputuskan siapa pun — dan berubah saat aturan ditambah.
+- **Mesin harga tanpa uji regresi terhadap kasus nyata yang tercatat.** Regresi harga adalah kerugian langsung, dan biasanya baru ketahuan dari sisi pelanggan.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Harga historis tidak bisa dijelaskan | versi aturan pada transaksi | Aturan tidak diversi atau tidak dicatat |
+| Estimasi berbeda dari tagihan | titik dan aturan pembulatan | Dua jalur perhitungan berbeda |
+| Hasil berubah saat aturan ditambah | urutan evaluasi aturan | Tumpang tindih tanpa prioritas |
+| Pelanggan melaporkan tagihan salah | uji regresi harga | Perubahan lolos tanpa terdeteksi |
+| Harga berbeda antar kanal | sumber aturan per kanal | Aturan diduplikasi di beberapa tempat |
+
+```sql
+-- Transaksi WAJIB menyimpan versi aturan yang dipakai
+SELECT versi_aturan, count(*), min(dibuat_pada), max(dibuat_pada)
+FROM transaksi GROUP BY 1 ORDER BY 2 DESC;
+
+-- Estimasi vs tagihan: selisih yang konsisten searah adalah masalah pembulatan
+SELECT count(*) FILTER (WHERE estimasi <> final)          AS berbeda,
+       avg(final - estimasi)                              AS rata_selisih,
+       max(abs(final - estimasi))                         AS selisih_terbesar
+FROM transaksi WHERE dibuat_pada > now() - interval '7 days';
+```
+
+```bash
+# Uji regresi harga terhadap kasus nyata yang tercatat
+go test -run=TestHargaRegresi -v ./pricing/...
+```

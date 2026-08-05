@@ -1,5 +1,7 @@
 # WAL (Write-Ahead Logging) Patterns
 
+> **Berlaku:** Go 1.21+ · **Lihat juga:** `distributed_consensus_storage/lsm_storage_engine.md` · `distributed_consensus_storage/raft_consensus_hashicorp.md` · `db_sqlc/acid_transactions_isolation.md` · `distributed_patterns_resilience/outbox_pattern_transactional.md`
+
 ## 1. Konsep Utama & Internals
 
 Write-Ahead Logging (WAL) adalah teknik fundamental nomor satu dalam sistem database (RDBMS seperti Postgres, Etcd, Kafka) untuk menjamin **ACID Durability**. 
@@ -289,3 +291,36 @@ func Append(data []byte) {
 3. **Mmap / Page Cache Tuning**
    Developer sering menggunakan Mmap (`syscall.Mmap`) untuk membaca/menulis WAL karena terasa instan. 
    *Defensive Check:* Mmap kurang direkomendasikan untuk struktur File Log yang melulu *Append Only* dan menuntut ACID fsync. *Kernel page flusher* bekerja tidak terduga, dan *Torn Write* lebih tinggi. Standard library I/O (`os.File` dengan `O_APPEND` dan `Sync()`) jauh lebih andal untuk menstabilkan jaminan durability dan menghindari latensi *Page Fault* yang men-stall thread aplikasi.
+
+## Kapan JANGAN Pakai Ini
+
+- **WAL tanpa memahami kapan `fsync` benar-benar terjadi.** Tulisan yang belum di-`fsync` masih berada di page cache OS dan **hilang saat kehilangan daya**. Bila Anda menjanjikan durabilitas kepada pemanggil sebelum `fsync`, janji itu tidak berlaku.
+- **`fsync` per record pada throughput tinggi.** Ia membatasi Anda pada IOPS disk. Group commit — mengumpulkan beberapa penulisan lalu satu `fsync` — ada persis untuk masalah ini.
+- **WAL tanpa checksum per record.** Kerusakan sebagian tidak terdeteksi dan diputar ulang sebagai data yang valid. Ini kelas kerusakan yang paling sulit dilacak karena datanya tampak masuk akal.
+- **WAL tanpa strategi pemangkasan.** Disk yang penuh menghentikan seluruh penulisan, dan pemulihannya terjadi di bawah tekanan.
+- **Mengandalkan WAL untuk pemulihan tanpa pernah menguji pemulihannya.** Prosedur pemulihan yang belum pernah dijalankan adalah prosedur yang akan gagal pada percobaan pertama.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Data hilang setelah kehilangan daya | kapan `fsync` dipanggil | Durabilitas dijanjikan sebelum data benar-benar di disk |
+| Throughput tulis menempel di langit-langit | jumlah `fsync` per detik | `fsync` per record; butuh group commit |
+| Pemulihan menghasilkan data aneh | checksum per record | Kerusakan sebagian diputar ulang sebagai valid |
+| Disk penuh menghentikan layanan | kebijakan pemangkasan WAL | WAL tidak pernah dipangkas |
+| Pemulihan berjalan sangat lama | ukuran WAL vs frekuensi checkpoint | Checkpoint terlalu jarang |
+
+```bash
+# Berapa sering fsync benar-benar terjadi
+strace -c -f -e trace=fsync,fdatasync -p $(pgrep app) 2>&1 | tail -5
+
+# Latensi tulis disk: batas atas throughput WAL Anda
+iostat -x 1 5 | head -20
+
+# Ukuran WAL dan pertumbuhannya
+du -sh /var/lib/app/wal/
+ls -la /var/lib/app/wal/ | tail -5
+
+# Pemulihan WAJIB diuji, bukan diasumsikan
+kill -9 $(pgrep app) && ./app --recover && echo "pemulihan berhasil"
+```

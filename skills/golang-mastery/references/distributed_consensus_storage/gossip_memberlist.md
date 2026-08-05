@@ -1,5 +1,7 @@
 # Gossip Protocol: Memberlist
 
+> **Berlaku:** Go 1.21+ · `hashicorp/memberlist` · **Lihat juga:** `distributed_consensus_storage/raft_consensus_hashicorp.md` · `distributed_patterns_resilience/consistent_hashing_ring.md` · `distributed_consensus_storage/vector_clocks_hlc.md` · `microservices_grpc/service_mesh_grpc_lb.md`
+
 ## 1. Konsep Utama & Internals
 
 `memberlist` adalah library Golang dari HashiCorp yang memanajemen deteksi keanggotaan klaster (cluster membership) dan kegagalan node (failure detection) menggunakan protokol Gossip (diadopsi dari protokol SWIM - Scalable Weakly-consistent Infection-style Process Group Membership). 
@@ -264,3 +266,32 @@ func main() {
 3. **Time Drift dan Jitter Jaringan (The Flapping Member)**
    Sebuah node yang mengalami Load CPU sangat tinggi akan *starving*, telat merespons Ping Gossip selama ratusan milidetik. Statusnya akan *flapping*: `Suspect -> Alive -> Suspect -> Alive`.
    *Defensive Check:* Gunakan `memberlist.DefaultLANConfig()` untuk di 1 datacenter dan `memberlist.DefaultWANConfig()` untuk multi-region. WAN Config otomatis meningkatkan batas toleransi timeout Ping. Kita bisa menaikkan `config.SuspicionMult` agar node tidak terlalu prematur dicap mati, meredam fenomena *Flapping Alerting* di observability tools Anda.
+
+## Kapan JANGAN Pakai Ini
+
+- **Untuk keanggotaan yang membutuhkan konsistensi kuat.** Gossip bersifat eventual: dua node bisa punya pandangan berbeda tentang siapa yang hidup, dan keduanya "benar" pada saat itu. Keputusan yang menuntut satu jawaban tunggal adalah wilayah Raft.
+- **Cluster kecil yang bisa memakai daftar statis atau service discovery.** Gossip menambah trafik latar terus-menerus dan satu mekanisme lagi yang bisa salah, untuk masalah yang sudah diselesaikan orkestrator Anda.
+- **Tanpa enkripsi dan autentikasi.** Siapa pun yang bisa mencapai port gossip bisa bergabung ke cluster dan menyebarkan informasi keanggotaan palsu.
+- **Di jaringan dengan pembatasan UDP yang tidak dipahami.** Deteksi kegagalan gossip bergantung pada probe UDP. Kebijakan jaringan yang memblokirnya menghasilkan node yang terus-menerus dianggap mati.
+- **Sebagai dasar keputusan yang menuntut kuorum.** Gossip memberi tahu siapa yang mungkin hidup. Ia tidak memberi jaminan yang cukup untuk memilih pemimpin atau memutuskan kepemilikan data.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Node dianggap mati lalu hidup berulang | probe UDP dan kebijakan jaringan | Probe terblokir atau timeout terlalu ketat |
+| Node berbeda punya daftar anggota berbeda | waktu konvergensi | Normal untuk gossip; masalah bila menetap |
+| Node asing bergabung | enkripsi dan kunci gossip | Tidak ada autentikasi |
+| Trafik latar tinggi pada cluster besar | interval dan fanout gossip | Parameter tidak disesuaikan dengan ukuran cluster |
+| Keputusan kepemilikan berubah-ubah | apa yang mendasari keputusan | Gossip dipakai untuk hal yang butuh kuorum |
+
+```bash
+# Pandangan tiap node tentang keanggotaan -- perbedaan yang menetap adalah masalah
+for n in node1 node2 node3; do echo "== $n"; curl -s "$n:8080/members" | jq -r '.[].Name' | sort; done
+
+# Node yang berubah status berulang kali
+kubectl logs -l app=cluster --since=1h | grep -ciE 'marking .* as failed|suspect'
+
+# Apakah port gossip benar-benar bisa dijangkau antar node?
+kubectl exec <pod> -- nc -zvu <ip-node-lain> 7946
+```

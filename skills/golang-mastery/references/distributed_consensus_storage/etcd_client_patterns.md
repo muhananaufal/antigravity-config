@@ -1,5 +1,7 @@
 # Etcd Client Patterns (v3 API)
 
+> **Berlaku:** Go 1.21+ · etcd v3.5+ · **Lihat juga:** `distributed_consensus_storage/raft_consensus_hashicorp.md` · `concurrency/distributed_locks_redis.md` · `cloud_native_k8s_operators/k8s_client_go_informers.md` · `distributed_patterns_resilience/idempotency_key_engine.md`
+
 ## 1. Konsep Utama & Internals
 
 `etcd` adalah highly-available, strongly consistent distributed key-value store yang menggunakan protokol konsensus Raft di bawah kap mesinnya. Sebagai core datastore dari Kubernetes control plane, `etcd` memiliki pola pemakaian client (khususnya melalui Golang package `clientv3`) yang secara khusus dirancang untuk menangani beban konkurensi terdistribusi, mekanisme service discovery, dan optimasi locking system terdistribusi.
@@ -356,3 +358,36 @@ cli.Revoke(context.Background(), resp.ID)
 3. **Thundering Herd Effect pada Watcher Configuration**
    Ratusan node API terhubung via *Watch* ke kunci prefix konfigurasi `/config/db_dsn`. Ketika *DevOps engineer* mengubah konfigurasi tersebut, ratusan node tersebut secara serentak (dalam fraksi milidetik yang sama) menerima trigger event, dan ratusan node tersebut secara *bersamaan* merestart koneksi database pool mereka. Database akan *down* karena *connection storm* (DDoS mandiri).
    *Penanganan:* Selalu tanamkan mekanisme *Jitter* (Delay acak). Misal: `time.Sleep(rand.Intn(1000) * time.Millisecond)` setelah menerima event *Watch* sebelum merestart/mengaplikasikan konfigurasi baru, sehingga beban pada sistem terdistribusi tersebar merata dalam rentang waktu beberapa detik.
+
+## Kapan JANGAN Pakai Ini
+
+- **etcd sebagai basis data umum.** Ia dirancang untuk metadata kecil yang jarang berubah, dengan batas ukuran nilai dan kuota backend yang keras. Memakainya untuk data aplikasi akan mengganggu **seluruh** pengguna cluster itu — termasuk Kubernetes bila etcd-nya dibagi.
+- **Watch tanpa menangani compaction.** Revisi yang sudah dipangkas membuat watch gagal dengan `ErrCompacted`. Klien WAJIB bisa melakukan list ulang dan memulai watch dari revisi baru.
+- **Lease tanpa keepalive yang tahan gangguan jaringan.** Lease yang kedaluwarsa melepas lock atau menghapus kunci — dan itu terjadi tepat saat jaringan sedang bermasalah, ketika Anda paling tidak menginginkannya.
+- **Transaksi yang terlalu besar.** etcd membatasi jumlah operasi per transaksi. Transaksi yang melewatinya gagal seluruhnya, bukan sebagian.
+- **Mengabaikan kuota backend.** etcd yang melewati kuota masuk mode alarm dan **menolak semua penulisan** sampai ada yang membebaskan ruang dan menghapus alarmnya secara manual.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Semua penulisan ditolak mendadak | alarm etcd | Kuota backend terlampaui |
+| Watch berhenti tanpa galat yang jelas | `ErrCompacted` di log klien | Revisi sudah dipangkas |
+| Lock terlepas saat jaringan bergetar | keepalive lease | Lease kedaluwarsa terlalu cepat |
+| Latensi etcd naik untuk semua konsumen | ukuran database | Data terlalu besar untuk etcd |
+| Transaksi gagal seluruhnya | jumlah operasi per transaksi | Melewati batas etcd |
+
+```bash
+# Alarm adalah hal pertama yang diperiksa saat penulisan ditolak
+etcdctl alarm list
+etcdctl endpoint status --write-out=table
+etcdctl endpoint health
+
+# Ukuran database vs kuota
+etcdctl endpoint status -w json | jq '.[] | {endpoint:.Endpoint, dbSize:.Status.dbSize, dbSizeInUse:.Status.dbSizeInUse}'
+
+# Revisi saat ini dan revisi terkompaksi -- selisihnya menentukan seberapa jauh watch bisa mundur
+etcdctl endpoint status -w json | jq '.[].Status.header.revision'
+
+kubectl logs -l app=api --since=1h | grep -ci 'etcdserver: mvcc: required revision has been compacted'
+```

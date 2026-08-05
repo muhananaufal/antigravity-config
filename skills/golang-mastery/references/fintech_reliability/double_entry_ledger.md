@@ -1,5 +1,7 @@
 # Double-Entry Bookkeeping Ledger di Go
 
+> **Berlaku:** Go 1.21+ · PostgreSQL 14+ · **Lihat juga:** `fintech_reliability/decimal_arithmetic_money.md` · `fintech_reliability/reconciliation_engine.md` · `db_sqlc/acid_transactions_isolation.md` · `distributed_patterns_resilience/outbox_pattern_transactional.md`
+
 ## Concept/Internals
 Sistem keuangan dan dompet digital (e-wallet) tidak boleh dibangun semata-mata dengan kolom "Balance" (`saldo`) yang terus di-*update*. Metode ini (Single-Entry) rentan terhadap *race condition*, audit trail yang hilang, dan mutasi diam-diam (ghost mutations).
 Standar emas di industri fintech adalah **Double-Entry Bookkeeping**. Prinsip utamanya berbunyi: *Setiap transaksi moneter harus memiliki setidaknya satu baris Debit dan satu baris Credit, dan jumlah total Debet harus sama persis dengan total Kredit (Sum(Debit) = Sum(Credit)).* 
@@ -230,3 +232,38 @@ PostTransaction(ctx, db, txID, []LedgerEntry{
 1. **Temporal Precision (Clock Drift)**: Data audit ledger tidak boleh menggunakan *timestamp* dari server yang mengeksekusi request jika waktunya diekstrak tanpa sinkronisasi NTP, karena urutan *append-only* log dapat terbalik secara waktu. Paling aman, serahkan penulisan `created_at` ke database engine (menggunakan `NOW()` atau `CURRENT_TIMESTAMP`) sehingga dijamin *monotonically increasing* di database *master node*.
 2. **Denormalization Desync**: Di kode atas, kita melakukan mutasi `ledger_entries` (sumber kebenaran) sekaligus merangkum saldonya ke tabel `accounts` (denormalisasi untuk performa pembacaan). Jika terjadi *bug/race* langka, saldo akun bisa *out of sync* dengan sum mutasinya. Implementasikan *CRON Job Rekonsiliasi Malam (EOD)* yang membandingkan `balance == Sum(Credit) - Sum(Debit)` dan me-resetnya jika terjadi *drift*.
 3. **Deadlocks dalam Multi-Row Updates**: Jika Transaksi A memindahkan dana dari Akun 1 ke Akun 2, dan Transaksi B memindahkan dana dari Akun 2 ke Akun 1 pada milidetik yang sama, MySQL/PostgreSQL akan melempar error *Deadlock* (karena menunggu *row lock* satu sama lain secara silang). **Defensive programming:** Selalu lakukan *sorting* (pengurutan) berdasarkan `AccountID` secara ascending (A-Z) pada array `entries` *sebelum* memproses kueri SQL. Hal ini menjamin bahwa seluruh *lock* akan diambil sesuai urutan yang sama di segala kondisi sistem.
+
+## Kapan JANGAN Pakai Ini
+
+- **Ledger yang barisnya bisa di-`UPDATE` atau `DELETE`.** Entri jurnal adalah fakta historis. Koreksi dilakukan dengan **entri pembalik**, bukan dengan menyunting masa lalu. Tegakkan dengan izin database, bukan dengan kesepakatan tim.
+- **Saldo sebagai kolom tanpa cara memverifikasinya terhadap jurnal.** Saldo turunan harus bisa dihitung ulang dari entri dan dicocokkan. Tanpa itu, satu bug menghasilkan angka yang salah dan tidak ada yang bisa membuktikannya.
+- **Menulis satu sisi entri di luar transaksi yang mencakup keduanya.** Debit tanpa kredit adalah kerusakan permanen di pembukuan, dan menemukannya berbulan-bulan kemudian jauh lebih mahal daripada mencegahnya.
+- **Ledger sebagai satu-satunya sumber pelaporan analitik.** Query agregat berat di atas tabel jurnal yang sedang panas akan mengganggu jalur transaksi. Pisahkan jalur pelaporan.
+- **Tanpa constraint database yang menegakkan debit sama dengan kredit.** Menyerahkan invarian ini ke kode aplikasi berarti satu bug menghasilkan buku yang tidak seimbang — dan kode aplikasi berubah lebih sering daripada skema.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Buku tidak seimbang | jumlah debit vs kredit per transaksi | Ada entri yang tertulis sebagian |
+| Saldo berbeda dari hasil hitung ulang | saldo kolom vs agregasi jurnal | Saldo turunan menyimpang |
+| Ada baris jurnal yang pernah diubah | jejak audit pada tabel jurnal | Ledger tidak benar-benar append-only |
+| Jalur transaksi melambat saat tutup buku | query pelaporan pada tabel panas | Pelaporan tidak dipisahkan |
+| Entri kembar dari satu permintaan | idempotensi di lapisan atas | Retry menghasilkan entri ganda |
+
+```sql
+-- Invarian paling mendasar: setiap transaksi WAJIB seimbang
+SELECT transaksi_id, sum(debit) AS d, sum(kredit) AS k
+FROM jurnal GROUP BY transaksi_id HAVING sum(debit) <> sum(kredit) LIMIT 20;
+
+-- Saldo tersimpan vs hasil hitung ulang dari jurnal
+SELECT a.id, a.saldo,
+       coalesce(sum(j.debit) - sum(j.kredit), 0) AS saldo_hitung,
+       a.saldo - coalesce(sum(j.debit) - sum(j.kredit), 0) AS selisih
+FROM akun a LEFT JOIN jurnal j ON j.akun_id = a.id
+GROUP BY a.id, a.saldo HAVING a.saldo <> coalesce(sum(j.debit) - sum(j.kredit), 0);
+
+-- Apakah append-only benar-benar ditegakkan izin database?
+SELECT grantee, privilege_type FROM information_schema.table_privileges
+WHERE table_name = 'jurnal' AND privilege_type IN ('UPDATE','DELETE');
+```

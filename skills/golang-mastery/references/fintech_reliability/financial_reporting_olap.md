@@ -1,5 +1,7 @@
 # Financial Reporting & OLAP Database
 
+> **Berlaku:** Go 1.21+ · ClickHouse / PostgreSQL · **Lihat juga:** `fintech_reliability/double_entry_ledger.md` · `fintech_reliability/reconciliation_engine.md` · `db_sqlc/read_replica_routing.md` · `db_sqlc/timescaledb_partitioning.md`
+
 ## 1. Konsep dan Internals
 Dalam arsitektur fintech, sistem terpisah antara OLTP (Online Transaction Processing) dan OLAP (Online Analytical Processing) adalah keharusan. Database relasional seperti PostgreSQL (OLTP) sangat optimal untuk eksekusi transaksi yang cepat dengan lock yang akurat, tetapi rentan terhadap degradasi performa (*slow query*, tabel terkunci) ketika menjalankan agregasi laporan miliaran baris.
 
@@ -244,3 +246,33 @@ for _, tx := range txs {
 3. **Penyusutan Kinerja karena CDC WAL Retention:** Jika service Debezium/CDC terputus atau rusak, log WAL PostgreSQL akan terus menumpuk di disk server karena belum dikonfirmasi (replikasi slot). Ini bisa membuat *disk full* dan PostgreSQL *crash*. Pasang *monitoring/alerting* ketat pada metrik replikasi slot lag.
 4. **CSV Injection (Excel Macro Vulnerability):** Jika laporan memuat data input user (misal `reference` atau `notes`) yang diawali dengan `=`,`+`,`-`, atau `@`, Microsoft Excel bisa mengeksekusi itu sebagai formula atau perintah OS. Hati-hati melakukan *sanitization* nilai CSV.
 5. **Database Connection Exhaustion saat Streaming:** Loop panjang pada iterasi `rows.Next()` mengambil 1 koneksi eksklusif. Jika `StreamingCSVReport` butuh 10 menit dan dipanggil ratusan user sekaligus, *Connection Pool* ke DB akan habis. Batasi konkurensi (misal menggunakan Semaphore pattern) pada rute laporan.
+
+## Kapan JANGAN Pakai Ini
+
+- **Query analitik di database transaksional produksi.** Pemindaian besar mengunci sumber daya yang dibutuhkan jalur pembayaran, dan laporan bulanan tidak layak menyebabkan transaksi gagal.
+- **Menghitung ulang laporan periode tertutup dari nol setiap kali.** Untuk periode yang sudah ditutup, hasilnya **tidak boleh berubah**. Simpan hasilnya dan bandingkan; perubahan pada angka yang sudah dilaporkan adalah kejadian yang harus diselidiki.
+- **Angka laporan yang tidak bisa ditelusuri ke transaksi asalnya.** Auditor akan meminta jejaknya, dan jawaban "pipeline menghitungnya" tidak memadai.
+- **Laporan yang memakai zona waktu server.** Batas hari finansial ditentukan aturan bisnis dan yurisdiksi, bukan lokasi mesin. Server yang dipindah region seharusnya tidak mengubah laporan.
+- **OLAP tanpa verifikasi terhadap sumber.** Pipeline yang melewatkan sebagian data menghasilkan laporan yang salah tanpa satu pun galat. Cocokkan total terhadap sumber, secara terjadwal.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Angka periode lalu berubah | apakah hasil disimpan | Laporan dihitung ulang dengan data/aturan baru |
+| Total OLAP tidak cocok dengan sumber | pemeriksaan silang terjadwal | Pipeline melewatkan sebagian data |
+| Laporan berubah setelah pindah region | zona waktu yang dipakai | Batas hari mengikuti server |
+| Jalur transaksi melambat saat pelaporan | database yang dipakai query | Analitik berjalan di primary |
+| Angka tidak bisa dijelaskan ke auditor | jejak dari angka ke transaksi | Tidak ada penelusuran |
+
+```sql
+-- Verifikasi silang: total OLAP WAJIB sama dengan sumber transaksional
+SELECT 'sumber' AS asal, sum(jumlah) FROM jurnal WHERE tanggal = '2026-08-04'
+UNION ALL
+SELECT 'olap',  sum(jumlah) FROM laporan_harian WHERE tanggal = '2026-08-04';
+
+-- Periode tertutup yang angkanya berubah: ini insiden, bukan perbedaan
+SELECT periode, nilai_tersimpan, nilai_hitung_ulang,
+       nilai_tersimpan - nilai_hitung_ulang AS selisih
+FROM audit_laporan WHERE nilai_tersimpan <> nilai_hitung_ulang;
+```

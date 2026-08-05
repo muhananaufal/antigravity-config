@@ -1,5 +1,7 @@
 # Distributed Cache: Groupcache Pattern
 
+> **Berlaku:** Go 1.21+ · `golang/groupcache` · **Lihat juga:** `caching_strategy/multilevel_cache_l1l2.md` · `caching_strategy/cache_invalidation_strategies.md` · `distributed_patterns_resilience/consistent_hashing_ring.md` · `concurrency/singleflight_thundering_herd.md`
+
 ## 1. Konsep Utama & Internals
 
 `groupcache` adalah library dari pembuat Go (Brad Fitzpatrick) yang menawarkan kapabilitas distributed caching tanpa server *standalone* seperti Memcached atau Redis. Sistem ini beroperasi *in-memory* sebagai bagian dari binary aplikasi kita (peer-to-peer). 
@@ -239,3 +241,34 @@ getter := groupcache.GetterFunc(func(ctx context.Context, key string, dest group
 3. **Context Cancellation di Getter**
    Ketika ribuan request memicu SingleFlight, mereka menunggui proses database (Getter). Namun, context yang dilempar oleh request *Pertama* bisa jadi sudah `ctx.Canceled` (misal user menutup browsernya prematur). Jika fungsi Getter Anda membatalkan *database fetch* karena *Context Canceled*, maka ke 9,999 request lainnya yang bergantung padanya akan **gagal masal**.
    *Defensive Check:* Di dalam fungsi `Getter`, lebih baik pisahkan Context antara request HTTP pertama dengan eksekusi call Database. Gunakan context Background dengan Timeout pasti (misal 5 detik) untuk hit database di area Getter, agar fungsi fetch tetap selesai dan memberikannya kepada follower request lain.
+
+## Kapan JANGAN Pakai Ini
+
+- **Untuk data yang bisa berubah.** groupcache **tidak punya mekanisme invalidasi** sama sekali; entri hanya hilang ketika dievict. Ia dirancang untuk data immutable yang mahal dihitung — di luar itu, ia akan menyajikan data lama tanpa cara memperbaikinya.
+- **Sebagai pengganti Redis untuk kebutuhan cache umum.** Tidak ada TTL per kunci, tidak ada penghapusan eksplisit, tidak ada struktur data. Itu bukan kekurangan — itu ruang lingkupnya.
+- **Tanpa memikirkan perubahan topologi peer.** Perubahan daftar peer memindahkan kepemilikan kunci, dan hit rate akan anjlok setiap kali armada diskalakan.
+- **Untuk nilai berukuran besar.** Setiap peer menyimpan salinan hot key di cache lokalnya. Nilai besar dikalikan jumlah peer bisa menghabiskan memori seluruh armada sekaligus.
+- **Mengandalkan konsistensi antar peer.** Peer bisa memegang versi berbeda untuk sementara, dan tidak ada mekanisme yang menyatukannya.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Data lama disajikan tanpa bisa diperbaiki | apakah data memang immutable | groupcache dipakai di luar ruang lingkupnya |
+| Hit rate anjlok setiap penskalaan | perubahan daftar peer | Kepemilikan kunci berpindah |
+| Memori naik serempak di semua pod | ukuran nilai hot key | Salinan hot key ada di setiap peer |
+| Peer menyajikan nilai berbeda | konsistensi antar peer | Tidak ada mekanisme penyatuan versi |
+| Beban ke sumber tidak turun | rasio hit lokal vs peer | Kunci tersebar merata; caching kurang efektif |
+
+```bash
+# Statistik groupcache: bedakan hit lokal, hit dari peer, dan miss
+curl -s localhost:8080/debug/groupcache | jq
+
+# Perubahan daftar peer -- setiap perubahan memindahkan kunci
+kubectl get endpoints <layanan> -o jsonpath='{.subsets[*].addresses[*].ip}'
+
+# Nilai berbeda antar pod = bukti langsung ketidakkonsistenan antar peer
+for p in $(kubectl get pods -l app=api -o name); do
+  kubectl exec "$p" -- curl -s localhost:8080/cache/kunci-uji
+done | sort | uniq -c
+```

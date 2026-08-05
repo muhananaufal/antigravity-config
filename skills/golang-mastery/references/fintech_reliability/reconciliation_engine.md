@@ -1,5 +1,7 @@
 # Reconciliation Engine (Pencocokan Transaksi Keuangan)
 
+> **Berlaku:** Go 1.21+ · **Lihat juga:** `fintech_reliability/double_entry_ledger.md` · `fintech_reliability/idempotency_payment_engine.md` · `fintech_reliability/financial_reporting_olap.md` · `db_sqlc/read_replica_routing.md`
+
 ## Concept/Internals
 Rekonsiliasi (Recon) adalah proses verifikasi integritas data untuk memastikan bahwa dua set rekaman terpisah (biasanya Buku Besar Internal Anda melawan Rekening Koran/Settlement dari Pihak Bank eksternal) berujung pada saldo yang sinkron dan nilai yang konsisten.
 Tanpa rekonsiliasi harian, Anda akan buta jika Bank tiba-tiba menolak pembayaran yang menurut DB Anda sukses, atau lebih mematikan lagi: *Bank memotong uang pengguna tetapi DB Anda mencatat itu gagal (Dana mengendap tak bertuan)*.
@@ -199,3 +201,36 @@ for _, in := range int_recs {
 1. **Many-to-One Matching (Aggregated Settlement)**: Seringkali, *Payment Gateway* membayarkan (Pencairan/Settlement) total uang kumulatif 10,000 mutasi harian ke rekening Anda dalam *SATU* baris lump-sum senilai $1,000,000. Strategi `1-vs-1 HashMap RefNo` akan runtuh. Anda harus mengimplementasikan fungsi khusus `Settlement Reconciliation` yang melakukan agregasi parsial per *Settlement Batch ID* sebelum dicocokkan dengan mutasi tunggal koran bank.
 2. **Potongan Bank (Hidden Fees)**: Beberapa bank lama memotong pajak cukai atau biaya admin langsung dari jumlah uang yang sama tanpa memisahkan baris catatannya (`gross - fee = net`). Akibatnya, `Amount` selalu meleset beberapa rupiah. Toleransi statis (contoh: 1 sen) tidak bisa menangkap skema *percentage-based fee*. Anda butuh injeksi fungsi kalkulasi *Fee Engine* pada logic Mismatch untuk menjustifikasi perbedaan nominal secara rasional.
 3. **Out-of-Memory (OOM) pada Skala Raksasa**: Menggunakan Hash Map RAM O(N) untuk 100 juta rekaman mutasi pada *instance pod* kecil (2GB) tetap akan menguras memori (*Pointer & Struct Overhead*). Pada skala Enterprise ekstrem, tinggalkan recon *in-memory* dan serahkan kepada teknologi *Data Warehouse* (OLAP) dengan menjejalkan (*Bulk Copy*) CSV bank langsung ke tabel sementara (Staging), dan jalankan *Massive Parallel JOIN query* dari engine DB analitik.
+
+## Kapan JANGAN Pakai Ini
+
+- **Rekonsiliasi yang hanya membandingkan total.** Dua selisih yang saling meniadakan akan lolos tanpa jejak, dan keduanya tetap salah. Cocokkan per transaksi.
+- **Tanpa toleransi batas waktu.** Transaksi yang terjadi di perbatasan hari akan tampak sebagai selisih **setiap hari**, dan tim belajar mengabaikan laporan selisih.
+- **Menjalankan rekonsiliasi terhadap tabel produksi yang panas.** Pemindaian penuh mengganggu jalur pembayaran. Jalankan terhadap replica atau salinan harian.
+- **Perbaikan otomatis atas selisih.** Perbaikan otomatis menyembunyikan penyebab, dan penyebab itu akan menghasilkan selisih lagi besok. Catat, eskalasi, perbaiki dengan keputusan yang tercatat.
+- **Laporan selisih tanpa pemilik.** Laporan yang tidak ada yang menindaklanjuti melatih seluruh tim mengabaikannya — termasuk pada hari selisihnya benar-benar berarti kehilangan uang.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Selisih yang sama muncul setiap hari | toleransi batas waktu | Transaksi perbatasan hari dihitung sebagai selisih |
+| Total cocok tapi ada transaksi hilang | granularitas pencocokan | Rekonsiliasi hanya di tingkat agregat |
+| Jalur pembayaran melambat saat rekonsiliasi | terhadap database mana ia berjalan | Berjalan di primary produksi |
+| Selisih menumpuk tanpa ditindak | pemilik dan SLA penyelesaian | Tidak ada proses tindak lanjut |
+| Selisih hilang sendiri | apakah ada perbaikan otomatis | Penyebab tersembunyi dan akan berulang |
+
+```sql
+-- Pencocokan per transaksi, bukan per total
+SELECT i.referensi, i.jumlah AS jumlah_internal, e.jumlah AS jumlah_eksternal,
+       i.jumlah - e.jumlah AS selisih
+FROM transaksi_internal i
+FULL OUTER JOIN transaksi_penyedia e ON e.referensi = i.referensi
+WHERE i.jumlah IS DISTINCT FROM e.jumlah
+   OR i.referensi IS NULL OR e.referensi IS NULL
+LIMIT 50;
+
+-- Umur selisih yang belum diselesaikan: ini metrik kesehatan yang sebenarnya
+SELECT kategori, count(*), max(now() - ditemukan_pada) AS tertua
+FROM selisih_rekonsiliasi WHERE status = 'terbuka' GROUP BY 1;
+```

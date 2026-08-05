@@ -1,5 +1,7 @@
 # Perhitungan Moneter dengan Decimal Arithmetic di Go
 
+> **Berlaku:** Go 1.21+ · `shopspring/decimal` · PostgreSQL `numeric` · **Lihat juga:** `fintech_reliability/double_entry_ledger.md` · `fintech_reliability/rate_card_pricing_engine.md` · `fintech_reliability/reconciliation_engine.md` · `db_sqlc/sqlc_pgx_driver.md`
+
 ## Concept/Internals
 Dalam domain teknologi finansial (fintech), akurasi perhitungan adalah hal mutlak. Penggunaan tipe data `float32` atau `float64` (yang berbasis IEEE 754 *floating-point arithmetic*) untuk merepresentasikan nilai uang adalah tabu besar. Floating point menggunakan basis-2 untuk merepresentasikan pecahan, yang berarti angka desimal basis-10 sederhana seperti `0.1` tidak dapat direpresentasikan secara eksak. Akibatnya, operasi sederhana seperti `0.1 + 0.2` akan menghasilkan `0.30000000000000004`. Akumulasi kesalahan ini akan berujung pada selisih akuntansi (penny shaving) yang masif dalam skala jutaan transaksi.
 
@@ -311,3 +313,41 @@ type Payload struct {
 2. **Penny Shaving dalam Pembagian Murni**: Jika 3 orang membagi bill senilai $10.00 secara adil, pembagian statis `.Div()` akan menghasilkan `3.333333...`. Jika Anda membulatkannya ke 2 desimal (`3.33`), totalnya menjadi `9.99`. Anda kehilangan `$0.01`. Selalu gunakan algoritma `Allocation` yang menyerap *remainder* (sisa pembagian) dan mendistribusikannya sebagai unit terkecil ke sekumpulan partisipan.
 3. **Database Precision Mismatch**: Mengirim `decimal.Decimal` dengan presisi tak hingga ke PostgreSQL kolom `NUMERIC(10,2)` dapat menyebabkan database secara diam-diam membulatkan angka tersebut jika Anda tidak berhati-hati, atau sebaliknya melempar error `numeric field overflow`. Validasi atau truncasi *scale* di sisi backend Go sebelum pemanggilan query `INSERT/UPDATE`.
 4. **Division by Zero**: Berbeda dengan float di mana `/ 0.0` mengembalikan `+Inf` (infinity), di `shopspring/decimal`, memanggil `decimal.Div(decimal.Zero)` akan memicu **`panic`**. Selalu cek nilai divisor jika divisor bukan konstan, menggunakan `.IsZero()`.
+
+## Kapan JANGAN Pakai Ini
+
+- **`float64` untuk uang, dalam bentuk apa pun.** `0.1 + 0.2 != 0.3` dalam biner, dan selisih itu menumpuk lintas jutaan transaksi menjadi angka yang harus dijelaskan kepada auditor. Tidak ada jumlah pembulatan yang memperbaikinya.
+- **Membulatkan di setiap langkah perhitungan.** Pembulatan berulang menghasilkan penyimpangan yang searah. Bulatkan **sekali**, di titik yang ditentukan aturan bisnis, dan dokumentasikan di mana titik itu.
+- **Menyimpan `numeric` di database lalu memuatnya ke `float64` di Go.** Presisi hilang tepat di batas itu, dan tidak ada satu pun galat yang muncul. Ini kebocoran presisi paling umum dan paling sulit dilihat di code review.
+- **Satu tipe uang tanpa mata uang.** Menjumlahkan IDR dan USD seharusnya **tidak bisa dikompilasi**, bukan menghasilkan angka yang tampak masuk akal.
+- **Mengasumsikan skala dua desimal.** IDR umumnya nol desimal, JPY nol, BHD tiga. Asumsi ini akan salah pada mata uang pertama yang keluar dari kebiasaan Anda — dan biasanya di produksi.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Selisih kecil yang konsisten di rekonsiliasi | tipe data di jalur perhitungan | `float64` menyelinap di suatu tempat |
+| Total tidak sama dengan jumlah bagian | titik pembulatan | Pembulatan dilakukan berulang |
+| Nilai berubah setelah bolak-balik ke database | tipe scan di Go | `numeric` dimuat ke `float64` |
+| Angka salah untuk mata uang tertentu | skala per mata uang | Skala diasumsikan seragam |
+| Penjumlahan lintas mata uang lolos | tipe yang membawa mata uang | Mata uang tidak ada di tipe |
+
+```bash
+# Setiap kemunculan float pada jalur uang adalah temuan
+grep -rnE 'float(32|64)' --include='*.go' . \
+  | grep -iE 'harga|jumlah|saldo|amount|price|balance|total'
+
+# Kolom uang yang bertipe floating point di database
+```
+
+```sql
+SELECT table_name, column_name, data_type
+FROM information_schema.columns
+WHERE data_type IN ('double precision','real')
+  AND column_name ~ '(harga|jumlah|saldo|amount|price|balance|total)';
+
+-- Jumlah bagian harus persis sama dengan total yang tersimpan
+SELECT p.id, p.total, sum(i.subtotal) AS jumlah_item, p.total - sum(i.subtotal) AS selisih
+FROM pesanan p JOIN item_pesanan i ON i.pesanan_id = p.id
+GROUP BY p.id, p.total HAVING p.total <> sum(i.subtotal) LIMIT 20;
+```

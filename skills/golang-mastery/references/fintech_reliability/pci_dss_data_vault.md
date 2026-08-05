@@ -1,5 +1,7 @@
 # PCI-DSS Data Vault & Tokenization (Cardholder Data)
 
+> **Berlaku:** Go 1.21+ · PCI DSS 4.0 · **Lihat juga:** `security_owasp/aes_gcm_cryptography.md` · `security_owasp/audit_logging_scrubbing.md` · `security_owasp/secret_management_vault.md` · `fintech_reliability/idempotency_payment_engine.md`
+
 ## Concept/Internals
 Sistem e-commerce dan Payment Gateway yang bersentuhan dengan data kartu kredit mentah harus tunduk pada **PCI-DSS (Payment Card Industry Data Security Standard)**. Standar ini adalah hukum besi finansial internasional. Menyimpan *Primary Account Number* (PAN / 16 digit kartu) secara mentah tanpa enkripsi level tertinggi dapat mengakibatkan audit denda miliaran rupiah dan izin akuisisi kartu dicabut selamanya oleh Visa/Mastercard.
 
@@ -206,3 +208,40 @@ func (s SecureCard) String() string {
 1. **Key Rotation (Rotasi Kunci Berkala)**: Aturan kriptografi memaksa Anda menukar Master Key enkripsi setidaknya 1 kali setahun. Bagaimana mendekripsi *ciphertext* kartu berumur 2 tahun yang terkunci dengan kunci lama? Sistem produksi nyata menyertakan `KeyID` (Header metadata) pada *prefix* string enkripsi (`V1$hex_ciphertext...`). Saat didekripsi, parser membaca `V1`, mengambil Kunci V1 dari AWS KMS, dan memecahkannya dengan aman, sementara data baru selalu dibungkus dengan Kunci `V2`.
 2. **Side-Channel Timing Attacks**: Membandingkan apakah dua PAN atau hash otentikasi sama tidak boleh menggunakan operator standar Go `==` (seperti `if inputHash == realHash`). Operator standar tersebut akan mereturn nilai *false* di karakter pertama yang gagal, sehingga penyerang bisa menebak isi dengan mengukur selisih nanodetik (Timing Attack). Gunakan fungsi waktu konstan khusus kriptografi: `subtle.ConstantTimeCompare()`.
 3. **Mencegah Garbage Collector Mengambang**: Memori string dan array *byte* yang dialokasikan di Go (saat menangani password, PAN, dan CVC) akan menetap di RAM berlama-lama sampai Go *Garbage Collector (GC)* mampir, memberikan peluang bagi peretas *memory-dump/Heartbleed* untuk menyedot data kartu mentah. Lakukan praktik *Zeroization* untuk tipe sensitif: `for i := range secretSlice { secretSlice[i] = 0 }` setelah fungsi utilitas selesai tugasnya! (Catatan: ini hanya berfungsi murni pada `[]byte`, bukan `string` imutabel).
+
+## Kapan JANGAN Pakai Ini
+
+- **Menyimpan PAN bila tokenisasi sudah cukup.** Data yang tidak Anda simpan tidak bisa bocor dari Anda, tidak masuk ruang lingkup audit, dan tidak perlu dienkripsi, dirotasi, maupun dihapus. Ini keputusan arsitektur dengan pengembalian terbesar di seluruh domain ini.
+- **Menyimpan CVV dalam bentuk apa pun.** Dilarang setelah otorisasi — terenkripsi sekalipun, dan tanpa pengecualian.
+- **Mencatat permintaan pembayaran mentah ke log.** Di situlah PAN masuk ke sistem log yang tidak dirancang untuk data kartu, dan **memperluas ruang lingkup PCI** ke seluruh tumpukan observabilitas Anda.
+- **Enkripsi tanpa memisahkan kunci dari data.** Kunci yang tersimpan di database yang sama membuat enkripsi hanya melindungi dari pencurian berkas mentah — bukan dari akses yang sesungguhnya menjadi ancaman.
+- **Ruang lingkup PCI yang tidak dibatasi jaringan.** Setiap sistem yang **bisa** menyentuh data kartu masuk ruang lingkup audit. Segmentasi jaringan adalah cara paling efektif mengecilkannya.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| PAN ditemukan di sistem log | pola nomor kartu di log | Permintaan mentah dicatat |
+| Ruang lingkup audit terus melebar | segmentasi jaringan | Terlalu banyak sistem bisa menyentuh data kartu |
+| Kunci enkripsi di database yang sama | lokasi penyimpanan kunci | Enkripsi tidak melindungi dari akses aplikasi |
+| Data kartu di lingkungan non-produksi | asal data uji | Data produksi disalin ke staging |
+| Retensi melebihi kebutuhan bisnis | kebijakan penghapusan | Data disimpan lebih lama dari yang bisa dibenarkan |
+
+```bash
+# Pola nomor kartu di log -- setiap kecocokan adalah insiden, bukan temuan biasa
+kubectl logs -l app=payment --since=1h | grep -oE '\b[45][0-9]{15}\b' | head
+kubectl logs -l app=payment --since=1h | grep -oE '\b3[47][0-9]{13}\b' | head
+
+# Segmentasi: sistem mana yang benar-benar bisa mencapai vault
+kubectl get networkpolicies -n pci
+kubectl get pods -n pci -o wide
+
+# Kunci harus berada di luar database yang menyimpan datanya
+vault kv metadata get secret/pci/dek
+```
+
+```sql
+-- Kolom yang mungkin menyimpan data kartu tanpa disadari
+SELECT table_name, column_name FROM information_schema.columns
+WHERE column_name ~* '(card|pan|cvv|cvc|kartu)';
+```

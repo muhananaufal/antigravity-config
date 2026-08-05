@@ -1,5 +1,7 @@
 # Vector Clocks & Hybrid Logical Clocks (HLC)
 
+> **Berlaku:** Go 1.21+ · **Lihat juga:** `distributed_consensus_storage/gossip_memberlist.md` · `distributed_patterns_resilience/cqrs_event_sourcing.md` · `db_sqlc/read_replica_routing.md` · `distributed_consensus_storage/raft_consensus_hashicorp.md`
+
 ## 1. Konsep Utama & Internals
 
 Dalam sistem terdistribusi, mengurutkan dua peristiwa (event) yang terjadi di mesin fisik berbeda sangatlah mustahil jika bergantung pada jam dinding OS (NTP / *Wall Clock*). NTP bisa meleset puluhan milidetik atau berputar mundur (*Clock Skew/Drift*).
@@ -273,3 +275,33 @@ vc["pod-ephemeral-44111"] = 1
 3. **False Conflict karena Event Duplikasi**
    Sistem Message Broker (seperti Kafka) menjamin *At-Least-Once Delivery*. Node A mengirim Vector `[A:1]` tapi delay. Ia kirim lagi. Node B menerimanya dua kali.
    *Defensive Check:* Vector Clock IDEMPOTEN secara lahiriah jika tidak di-inkremen buta di tempat tujuan. Node B me-Merge `[A:1]` lalu me-Merge lagi `[A:1]`, hasil map tetap mentok di `[A:1]`. Selama payload id (Hash) diverifikasi keunikannya.
+
+## Kapan JANGAN Pakai Ini
+
+- **Vector clock pada sistem dengan sangat banyak node.** Ukurannya tumbuh sebanding jumlah node yang pernah menulis, dan ia ikut di setiap pesan. Pada ratusan node, metadata bisa melebihi datanya.
+- **Timestamp jam dinding sebagai penentu urutan.** Clock drift antar mesin membuat urutan salah **tanpa satu pun tanda**. Ini penyebab kehilangan data yang paling sulit dibuktikan setelah terjadi.
+- **HLC tanpa batas drift yang ditegakkan.** Hybrid Logical Clock menoleransi drift kecil dengan anggun; drift besar tetap merusak jaminannya. Batasnya harus dipantau, bukan diasumsikan.
+- **Last-write-wins tanpa menyadari bahwa penulisan yang kalah dibuang.** LWW adalah kebijakan resolusi konflik yang sah — asalkan bisnis memang menerima kehilangan salah satu penulisan. Itu keputusan produk, bukan detail implementasi.
+- **Vector clock tanpa mekanisme memangkas entri node yang sudah tidak ada.** Metadata akan tumbuh selamanya, membawa nama node yang mati bertahun-tahun lalu.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Penulisan hilang tanpa jejak | kebijakan resolusi konflik | LWW membuang penulisan yang kalah |
+| Urutan kejadian tampak mustahil | drift jam antar node | Jam dinding dipakai sebagai urutan |
+| Ukuran metadata terus tumbuh | jumlah entri vector clock | Node lama tidak pernah dipangkas |
+| Konflik sering terjadi | pola akses per kunci | Beberapa penulis pada kunci yang sama |
+| HLC melompat jauh | batas drift | Satu node punya jam yang jauh menyimpang |
+
+```bash
+# Drift jam antar node -- ini prasyarat semua jaminan berbasis waktu
+for n in node1 node2 node3; do echo -n "$n: "; ssh "$n" date +%s.%N; done
+chronyc tracking 2>/dev/null || timedatectl status
+
+# Konflik dan penulisan yang dibuang: keduanya WAJIB jadi metrik
+curl -s localhost:9090/metrics | grep -E 'conflict_(detected|resolved)_total|write_discarded_total'
+
+# Ukuran metadata per objek
+curl -s localhost:9090/metrics | grep -E 'vector_clock_entries'
+```

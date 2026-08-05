@@ -1,5 +1,7 @@
 # Raft Consensus Protocol: Hashicorp Raft
 
+> **Berlaku:** Go 1.21+ · `hashicorp/raft` · **Lihat juga:** `distributed_consensus_storage/etcd_client_patterns.md` · `distributed_consensus_storage/wal_write_ahead_logging.md` · `concurrency/distributed_locks_redis.md` · `distributed_patterns_resilience/consistent_hashing_ring.md`
+
 ## 1. Konsep Utama & Internals
 
 Raft adalah protokol konsensus terdistribusi yang dirancang untuk dapat dimengerti, menggantikan Paxos yang rumit secara akademis. Di ekosistem Golang, `github.com/hashicorp/raft` adalah implementasi standar industri untuk mem-bootstrap *Replicated State Machine* di dalam aplikasi Anda (dipakai di Consul, Nomad, dsb).
@@ -329,3 +331,34 @@ func (f *MyFSM) Snapshot() (raft.FSMSnapshot, error) {
 3. **Stale Read / Phantom Read (Dirty Read)**
    Klien membaca GET Data lewat Node B (Follower). Secara kebetulan jaringan Node B tersendat sedetik yang lalu. Di ujung sana, Node A (Leader) baru saja me-write X = 200, tapi replikasinya macet ke Node B. Klien membaca B, dan mendapatkan X = 100 (Stale).
    *Defensive Check:* Raft memisahkan *Write* dan *Read*. Secara fundamental, `Get()` tidak melalui layer Raft, melainkan ambil mentah dari RAM masing-masing FSM. Untuk menghindarinya (Bila Anda butuh Strict/Linearizable Consistency layaknya Perbankan), lakukan pembacaan dengan membungkusnya sebagai operasi Raft Dummy lewat metode khusus `Raft.VerifyLeader()` atau memasukkannya ke *Apply* kosong, lalu respon ke klien hanya saat index tersebut komplit. (Ini akan mengorbankan Read Throughput secara signifikan).
+
+## Kapan JANGAN Pakai Ini
+
+- **Untuk data yang bisa menerima eventual consistency.** Raft membayar latensi kuorum pada **setiap** penulisan. Bila kebutuhannya bukan konsistensi kuat, ongkos itu murni kerugian.
+- **Cluster dengan jumlah node genap.** Empat node menoleransi kegagalan yang sama dengan tiga, tetapi menambah satu peserta yang harus dihubungi setiap kuorum. Ganjil selalu.
+- **Raft lintas region tanpa memperhitungkan latensi.** Setiap penulisan menunggu mayoritas menjawab. Dengan node di tiga benua, latensi tulis Anda ditentukan geografi, bukan kode.
+- **Menulis implementasi Raft sendiri.** Detail yang salah — pemotongan log, snapshot, perubahan keanggotaan — menghasilkan kehilangan data yang tidak terdeteksi sampai failover pertama, dan failover pertama biasanya terjadi saat keadaan sudah buruk.
+- **Tanpa snapshot dan pemangkasan log.** Log yang tumbuh selamanya membuat pemulihan node makin lama, sampai titik di mana node baru tidak pernah berhasil menyusul.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Latensi tulis tinggi dan stabil | latensi antar node kuorum | Ongkos kuorum, bukan ongkos aplikasi |
+| Pemilihan pemimpin berulang | timeout heartbeat vs jitter jaringan | Cluster tidak stabil; timeout terlalu ketat |
+| Node baru tidak pernah menyusul | ukuran log dan frekuensi snapshot | Snapshot terlalu jarang |
+| Cluster kehilangan kuorum saat satu node mati | jumlah node | Konfigurasi genap atau terlalu kecil |
+| Penulisan ditolak | status pemimpin | Tidak ada pemimpin; kuorum tidak terbentuk |
+
+```bash
+# Keadaan cluster: siapa pemimpin, dan apakah semua node menyusul
+curl -s localhost:8080/raft/stats | jq
+# atau, tergantung integrasi Anda:
+#   raft.Stats() -> state, term, last_log_index, commit_index, applied_index
+
+# Selisih commit_index antar node menunjukkan siapa yang tertinggal
+for n in node1 node2 node3; do echo "== $n"; curl -s "$n:8080/raft/stats" | jq -r '.commit_index'; done
+
+# Pemilihan pemimpin yang sering = cluster tidak stabil
+kubectl logs -l app=raft --since=1h | grep -ci 'entering candidate state\|new leader elected'
+```

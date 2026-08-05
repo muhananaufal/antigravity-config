@@ -1,5 +1,7 @@
 # ISO 20022 & SWIFT Messaging
 
+> **Berlaku:** Go 1.21+ · ISO 20022 · **Lihat juga:** `fintech_reliability/idempotency_payment_engine.md` · `fintech_reliability/reconciliation_engine.md` · `security_owasp/audit_logging_scrubbing.md` · `microservices_grpc/api_versioning_strategy.md`
+
 ## 1. Konsep dan Internals
 ISO 20022 adalah standar internasional pertukaran data elektronik antara institusi keuangan. Menggunakan format XML dengan skema XSD yang ketat, pesan ISO 20022 membawa informasi finansial yang kaya dan terstruktur. Standar ini membagi pesan ke dalam beberapa domain bisnis, seperti Payments Initiation (PAIN), Cash Management (CAMT), dan Payments Clearing and Settlement (PACS).
 
@@ -272,3 +274,35 @@ CreDtTm: time.Now().Format("2006-01-02 15:04:05") // Ditolak oleh XSD Bank
 3. **EndToEndId Character Limit & Special Chars:** `EndToEndId` dibatasi maksimal 35 karakter alphanumeric. Jika mengirim UUID v4 utuh (36 karakter), transaksi akan ditolak (`PACS.002` Reject). UUID harus di-*strip* tanda hubungnya. Karakter non-latin juga akan menyebabkan XSD schema failure.
 4. **Duplicate Messages (Idempotency):** `MsgId` pada header harus unik per bank. Fintech harus menyimpan state pengiriman dan memastikan `MsgId` yang sama tidak dikirim dua kali meskipun terjadi timeout, melainkan melakukan inquiry.
 5. **Huge Payload Streaming Interruption:** Saat mem-parsing CAMT.053 besar secara streaming, network/disk I/O bisa drop. Pastikan parser menyimpan *offset* atau cursor rekonsiliasi yang sukses di-proses (`NtryRef`) agar bisa di-resume, bukan diulang dari awal saat file diunduh ulang.
+
+## Kapan JANGAN Pakai Ini
+
+- **Menulis parser XML sendiri.** Skema ISO 20022 besar dan berubah mengikuti rilis tahunan. Hasilkan kode dari XSD resmi; parser tangan akan tertinggal dan kesalahannya muncul sebagai pesan yang ditolak bank.
+- **Mengasumsikan semua bank menerapkan skema yang identik.** Variasi lokal nyata, didokumentasikan terpisah, dan sering wajib. Rencanakan profil per counterparty sejak awal.
+- **Memproses pesan tanpa validasi terhadap skema.** Pesan yang tidak valid harus ditolak di gerbang dengan alasan yang jelas — bukan diteruskan sampai gagal di logika bisnis, jauh dari konteksnya.
+- **Menyimpan pesan mentah tanpa penyaringan untuk keperluan debug.** Pesan memuat data pihak yang tunduk aturan privasi dan retensi. Simpan yang perlu, saring sisanya, dan tetapkan masa simpan.
+- **Mengabaikan idempotensi di tingkat pesan.** Pengiriman ulang adalah bagian **normal** protokol perbankan, bukan anomali. Deduplikasi berdasarkan pengenal pesan wajib ada.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Bank menolak pesan | validasi terhadap XSD sebelum kirim | Pesan tidak sesuai skema atau profil lokal |
+| Instruksi diproses dua kali | deduplikasi pengenal pesan | Pengiriman ulang dianggap pesan baru |
+| Gagal setelah pembaruan skema tahunan | versi skema yang dipakai | Skema hulu berubah |
+| Data pribadi tersimpan lebih lama dari kebijakan | retensi pesan mentah | Tidak ada penyaringan dan masa simpan |
+| Perilaku beda antar counterparty | profil per bank | Variasi lokal tidak dimodelkan |
+
+```bash
+# Validasi terhadap XSD resmi SEBELUM mengirim -- ini gerbang yang paling murah
+xmllint --noout --schema pain.001.001.09.xsd pesan.xml
+
+# Pesan yang ditolak, dikelompokkan berdasarkan alasan
+kubectl logs -l app=swift --since=24h \
+  | jq -r 'select(.event=="pesan_ditolak") | .alasan' | sort | uniq -c | sort -rn
+```
+
+```sql
+-- Pengenal pesan yang muncul lebih dari sekali: pengiriman ulang, harus dideduplikasi
+SELECT msg_id, count(*) FROM pesan_masuk GROUP BY 1 HAVING count(*) > 1 LIMIT 20;
+```
