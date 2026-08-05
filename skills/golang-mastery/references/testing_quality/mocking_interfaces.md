@@ -1,5 +1,7 @@
 # Mocking Interfaces di Go
 
+> **Berlaku:** Go 1.21+ · `go.uber.org/mock` (pengganti `github.com/golang/mock` yang tidak lagi dipelihara) · **Lihat juga:** `testing_quality/unit_testing_testify.md` · `testing_quality/testcontainers_integration.md` · `arch_patterns/clean_hexagonal_architecture.md` · `arch_patterns/dependency_injection_wire.md`
+
 Mocking di Go berbasis interface — bukan reflection magic seperti di Java/Python. Prinsip "Accept interfaces, return structs" memungkinkan penggantian implementasi nyata dengan mock saat testing. `go.uber.org/mock` (penerus `golang/mock`) adalah tool standar industri; `testify/mock` cocok untuk manual mocking ringan.
 
 ---
@@ -357,3 +359,34 @@ import "go.uber.org/mock/gomock"
 4. **`gomock.InOrder` untuk Sequential Call Verification:** Jika urutan call penting (misal: `Begin()` harus sebelum `Commit()`), gunakan `gomock.InOrder(call1, call2, call3)`. Tanpa ini, gomock tidak peduli urutan.
 
 5. **Mock Interface dari External Package:** Untuk interface dari library pihak ketiga (misal `database/sql.DB`), gunakan `mockgen -destination` dengan `-source` path ke package tersebut, atau gunakan `//go:generate` directive di file interface wrapper yang kamu buat sendiri.
+
+## Kapan JANGAN Pakai Ini
+
+- **Mock untuk database.** Mem-mock query SQL hanya menguji bahwa Anda menulis string yang sama di dua tempat. Yang perlu dibuktikan adalah query-nya benar terhadap PostgreSQL sungguhan — termasuk tipe, constraint, dan galat unik driver. Pakai testcontainers.
+- **Interface yang dibuat semata agar bisa di-mock.** Di Go, interface milik konsumen. Interface satu-implementasi yang lahir di sisi produsen hanya demi mock adalah abstraksi yang tidak pernah dipakai untuk apa pun selain uji.
+- **Argument matcher yang terlalu ketat.** `EXPECT().Simpan(ctxTertentu, objekPersisIni)` akan gagal setiap kali struct bertambah satu field yang tidak relevan. Cocokkan hanya yang benar-benar menentukan.
+- **Mock untuk fungsi murni.** Formatter, validator, dan kalkulasi lebih cepat dan lebih jujur diuji langsung.
+- **Memverifikasi urutan panggilan** kecuali urutan itu memang bagian dari kontrak. Menguncinya membuat refactor yang sama sekali tidak mengubah perilaku tetap gagal.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Uji hijau tapi produksi gagal di jalur yang sama | apa yang di-mock | Mock tidak mencerminkan perilaku nyata dependensinya |
+| Uji gagal setiap kali struct bertambah field | matcher yang dipakai | Over-specification pada argument matcher |
+| Mock tidak sinkron dengan interface | `go generate` di CI | Kode mock basi; interface sudah berubah |
+| Banyak interface satu-implementasi | siapa konsumennya | Interface dibuat demi mock, bukan demi kebutuhan |
+| Galat driver tidak pernah teruji | daftar galat yang di-stub | Mock hanya mengembalikan sukses dan satu galat generik |
+
+```bash
+mockgen -source=repository.go -destination=mocks/repository_mock.go -package=mocks
+
+# Gerbang CI: mock yang basi langsung ketahuan
+go generate ./... && git diff --exit-code
+
+# Paket lama yang sudah tidak dipelihara -- pindah ke go.uber.org/mock
+grep -rn 'github.com/golang/mock' --include='*.go' .
+
+# Ekspektasi yang tidak terpenuhi atau panggilan tak terduga
+go test ./... -v 2>&1 | grep -iE 'missing call|unexpected call|has already been called'
+```

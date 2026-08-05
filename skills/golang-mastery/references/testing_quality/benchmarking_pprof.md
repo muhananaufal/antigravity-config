@@ -1,5 +1,7 @@
 # Benchmarking & pprof Profiling di Go
 
+> **Berlaku:** Go 1.21+ · `golang.org/x/perf/cmd/benchstat` · **Lihat juga:** `runtime_internals/escape_analysis_pprof.md` · `runtime_internals/pgo_profile_guided_optimization.md` · `runtime_internals/gc_mark_sweep_internals.md` · `hft_zero_alloc/zero_allocation_patterns.md`
+
 Benchmarking di Go adalah first-class citizen: `testing.B` adalah framework bawaan untuk mengukur performa secara statistik. `pprof` adalah tooling profiling untuk mendiagnosis CPU bottleneck, heap allocation, goroutine blocking, dan mutex contention secara mendalam.
 
 ---
@@ -415,3 +417,41 @@ benchstat result.txt
 4. **pprof Overhead di Production:** Memory profiling (`-memprofilerate=1`) men-sample SETIAP alokasi — overhead CPU signifikan (~10-30%). Di production, gunakan sampling rate default (`runtime.MemProfileRate = 512*1024`) atau aktifkan hanya saat debugging.
 
 5. **Flamegraph dengan Inlined Functions:** Go compiler secara agresif melakukan inlining. Fungsi kecil mungkin tidak muncul di flamegraph karena sudah di-inline ke caller. Nonaktifkan inlining sementara dengan `gcflags='-l'` jika butuh full call stack: `go test -bench=. -gcflags='-l' -cpuprofile=cpu.prof`.
+
+## Kapan JANGAN Pakai Ini
+
+- **Benchmark mikro sebagai bukti perbaikan sistem.** Fungsi yang tiga kali lebih cepat tidak berarti apa-apa bila ia menyumbang 0,5% waktu permintaan. Cari dulu di mana waktunya benar-benar habis, baru optimalkan di situ.
+- **Satu kali run tanpa `benchstat`.** Selisih 5% pada satu run hampir selalu derau. Tanpa `-count` dan uji statistik, angkanya bukan bukti — hanya kesan.
+- **Mengukur di laptop yang sedang turbo boost.** Frekuensi CPU berayun dan penjadwal desktop ikut campur. Bandingkan hanya angka yang diambil di mesin dan kondisi yang sama; lintas mesin tidak bermakna.
+- **pprof di produksi tanpa memperhitungkan ongkosnya.** Profil CPU menambah beban; profil mutex dan block dengan rate tinggi lebih mahal lagi. Nyalakan dengan rate rendah dan durasi terbatas, jangan biarkan menyala terus.
+- **Menyimpulkan dari `-top` saja.** Fungsi di puncak sering hanya pemanggil. `-list` menunjukkan baris mana yang mahal, dan flamegraph menunjukkan jalur mana yang membawanya ke sana.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Benchmark membaik, p99 produksi tetap | kontribusi fungsi itu ke total | Yang dioptimalkan bukan penyempitan sebenarnya |
+| Hasil benchmark berayun antar run | `benchstat` p-value | Mesin tidak stabil, atau `b.N` terlalu kecil |
+| Profil produksi hampir kosong | durasi pengambilan | Terlalu pendek, atau proses memang sedang idle |
+| Profil didominasi `runtime.*` | profil alokasi | Bebannya alokasi/GC, bukan logika aplikasi |
+| Benchmark jauh lebih cepat dari kenyataan | apakah hasilnya dipakai | Kompilator menghapus kode karena hasilnya dibuang |
+
+```bash
+# Sepuluh run lalu uji statistik -- ini yang menentukan, bukan satu angka
+go test -bench=. -benchmem -count=10 -run='^$' ./... > lama.txt
+# ... ubah kode ...
+go test -bench=. -benchmem -count=10 -run='^$' ./... > baru.txt
+benchstat lama.txt baru.txt
+
+# Profil dari benchmark, lalu telusuri sampai ke barisnya
+go test -bench=BenchmarkParse -cpuprofile=cpu.out -memprofile=mem.out -run='^$' ./...
+go tool pprof -http=:8080 cpu.out
+go tool pprof -list='ParseDokumen' cpu.out
+
+# Produksi: ambil sebentar, jangan biarkan menyala
+curl -o cpu.pb.gz 'http://localhost:6060/debug/pprof/profile?seconds=30'
+curl -o heap.pb.gz 'http://localhost:6060/debug/pprof/heap'
+
+# Membandingkan sebelum dan sesudah di produksi
+go tool pprof -base sebelum.pb.gz sesudah.pb.gz
+```

@@ -1,5 +1,7 @@
 # Circuit Breaker Pattern untuk Network Resilience
 
+> **Berlaku:** Go 1.21+ · `sony/gobreaker` · **Lihat juga:** `distributed_patterns_resilience/circuit_breaker_gobreaker.md` · `distributed_patterns_resilience/retry_backoff_jitter.md` · `distributed_patterns_resilience/bulkhead_isolation.md` · `observability_resilience/rate_limiting_patterns.md`
+
 ## Concept/Internals
 Dalam arsitektur *microservices*, kegagalan parsial (seperti *network timeout* atau matinya satu *downstream service*) adalah hal lazim. Tanpa mekanisme pertahanan, kegagalan di satu layanan dapat menyebar (cascading failure) dan meruntuhkan seluruh sistem karena *resource exhaustion* (seperti kehabisan *connection pool* atau antrean panjang goroutines).
 
@@ -217,3 +219,33 @@ if errors.Is(err, ErrServiceUnavailable) {
 2. **Context Cancellation saat Wait**: Jika *parent context* dari `r.Context()` (HTTP request yang masuk) dibatalkan (misal user me-*refresh* browser) tepat saat CB mengeksekusi request di Half-Open, proses HTTP Client akan gagal dengan `context.Canceled`. Kegagalan ini akan dianggap sebagai *service failure* dan men-trip ulang CB menjadi Open! Sebaiknya, deteksi `errors.Is(err, context.Canceled)` dan jangan hitung itu sebagai kegagalan *downstream*.
 3. **Flapping State di Arsitektur Load Balanced**: Jika downstream Anda berada di balik Load Balancer bundar (*round-robin*), dan hanya 1 dari 5 pod yang mati, *error rate* total mungkin hanya 20%. Jika ambang CB adalah 50%, sekring tidak akan pernah putus (Closed), namun 20% pengguna Anda menderita. Di sistem tingkat lanjut, CB harus dipasang *per-instance/pod* (Client-side Load Balancing CB), bukan *per-hostname*.
 4. **Data Race pada Custom Metrics**: Karena CB diakses oleh ribuan goroutines secara simultan, jika Anda menambahkan *counter* kustom (di luar fitur library) di fungsi pelaksana tanpa `sync.Mutex` atau `atomic`, Anda akan mengalami keparahan *Race Condition*. Selalu manfaatkan statistik atomik *internal* yang ditawarkan oleh pustaka.
+
+## Kapan JANGAN Pakai Ini
+
+- **Untuk dependensi yang tidak punya fallback bermakna.** Circuit breaker mengubah "lambat" menjadi "gagal cepat". Bila kegagalan itu tetap berarti permintaan pengguna gagal, yang Anda peroleh hanya kegagalan yang lebih cepat. Kadang itu memang tujuannya — tapi putuskan dengan sadar, bukan sebagai refleks.
+- **Untuk database utama Anda.** Memutus akses ke satu-satunya sumber kebenaran tidak menyelamatkan apa pun. Yang dibutuhkan di situ adalah pool berbatas, timeout, dan antrean — bukan pemutusan.
+- **Satu breaker untuk banyak endpoint hilir.** Endpoint `/laporan` yang berat akan memutus `/status` yang sehat karena keduanya berbagi hitungan. Satu breaker per dependensi logis.
+- **Untuk melindungi diri dari pemanggil.** Breaker melindungi Anda dari **hilir**. Untuk membatasi trafik **masuk**, alatnya rate limiting dan bulkhead.
+- **Tanpa jitter pada percobaan half-open.** Bila puluhan instans membuka pada detik yang sama, hilir yang baru pulih langsung dihantam serentak dan jatuh lagi.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| p99 turun tapi error rate naik | rasio permintaan ditolak breaker | Breaker bekerja; putuskan apakah itu yang diinginkan |
+| Breaker membuka-menutup terus (flapping) | interval half-open vs waktu pulih hilir | Ambang dan interval tidak selaras |
+| Breaker terbuka karena lonjakan `4xx` | klasifikasi galat | Kesalahan klien seharusnya tidak menghitung sebagai kegagalan hilir |
+| Breaker tidak pernah terbuka meski hilir mati | ambang dan jendela | Ambang terlalu longgar, atau timeout request lebih lama dari jendela breaker |
+| Hilir jatuh lagi tepat setelah pulih | jitter pada half-open | Semua instans mencoba serentak |
+
+```bash
+# Metrik breaker per dependensi
+curl -s localhost:9090/metrics | grep -E 'circuit_breaker|cb_(state|requests)'
+
+# PromQL yang layak dipasang di dasbor:
+#   max by (dependensi) (cb_state)                       0=tertutup 1=setengah 2=terbuka
+#   sum by (dependensi) (rate(cb_requests_total{hasil="ditolak"}[5m]))
+#   sum by (dependensi) (rate(cb_state_changes_total[15m]))   -- tinggi = flapping
+
+kubectl logs -l app=api --since=1h | grep -c 'circuit breaker is open'
+```

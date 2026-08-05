@@ -1,5 +1,7 @@
 # Testcontainers untuk Integration Testing di Go
 
+> **Berlaku:** Go 1.21+ · `testcontainers-go` v0.30+ · Docker · **Lihat juga:** `testing_quality/e2e_testing_patterns.md` · `db_sqlc/database_migration_go.md` · `db_sqlc/sqlc_pgx_driver.md` · `testing_quality/mocking_interfaces.md`
+
 `testcontainers-go` menyediakan API untuk spin-up container Docker *disposable* langsung dari kode Go. Ini memungkinkan integration test yang menguji interaksi nyata dengan PostgreSQL, Redis, Kafka — tanpa setup manual, tanpa port conflict, tanpa state pollution antar test.
 
 ---
@@ -338,3 +340,36 @@ func isDockerAvailable() bool {
 4. **Multi-Container Networking:** Jika test membutuhkan App → Redis → PostgreSQL dalam 1 test, buat Docker Network eksplisit dan gunakan Network Alias antar container. Tanpa network alias, container tidak bisa berkomunikasi satu sama lain.
 
 5. **TestMain tidak dijalankan saat test file di-run langsung:** `go test -run=TestXxx ./path/to/pkg` tetap menjalankan `TestMain`. Namun jika ada test di multiple package, `TestMain` hanya berlaku untuk package-nya sendiri — setiap package membutuhkan `TestMain` atau helper setup-nya masing-masing.
+
+## Kapan JANGAN Pakai Ini
+
+- **Untuk logika yang tidak menyentuh infrastruktur.** Menyalakan PostgreSQL demi menguji satu fungsi validasi adalah tiga detik yang terbuang setiap kali uji dijalankan — dikalikan ratusan kali sehari.
+- **Satu container per uji.** Waktu start container mendominasi total durasi. Bagi satu container untuk seluruh paket, lalu isolasi antar uji dengan schema terpisah atau transaksi yang selalu di-rollback.
+- **Di CI yang tidak menyediakan Docker.** Uji akan gagal dengan pesan yang menyesatkan. Periksa ketersediaan Docker di awal dan `t.Skip` secara eksplisit — kegagalan yang jujur lebih baik daripada kegagalan yang membingungkan.
+- **Dengan tag image `latest`.** `postgres:latest` bisa berperilaku berbeda dari `postgres:15.4` yang berjalan di produksi, dan bedanya baru terasa saat rilis. Sematkan versinya persis seperti produksi.
+- **Untuk mengejar realisme total.** Container tidak mereplikasi replikasi, failover, latensi jaringan, atau tetangga yang berisik. Ia membuktikan query dan migrasi Anda benar — bukan bahwa sistemnya tahan beban.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Runner CI kehabisan disk | container dan volume yatim | Cleanup tidak berjalan; Ryuk dimatikan atau container tidak di-terminate |
+| Suite integrasi sangat lambat | jumlah container yang dibuat | Satu container per uji alih-alih per paket |
+| Hijau di laptop, gagal di CI | tag image yang dipakai | `latest` menarik versi berbeda di waktu berbeda |
+| Uji saling mengganggu secara acak | isolasi antar uji | Berbagi database tanpa schema atau transaksi terpisah |
+| Uji gagal dengan galat koneksi | strategi wait | Container dianggap siap sebelum benar-benar menerima koneksi |
+
+```bash
+# Periksa Docker sebelum menjalankan, agar kegagalannya jujur
+docker info >/dev/null 2>&1 || echo "Docker tidak tersedia -- uji integrasi akan di-skip"
+
+go test ./... -run=TestIntegration -v -timeout=10m
+
+# Container yatim yang ditinggalkan uji yang gagal di tengah jalan
+docker ps -a --filter 'label=org.testcontainers=true'
+docker ps -a --filter 'label=org.testcontainers=true' -q | xargs -r docker rm -f
+docker volume ls -qf dangling=true | xargs -r docker volume rm
+
+# Uji paling lambat: biasanya yang membuat container sendiri
+go test ./... -json | jq -r 'select(.Action=="pass") | "\(.Elapsed) \(.Test)"' | sort -rn | head
+```

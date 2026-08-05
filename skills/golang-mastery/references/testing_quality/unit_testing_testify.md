@@ -1,5 +1,7 @@
 # Unit Testing & Testify di Go
 
+> **Berlaku:** Go 1.22+ (variabel loop per-iterasi) · testify v1.9+ · **Lihat juga:** `testing_quality/mocking_interfaces.md` · `testing_quality/e2e_testing_patterns.md` · `testing_quality/property_based_testing.md` · `testing_quality/synctest_deterministic_concurrency.md`
+
 Package `testing` bawaan Go adalah framework test yang powerful. `testify` menambahkan assertion ekspresif, mocking, dan suite support. Memahami perbedaan `assert` vs `require`, table-driven test, `TestMain`, dan goroutine leak detection adalah fondasi unit testing level production.
 
 ---
@@ -287,3 +289,41 @@ func TestWithDB(t *testing.T) {
 4. **`t.Log` vs `t.Error` Visibility:** `t.Log()` hanya muncul saat test gagal atau `-v` flag aktif. Jangan gunakan `fmt.Println` dalam test — output tidak terikat dengan `t` dan tidak akan muncul dalam laporan test terstruktur.
 
 5. **`TestMain` Ordering:** `TestMain` mengontrol siklus hidup seluruh package test. Jika `os.Exit(m.Run())` tidak dipanggil, semua test di package tersebut tidak akan berjalan. Jangan lupa panggil `m.Run()` dan teruskan exit code-nya ke `os.Exit`.
+
+## Kapan JANGAN Pakai Ini
+
+- **Testify sebagai refleks.** Pustaka standar `testing` sudah cukup untuk sebagian besar assertion; `if got != want { t.Errorf(...) }` tidak butuh dependensi apa pun dan pesan gagalnya bisa Anda kendalikan penuh. Testify berguna untuk assertion kompleks dan `suite`, bukan sebagai kebiasaan.
+- **`assert` ketika kegagalannya membuat baris berikutnya tidak masuk akal.** `assert.NoError` lalu langsung mengakses field hasil menghasilkan nil panic yang **menutupi** pesan galat aslinya. Untuk prasyarat, `require` yang benar.
+- **Menguji fungsi tidak terekspor demi menaikkan cakupan.** Cakupan yang dikejar lewat jalan itu tidak membuktikan apa pun tentang perilaku yang dilihat pemanggil, dan mengunci detail implementasi sehingga refactor jadi mahal.
+- **Menargetkan cakupan 100%.** Angka itu mendorong orang menulis uji untuk getter dan konstruktor sambil membiarkan jalur galat — yang justru paling berisiko — tanpa uji sama sekali.
+- **Mock untuk hal yang murah dijalankan sungguhan.** Fungsi murni, formatter, dan validator lebih jujur diuji langsung; mock di situ hanya menguji bahwa Anda menulis ekspektasi yang sama dua kali.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Uji lulus sendirian, gagal saat sepaket | hasil `-shuffle=on` | State global bocor antar uji |
+| Hanya gagal di CI, hijau di laptop | `-race -count=10` | Paralelisme atau timing berbeda |
+| Cakupan tinggi tapi bug tetap lolos | apa yang sebenarnya diuji | Getter dan konstruktor teruji, jalur galat tidak |
+| Suite makin lama tiap sprint | uji terlambat | `time.Sleep` dipakai sebagai sinkronisasi |
+| Uji menggantung sampai timeout CI | panic dari `-timeout` | Deadlock atau channel tanpa penerima |
+
+```bash
+# -count=1 mematikan cache uji: WAJIB saat menyelidiki flaky
+go test ./... -count=1
+
+# Urutan acak membongkar ketergantungan antar uji yang tersembunyi
+go test ./... -shuffle=on
+
+# Diulang dengan detektor race untuk memancing kegagalan yang jarang
+go test ./... -race -count=10
+
+# Uji mana yang paling sering gagal
+go test ./... -json | jq -r 'select(.Action=="fail") | .Test' | sort | uniq -c | sort -rn
+
+# Uji paling lambat -- biasanya ada Sleep di dalamnya
+go test ./... -json | jq -r 'select(.Action=="pass" and .Elapsed>0.5) | "\(.Elapsed)s \(.Test)"' | sort -rn | head -20
+
+# Berkas dengan cakupan terendah, bukan angka total
+go test ./... -coverprofile=c.out && go tool cover -func=c.out | sort -k3 -n | head -20
+```

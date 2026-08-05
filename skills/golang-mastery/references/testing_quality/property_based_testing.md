@@ -1,5 +1,7 @@
 # Property-Based Testing di Go dengan `rapid`
 
+> **Berlaku:** Go 1.21+ · `pgregory.net/rapid` · **Lihat juga:** `testing_quality/fuzz_testing_go.md` · `testing_quality/unit_testing_testify.md` · `testing_quality/synctest_deterministic_concurrency.md` · `runtime_internals/go_generics_type_parameters.md`
+
 Property-Based Testing (PBT) mendefinisikan *invariant* — aturan yang HARUS selalu benar — dan secara otomatis menghasilkan ratusan input untuk mencoba membantah aturan tersebut. Berbeda dari unit test yang memverifikasi output spesifik, PBT memverifikasi *sifat* dari fungsi. `pgregory.net/rapid` adalah library PBT terbaik untuk Go dengan shrinking yang sangat powerful.
 
 ---
@@ -341,3 +343,35 @@ rapid.Check(t, func(t *rapid.T) {
 4. **Seed untuk Reproducibility:** Secara default, rapid menggunakan seed random. Untuk me-replay run yang spesifik, set `RAPID_SEED=<value>` environment variable. Ini penting saat debugging failure yang hanya terjadi di CI.
 
 5. **`rapid.Check` vs `rapid.MakeCheck`:** Gunakan `rapid.MakeCheck` untuk properti yang perlu dijalankan di luar `testing.T` context (misal: dalam benchmark). `rapid.Check(t, ...)` adalah shorthand untuk test context biasa.
+
+## Kapan JANGAN Pakai Ini
+
+- **Untuk perilaku yang memang berupa daftar kasus.** "Kode negara `ID` menghasilkan `+62`" adalah tabel, bukan properti. Memaksakan generator di situ hanya mengaburkan maksudnya.
+- **Ketika propertinya menduplikasi implementasi.** Bila oracle-nya adalah menulis ulang fungsi yang sama dengan cara lain, uji itu hanya membuktikan Anda menulis bug yang sama dua kali.
+- **Generator yang terlalu sempit.** `rapid.IntRange(0, 10)` membuat uji **terlihat** menyeluruh padahal hanya memeriksa sebelas nilai. Ruang input yang sempit adalah cara paling halus menipu diri sendiri.
+- **Untuk kode dengan efek samping yang tidak bisa diulang.** Properti butuh determinisme. Kode yang menyentuh waktu nyata, jaringan, atau berkas harus di-*inject* dulu agar bisa dikendalikan.
+- **Sebagai pengganti uji contoh.** Uji contoh mendokumentasikan perilaku yang dimaksudkan; properti memverifikasi invarian. Keduanya menjawab pertanyaan berbeda dan saling melengkapi.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Properti lulus sejak hari pertama, selamanya | rentang generator | Generator terlalu sempit, atau propertinya trivial |
+| Kegagalan tidak bisa direproduksi | apakah seed dicatat | Seed tidak disimpan bersama laporan kegagalan |
+| Shrinking berjalan sangat lama | ukuran ruang input | Input terlalu besar; batasi generator atau naikkan `shrinktime` |
+| Properti gagal acak di CI saja | efek samping di dalam properti | Ada state global atau waktu nyata yang ikut terlibat |
+| Bug produksi yang "seharusnya tertangkap" | invarian mana yang diuji | Properti menguji hal yang tidak berhubungan dengan bug itu |
+
+```bash
+# Perbanyak percobaan untuk memperluas ruang yang benar-benar dijelajahi
+go test -run=TestProperty -rapid.checks=1000 ./...
+
+# Reproduksi kegagalan dengan seed yang dilaporkan
+go test -run=TestProperty -rapid.seed=1717171717 ./...
+
+# Beri waktu lebih untuk memperkecil kasus pemicu
+go test -run=TestProperty -rapid.shrinktime=60s ./...
+
+# Melihat nilai yang benar-benar dihasilkan generator
+go test -run=TestProperty -rapid.v -rapid.checks=20 ./...
+```

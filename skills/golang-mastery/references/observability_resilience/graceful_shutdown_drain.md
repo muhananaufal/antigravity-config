@@ -1,5 +1,7 @@
 # Graceful Shutdown & Connection Draining di Go
 
+> **Berlaku:** Go 1.21+ · Kubernetes 1.28+ · **Lihat juga:** `observability_resilience/health_check_readiness.md` · `concurrency/goroutine_leak_detection.md` · `concurrency/context_cancellation_timeout.md` · `background_jobs_worker/worker_pool_patterns.md`
+
 Graceful shutdown adalah proses terstruktur untuk menghentikan server tanpa memutus request yang sedang berjalan. Di Kubernetes, jika tidak dilakukan dengan benar, rolling deployment menyebabkan HTTP 502 karena pod lama terbunuh sebelum in-flight request selesai.
 
 ---
@@ -370,3 +372,34 @@ srv.Shutdown(ctx)
 4. **Multiple SIGTERM:** Kubernetes kadang mengirim SIGTERM lebih dari sekali. Pastikan handler signal idempotent — gunakan `sync.Once` untuk memastikan shutdown sequence hanya berjalan satu kali meski signal diterima berkali-kali.
 
 5. **Metrics Flush Sebelum Exit:** Exporter Prometheus/OpenTelemetry biasanya punya buffer internal. Saat shutdown, panggil `shutdown()` pada metrics provider SETELAH HTTP server selesai drain tapi SEBELUM `os.Exit()`. Tanpa ini, metrics dari menit terakhir sebelum deployment hilang — mengganggu alerting.
+
+## Kapan JANGAN Pakai Ini
+
+- **Shutdown timeout lebih besar dari `terminationGracePeriodSeconds`.** Kubernetes akan mengirim `SIGKILL` di tengah drain, dan seluruh kerapihan yang Anda tulis tidak pernah terpakai. Timeout aplikasi WAJIB lebih kecil, dengan margin.
+- **Langsung memanggil `Shutdown()` begitu menerima SIGTERM.** Endpoint pod masih terdaftar di Service selama beberapa detik; permintaan yang sedang dalam perjalanan akan menabrak listener yang sudah tutup. Tandai tidak-siap dulu, tunggu, baru shutdown.
+- **`wg.Wait()` tanpa batas waktu.** Satu goroutine yang tidak pernah selesai membuat shutdown menggantung sampai `SIGKILL` — dan seluruh proses drain menjadi teater.
+- **Graceful shutdown untuk pekerjaan yang lebih lama dari grace period.** Job satu jam tidak bisa "diselesaikan dengan rapi" dalam 30 detik. Yang dibutuhkan checkpoint dan idempotency, bukan drain yang lebih panjang.
+- **Mengandalkan drain untuk menjaga konsistensi.** Pod bisa mati karena OOM, node hilang, atau kernel panic — tanpa SIGTERM sama sekali. Kebenaran harus dijamin desain, bukan oleh shutdown yang sopan.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| `502`/`504` melonjak tepat saat rollout | urutan tandai-tidak-siap vs shutdown | Listener ditutup sebelum endpoint dilepas dari Service |
+| Pod berakhir dengan `SIGKILL` | timeout aplikasi vs grace period | Aplikasi butuh lebih lama daripada yang diizinkan |
+| Deploy menggantung sampai batas waktu | goroutine yang tersisa saat drain | Ada yang tidak mendengarkan sinyal berhenti |
+| Pekerjaan hilang setiap deploy | apakah ada checkpoint | Job panjang diandalkan selesai dalam grace period |
+| Koneksi database tertinggal terbuka | urutan penutupan sumber daya | Pool ditutup sebelum permintaan terakhir selesai |
+
+```bash
+kubectl get pod <pod> -o jsonpath='{.spec.terminationGracePeriodSeconds}'
+
+# Pod yang benar-benar di-SIGKILL
+kubectl get events --field-selector reason=Killing --sort-by=.lastTimestamp | tail
+
+# Galat gateway saat rollout -- bandingkan jendela waktunya dengan waktu deploy
+kubectl logs -l app=ingress --since=30m | grep -cE ' 50[234] '
+
+# Berapa lama dari SIGTERM sampai proses benar-benar keluar
+kubectl logs <pod> --previous | grep -iE 'sigterm|shutdown'
+```

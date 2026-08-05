@@ -1,5 +1,7 @@
 # W3C Baggage pada Distributed Tracing
 
+> **Berlaku:** Go 1.21+ · W3C Baggage · OpenTelemetry-Go v1.24+ · **Lihat juga:** `observability_resilience/opentelemetry_tracing.md` · `microservices_grpc/grpc_interceptors_middleware.md` · `distributed_patterns_resilience/multi_tenancy_isolation.md` · `observability_resilience/structured_logging_zerolog.md`
+
 Dalam arsitektur microservices, request klien melintas 5–10 layanan. Bagaimana Payment Service di ujung rantai mengetahui `tenant_id` atau `user_tier` dari request awal tanpa memaksa setiap layanan perantara membawa data itu di API schema masing-masing (domain coupling)?
 
 Jawabannya adalah **W3C Baggage** — propagasi metadata cross-service via HTTP header `baggage: key=value`, bersamaan dengan `traceparent` W3C Trace Context.
@@ -306,3 +308,32 @@ func main() {
 4. **Baggage Size Calculation:** Total ukuran semua baggage members dihitung secara kumulatif. 10 members × 100 bytes = 1KB yang aman, tapi 10 members × 500 bytes = 5KB yang bisa melebihi limit. Monitor ukuran baggage via custom middleware yang log `len(r.Header.Get("baggage"))`.
 
 5. **Baggage vs Context Values:** Jangan gunakan `context.WithValue()` sebagai alternatif baggage untuk cross-service propagation — context values tidak pernah dikirim ke wire. `context.WithValue` hanya untuk data dalam satu process. Baggage untuk data cross-service boundaries via HTTP.
+
+## Kapan JANGAN Pakai Ini
+
+- **Untuk data yang dibutuhkan logika bisnis.** Baggage bisa hilang di batas mana pun yang tidak memasang propagator, dan hilangnya **senyap**. Logika yang bergantung padanya akan salah tanpa satu galat pun muncul. Data wajib dikirim lewat body atau header eksplisit yang Anda validasi.
+- **Untuk apa pun yang rahasia atau bersifat PII.** Baggage ikut terkirim ke **setiap** hilir, termasuk layanan pihak ketiga, dan sering ikut tercatat di log mereka.
+- **Sebagai wadah data yang besar.** Tiap entri menambah ukuran header pada setiap permintaan hilir. Sebagian gateway memotong header yang melewati batas, dan pemotongannya juga senyap.
+- **Ketika yang dibutuhkan sebenarnya atribut span.** Atribut melekat pada satu span; baggage merambat ke seluruh hilir. Pilih sesuai maksud, bukan sesuai kemudahan.
+- **Meneruskan baggage dari luar tanpa daftar putih.** Tanpa filter, sistem Anda memantulkan data yang tidak Anda kendalikan ke seluruh layanan internal.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Nilai baggage kosong di layanan tertentu | propagator di layanan itu | Rantai propagasi putus di situ |
+| `431 Request Header Fields Too Large` | ukuran header baggage | Baggage tumbuh melewati batas gateway |
+| Header terpotong tanpa galat | konfigurasi proxy | Pemotongan header bersifat senyap di banyak proxy |
+| PII muncul di log pihak ketiga | isi baggage | Data sensitif ikut merambat ke luar |
+| Logika gagal hanya pada jalur tertentu | apakah logika bergantung baggage | Baggage dipakai sebagai transport data wajib |
+
+```bash
+# Apa yang benar-benar dikirim di header
+curl -sv localhost:8080/api/v1/pesanan 2>&1 | grep -i '^> baggage'
+
+# Distribusi ukuran baggage dari log terstruktur
+kubectl logs -l app=api --since=1h | jq -r 'select(.baggage) | .baggage | length' | sort -n | tail -5
+
+# Gateway yang menolak karena header terlalu besar
+kubectl logs -l app=ingress --since=1h | grep -icE '431|header too large'
+```

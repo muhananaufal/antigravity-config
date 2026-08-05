@@ -1,5 +1,7 @@
 # Structured Logging dengan Zerolog
 
+> **Berlaku:** Go 1.21+ · `rs/zerolog` · alternatif pustaka standar `log/slog` (Go 1.21+) · **Lihat juga:** `observability_resilience/opentelemetry_tracing.md` · `observability_resilience/prometheus_metrics_red.md` · `observability_resilience/distributed_tracing_baggage.md` · `engineering_practice/incident_postmortem.md`
+
 `rs/zerolog` adalah logger Go dengan zero-allocation design — tidak menciptakan heap garbage saat menulis log level di atas threshold. Kecepatan 10–100× lebih cepat dari `log.Printf`. Structured logging (JSON) membuat log bisa di-query seperti database di Datadog/Elasticsearch.
 
 ---
@@ -390,3 +392,37 @@ type sanitizedBody struct {
 4. **Level Sampling untuk Mengurangi Volume:** `log.Debug()` di production dengan ribuan request bisa menghasilkan gigabytes log/jam. Gunakan zerolog sampling: `log.Sample(&zerolog.BurstSampler{Burst: 5, Period: 1*time.Second})` untuk log hanya 5 debug events per detik per endpoint.
 
 5. **Log Level Dinamis via HTTP Endpoint:** Hard-coding log level di config membutuhkan restart untuk mengubah level. Expose endpoint internal `PUT /admin/log-level` yang memanggil `zerolog.SetGlobalLevel()` — ubah log level di runtime tanpa restart. Wajib diamankan dengan autentikasi internal.
+
+## Kapan JANGAN Pakai Ini
+
+- **Log sebagai pengganti metrik.** Menghitung galat dengan `grep` pada log berskala jauh lebih mahal daripada satu counter, tertunda, dan tidak bisa dijadikan dasar alert yang andal.
+- **Level `debug` menyala di produksi.** Di banyak tim, volume log adalah biaya observabilitas terbesar — dan `debug` yang lupa dimatikan setelah investigasi adalah penyebab paling umum.
+- **`log.Fatal` di luar bootstrap.** Ia memanggil `os.Exit` dan **melewati seluruh `defer`**: koneksi tidak ditutup, transaksi tidak di-rollback, buffer log sendiri tidak sempat di-flush — sehingga pesan yang menjelaskan penyebabnya justru ikut hilang.
+- **Mencatat seluruh objek permintaan atau respons.** Di situlah token, nomor kartu, dan data pribadi bocor tanpa disadari. Log biasanya disimpan lebih lama dan diakses lebih banyak orang daripada database.
+- **Zerolog bila tim tidak butuh performanya.** `log/slog` di pustaka standar sudah terstruktur, mendukung handler kustom, dan tidak menambah satu pun dependensi. Pilih zerolog karena angka, bukan karena kebiasaan.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Biaya log melonjak tanpa kenaikan trafik | sebaran level log | `debug` menyala di produksi |
+| Log tidak bisa dikorelasikan saat insiden | berapa persen punya `trace_id` | Konteks tracing tidak masuk ke log |
+| Proses mati tanpa pesan penjelas | ada `log.Fatal` di jalur itu | `os.Exit` melewati flush buffer log |
+| Rahasia ditemukan di sistem log | pola nilai, bukan nama field | Objek permintaan dicatat utuh |
+| Alert berbasis log sering telat | jalur ingest log | Log tertunda; alert seharusnya di atas metrik |
+
+```bash
+# Volume dan sebaran level -- biaya observabilitas biasanya bersembunyi di sini
+kubectl logs -l app=api --since=1h | wc -l
+kubectl logs -l app=api --since=1h | jq -r .level | sort | uniq -c | sort -rn
+
+# Apakah level debug aktif di produksi?
+kubectl get deploy api -o jsonpath='{.spec.template.spec.containers[0].env}' | jq
+
+# Kebocoran rahasia dideteksi dari BENTUK NILAI, bukan dari nama field
+kubectl logs -l app=api --since=1h \
+  | grep -EC1 'sk_live_|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|eyJ[A-Za-z0-9_-]{10,}\.eyJ' | head
+
+# Log tanpa trace_id tidak bisa dihubungkan ke trace saat insiden
+kubectl logs -l app=api --since=10m | jq -r 'select(.trace_id==null) | .msg' | sort | uniq -c | head
+```

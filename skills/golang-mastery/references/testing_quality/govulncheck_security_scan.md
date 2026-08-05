@@ -1,5 +1,7 @@
 # Security Scanning di Go: govulncheck, gosec & golangci-lint
 
+> **Berlaku:** Go 1.21+ · `govulncheck` v1+ · `gosec` · `golangci-lint` · **Lihat juga:** `testing_quality/fuzz_testing_go.md` · `cybersecurity_zerotrust/security_fuzzing_go.md` · `cli_tooling/binary_distribution_release.md` · `runtime_internals/build_system_linker.md`
+
 Keamanan supply chain dan static analysis adalah bagian tak terpisahkan dari pipeline CI Go modern. `govulncheck` melakukan analisis vulnerability level call-graph, bukan sekadar version matching. `gosec` mendeteksi pola kode berbahaya. `golangci-lint` mengintegrasikan keduanya dalam satu pipeline yang efisien.
 
 ---
@@ -328,3 +330,39 @@ func GetUser(db *sql.DB, username string) (*User, error) {
 4. **Vendor Directory:** Jika menggunakan `go mod vendor`, jalankan `govulncheck -C ./vendor ./...` atau pastikan vendor tidak di-exclude dari scan. Beberapa CI setup salah mengkonfigurasi ini dan tidak men-scan vendor directory.
 
 5. **gosec dan Generated Code:** Generated code (dari protobuf, sqlc, mockgen) sering memicu false positive gosec. Gunakan `exclude-dirs` di `.golangci.yml` untuk exclude folder generated: `exclude-dirs: ["mocks", "generated", "pb"]`.
+
+## Kapan JANGAN Pakai Ini
+
+- **Memperlakukan setiap temuan pemindai sebagai kerentanan.** `gosec` menandai **pola**, bukan bukti bahwa sesuatu bisa dieksploitasi. `govulncheck` yang menganalisis jalur panggilan jauh lebih layak dijadikan gerbang yang memblokir.
+- **Memblokir CI pada seluruh temuan `gosec` tanpa triase.** Tim akan belajar menambahkan `//nolint` secara refleks dalam dua sprint, dan sejak saat itu pemindainya berhenti bermakna. Gerbang yang terlalu ketat menghasilkan kepatuhan palsu.
+- **Pemindaian berbasis versi (Dependabot, nancy) sebagai gerbang tunggal.** Ia melaporkan paket rentan meski fungsi yang rentan tidak pernah dipanggil dari kode Anda — ratusan temuan yang melelahkan dan melatih tim mengabaikan peringatan.
+- **Menunda pemindaian sampai menjelang rilis.** Kerentanan yang ditemukan sehari sebelum rilis berubah menjadi keputusan bisnis di bawah tekanan, bukan keputusan teknis yang tenang.
+- **Menganggap nol temuan berarti aman.** Pemindai tidak melihat otorisasi yang salah, IDOR, atau alur bisnis yang bisa disalahgunakan — justru kelas kerentanan yang paling sering benar-benar dieksploitasi.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Temuan menumpuk tanpa pernah ditutup | siapa pemiliknya | Tidak ada proses triase; laporan jadi latar belakang |
+| `//nolint` bertebaran di seluruh repo | alasan yang tertulis | Gerbangnya terlalu ketat sejak awal |
+| Kerentanan lolos ke produksi | apa yang dipindai | Yang dipindai kode, bukan biner yang benar-benar dirilis |
+| Versi dependensi di produksi berbeda dari dugaan | `go version -m` pada biner | Yang tertaut tidak sama dengan yang tertulis di `go.mod` |
+| Pemindaian selalu hijau, audit eksternal menemukan banyak | kelas kerentanan yang dicakup | Pemindai statis buta terhadap logika otorisasi |
+
+```bash
+# Hanya melaporkan yang fungsinya BENAR-BENAR terpanggil dari kode Anda
+govulncheck ./...
+govulncheck -format=json ./... | jq -r '.. | .osv? // empty' | sort -u
+
+# Memindai biner yang sudah terbangun -- ini yang benar-benar dirilis
+govulncheck -mode=binary ./app
+
+gosec -fmt=json -out=gosec.json ./...
+golangci-lint run --timeout=5m
+
+# Modul yang benar-benar tertaut ke biner produksi
+go version -m ./app | grep -E '^\s+(dep|=>)'
+
+# Dependensi yang sudah punya versi lebih baru
+go list -m -u all | grep '\['
+```

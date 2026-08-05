@@ -1,5 +1,7 @@
 # Rate Limiting Patterns untuk API Protection
 
+> **Berlaku:** Go 1.21+ · `golang.org/x/time/rate` · Redis 7+ · **Lihat juga:** `distributed_patterns_resilience/rate_limiting_strategies.md` · `observability_resilience/circuit_breaker_hystrix.md` · `distributed_patterns_resilience/bulkhead_isolation.md` · `caching_strategy/redis_advanced_patterns.md`
+
 Rate limiting melindungi API dari abuse, brute force, dan thundering herd. Pilihan algoritma tergantung pada apakah sistem single-instance atau distributed.
 
 ---
@@ -297,3 +299,38 @@ i.clients[ip] = rate.NewLimiter(...) // Dibiarkan abadi.
    Pilih Fail-Open secara *default*, karena sistem lebih baik berpotensi *overload* (masih bisa melayani *traffic* valid 90%) daripada mati mutlak 100% untuk semua pelanggan.
 3. **Thundering Herd Reset**: Jika menggunakan *Fixed Window* sederhana (di-reset secara serentak setiap puncak menit `:00`), sistem rentan diledakkan *(burst)* seketika. Seseorang bisa menembak 100 req di detik `01:59` dan 100 req lagi di detik `02:00`. Dalam interval 2 detik, sistem memproses 200 req padahal kapasitas per menit dirancang 100.
 4. **Retry-After Header**: HTTP 429 *wajib* disertai header `Retry-After: <detik>`. Jika tidak, mesin *bot* retrier bodoh akan menghujani endpoint Anda jutaan kali dalam status error, membakar *CPU parsing HTTP* dan memakan *bandwidth ingress*.
+
+## Kapan JANGAN Pakai Ini
+
+- **Limiter dalam-memori pada armada banyak pod.** Batas efektifnya menjadi `batas × jumlah pod`, dan berubah setiap kali autoscaler bergerak. Batas yang tidak bisa dinyatakan sebagai satu angka bukanlah batas — hitungannya harus terpusat.
+- **`X-Forwarded-For` mentah sebagai identitas.** Header itu bisa diisi siapa saja. Hanya bagian yang **ditambahkan proxy tepercaya milik Anda** yang boleh dipercaya; sisanya adalah masukan penyerang.
+- **Rate limiting sebagai perlindungan DDoS.** Serangan volumetrik harus dihentikan di tepi (CDN/WAF). Limiter di aplikasi tetap membayar ongkos menerima koneksi, mem-parsing header, dan mencari kunci.
+- **Batas yang sama untuk semua endpoint.** `POST /laporan` yang berat dan `GET /status` yang murah tidak layak berbagi anggaran yang sama.
+- **Menolak tanpa memberi tahu kapan boleh mencoba lagi.** Tanpa `Retry-After`, klien akan mengulang segera dan memperparah keadaan — limiter Anda justru menciptakan badai yang ingin dicegah.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Batas tidak pernah tercapai meski trafik tinggi | jumlah replika | Limiter in-memory; batas efektif berlipat sejumlah pod |
+| Memori naik terus di layanan | jumlah entri limiter | Entri per-klien tidak pernah dibersihkan |
+| Satu klien menjatuhkan semua pengguna | identitas yang dipakai | Semua pengguna di belakang satu proxy dihitung sebagai satu |
+| `429` melonjak setelah `429` | apakah `Retry-After` dikirim | Klien mengulang segera dan memperparah keadaan |
+| Redis lambat saat trafik puncak | jumlah operasi per permintaan | Limiter terpusat menambah round-trip di jalur panas |
+
+```bash
+# Berapa banyak yang ditolak, dan siapa yang paling sering
+curl -s localhost:9090/metrics | grep -E 'rate_limit_(allowed|rejected)'
+kubectl logs -l app=api --since=1h \
+  | jq -r 'select(.status==429) | .klien' | sort | uniq -c | sort -rn | head
+
+# Batas efektif = batas per pod x jumlah replika (bila limiter in-memory)
+kubectl get deploy api -o jsonpath='{.status.replicas}'
+
+# Limiter berbasis Redis: kunci menumpuk berarti TTL tidak dipasang
+redis-cli --scan --pattern 'ratelimit:*' | wc -l
+redis-cli ttl ratelimit:ip:203.0.113.7
+
+# Retry-After benar-benar dikirim?
+curl -si localhost:8080/api/v1/kirim | grep -i 'retry-after'
+```

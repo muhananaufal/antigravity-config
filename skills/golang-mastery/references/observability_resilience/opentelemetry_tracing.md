@@ -1,5 +1,7 @@
 # OpenTelemetry Tracing: Setup, Propagation & Sampling
 
+> **Berlaku:** Go 1.21+ · OpenTelemetry-Go v1.24+ · **Lihat juga:** `observability_resilience/distributed_tracing_baggage.md` · `observability_resilience/prometheus_metrics_red.md` · `observability_resilience/structured_logging_zerolog.md` · `microservices_grpc/grpc_interceptors_middleware.md`
+
 ## Concept/Internals
 OpenTelemetry (OTel) adalah standar industri *vendor-neutral* untuk mengumpulkan, menghasilkan, dan mengekspor telemetry data (traces, metrics, logs). Di dalam ekosistem *distributed systems* dan arsitektur *microservices*, *Distributed Tracing* menjadi krusial untuk menganalisis jalur eksekusi sebuah *request* yang melintasi berbagai layanan.
 
@@ -273,3 +275,35 @@ if err != nil {
 2. **Cardinality Explosion pada Event/Attributes**: Menambahkan string hasil bangkitan (seperti nilai ID unik, nama file dinamis) sebagai *key* (nama) atribut alih-alih sebagai nilai (value) sangat berbahaya. Backend tracing sering membuat index berdasarkan keys. Ratusan ribu unique keys akan menyebabkan *Out of Memory* dan *cardinality explosion* di backend (seperti Prometheus dan Tempo). Pastikan key atribut itu statis dan finite (contoh: `attribute.String("item.id", "xyz-123")` adalah benar, sementara `attribute.String("item.xyz-123", "exists")` adalah salah besar).
 3. **Baggage Overhead Besar**: W3C Baggage terus diturunkan (*propagated*) melalui HTTP header ke setiap *downstream service* dan disertakan dalam payload request. Menjejalkan terlalu banyak isi ke dalam baggage akan meledakkan payload *Header* hingga melampaui limit 8KB web server standar, menghasilkan error `431 Request Header Fields Too Large` yang sporadis. Gunakan seperlunya untuk data metadata kritis multi-hop (misalnya `tenant_id` atau `experiment_id`).
 4. **Context Cancellation di Background Job**: Jika handler utama memutar *goroutine* baru untuk *background processing* dan memberikan context asli (`r.Context()`), context tersebut akan ter-*cancel* otomatis segera setelah *HTTP Response* dikirim. Upaya mengekspor *child span* pada *background job* menggunakan context yang batal itu berisiko gagal dikirim. Jika diperlukan background span, putuskan rantai context tanpa kehilangan parent span melalui utilitas context kustom (atau gunakan tracer Start terpisah).
+
+## Kapan JANGAN Pakai Ini
+
+- **Sampling 100% pada layanan bertrafik tinggi.** Biaya penyimpanan dan jaringan naik linear, sementara nilai tambah trace ke-satu-juta mendekati nol. Pakai rasio head sampling, atau tail-based sampling yang selalu menyimpan trace bergalat dan yang lambat.
+- **Span untuk setiap fungsi.** Trace berisi 500 span tidak bisa dibaca manusia dan membebani collector. Beri span pada **batas**: HTTP, gRPC, query database, publikasi/konsumsi antrean, panggilan pihak ketiga.
+- **Tracing sebagai pengganti metrik.** Trace menjawab "kenapa permintaan **ini** lambat"; metrik menjawab "berapa banyak yang lambat". Alert dibangun di atas metrik, bukan trace.
+- **Atribut span berkardinalitas tak terbatas untuk hal yang seharusnya jadi metrik.** Backend trace memang menampungnya — biayanya muncul di tagihan, bukan sebagai galat, sehingga tidak ada yang menyadarinya sampai akhir bulan.
+- **Tanpa memastikan propagator disetel di semua sisi.** Trace yang terputus lebih menyesatkan daripada tidak ada trace sama sekali: ia tampak lengkap padahal separuh perjalanannya hilang.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Trace berhenti di batas layanan tertentu | propagator di layanan itu | `otel.SetTextMapPropagator` tidak dipasang seragam |
+| Banyak trace hanya berisi satu span | rasio span per trace | Konteks tidak diteruskan; tiap layanan memulai trace baru |
+| Span hilang saat trafik puncak | metrik eksportir | Antrean batch penuh; span dijatuhkan diam-diam |
+| Tidak ada trace untuk permintaan yang gagal | strategi sampling | Head sampling membuang justru yang paling perlu dilihat |
+| Biaya observabilitas melonjak | jumlah span per permintaan | Instrumentasi terlalu halus |
+
+```bash
+# Trace yang hanya berisi satu span = konteks tidak merambat
+curl -s "$JAEGER/api/traces?service=api&limit=50" \
+  | jq '[.data[] | select((.spans|length)==1)] | length'
+
+# Span terlama dalam satu trace
+curl -s "$JAEGER/api/traces/$TRACE_ID" \
+  | jq -r '.data[0].spans | sort_by(-.duration)[:5][] | "\(.duration/1000)ms \(.operationName)"'
+
+# Collector menjatuhkan atau gagal mengirim
+curl -s localhost:8888/metrics | grep -E 'otelcol_processor_dropped|otelcol_exporter_send_failed'
+kubectl logs -l app=api --since=1h | grep -c 'failed to export'
+```

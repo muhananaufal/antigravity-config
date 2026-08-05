@@ -1,5 +1,7 @@
 # End-to-End & Contract Testing Patterns di Go
 
+> **Berlaku:** Go 1.21+ · `net/http/httptest` · **Lihat juga:** `testing_quality/testcontainers_integration.md` · `testing_quality/unit_testing_testify.md` · `microservices_grpc/rest_chi_middleware_stack.md` · `cli_tooling/cli_testing_golden_files.md`
+
 E2E testing di Go memverifikasi sistem dari boundary terluar (HTTP handler) hingga interaksi paling dalam. `httptest` package bawaan Go adalah tool utama — tidak perlu framework eksternal. Contract testing dengan `pact-go` memastikan konsistensi API antar microservice.
 
 ---
@@ -406,3 +408,35 @@ resp, err := ts.Client().Get(ts.URL + "/endpoint") // aman
 4. **`httptest.ResponseRecorder.Result()` setelah Multiple Writes:** Jika handler memanggil `w.Write()` berkali-kali, `rec.Result()` akan mengandung semua data gabungan. Namun `rec.Result()` hanya bisa dipanggil sekali per recorder — body sudah di-consume setelah pertama dipanggil.
 
 5. **Concurrency dalam Handler Test:** Handler yang di-test dengan `httptest.NewServer` bisa menerima request concurrent dari `TestUserHandler_ConcurrentRequests`. Pastikan handler tidak menggunakan shared mutable state tanpa sinkronisasi (mutex/RWMutex). Gunakan `-race` flag saat test.
+
+## Kapan JANGAN Pakai Ini
+
+- **E2E sebagai lapisan uji utama.** Ia lambat, rapuh, dan pesan gagalnya jauh dari penyebab — "status 500" tidak memberi tahu baris mana yang salah. Piramidanya tetap: banyak unit, sedang integrasi, sedikit E2E.
+- **E2E untuk memverifikasi logika bisnis bercabang.** Setiap cabang membutuhkan satu perjalanan penuh melalui seluruh sistem. Ongkos wall-clock-nya tidak sebanding dengan keyakinan tambahan yang diperoleh.
+- **E2E terhadap layanan pihak ketiga sungguhan.** Uji jadi bergantung pada jaringan, kuota, dan lingkungan orang lain — dan gagal karena hal yang bukan salah Anda. Yang tepat adalah contract test.
+- **Menyamakan E2E dengan smoke test produksi.** Keduanya menjawab pertanyaan berbeda: E2E memverifikasi build, smoke test memverifikasi lingkungan. Satu tidak menggantikan yang lain.
+- **Assertion terhadap string JSON literal.** Satu field baru yang sama sekali tidak berbahaya akan menggagalkan uji. Bandingkan struktur yang sudah di-*unmarshal*, bukan teksnya.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Suite makin lama tiap sprint | rasio E2E vs unit | E2E dipakai untuk hal yang cukup diuji di level unit |
+| Uji flaky naik-turun tanpa perubahan kode | pengulangan `-count=5` | Ketergantungan pada waktu atau urutan |
+| CI kehabisan file descriptor atau port | `httptest.Server` yang ditutup | Server uji tidak pernah di-`Close` |
+| Uji gagal setelah menambah field respons | bentuk assertion | Perbandingan string literal, bukan struktur |
+| Uji gagal karena layanan luar sedang bermasalah | dependensi eksternal | E2E menyentuh sistem yang bukan milik Anda |
+
+```bash
+go test ./... -run='TestE2E' -v -timeout=5m
+
+# Uji terlambat -- kandidat untuk diturunkan ke level unit
+go test ./... -json \
+  | jq -r 'select(.Action=="pass" and .Elapsed>1) | "\(.Elapsed)s \(.Test)"' | sort -rn | head -20
+
+# Flakiness hanya terlihat saat diulang
+go test ./... -count=5 -run='TestE2E'
+
+# httptest.Server yang tidak ditutup terlihat sebagai socket menumpuk
+go test ./... -run='TestE2E' & sleep 5; lsof -p $! 2>/dev/null | grep -c TCP
+```

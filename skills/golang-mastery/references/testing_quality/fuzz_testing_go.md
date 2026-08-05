@@ -1,5 +1,7 @@
 # Fuzz Testing di Go (Native go test -fuzz)
 
+> **Berlaku:** Go 1.21+ (fuzzing native sejak 1.18) · **Lihat juga:** `testing_quality/property_based_testing.md` · `testing_quality/govulncheck_security_scan.md` · `cybersecurity_zerotrust/security_fuzzing_go.md` · `runtime_internals/reflection_unsafe_pointer.md`
+
 Sejak Go 1.18, fuzzing adalah fitur bahasa *first-class*. Coverage-guided fuzzer Go secara otomatis mengeksplorasi path kode yang belum dijangkau oleh seed corpus, mendeteksi panic, OOM, infinite loop, dan pelanggaran invariant yang tidak akan tertangkap oleh test tradisional.
 
 ---
@@ -320,3 +322,39 @@ func ParseDocument(data []byte) error {
 4. **`t.Skip()` vs Return di Fuzz Target:** Jika fuzzer menghasilkan input yang tidak valid untuk domain kita (misal: invalid JSON), gunakan `t.Skip()` atau `return` untuk skip iteration tersebut. JANGAN gunakan `t.Fatal()` atau `t.Error()` untuk invalid input — itu bukan bug, itu expected behavior fuzzer mencari boundary.
 
 5. **Paralel Fuzzing dengan `-parallel`:** Flag `-parallel=N` di `go test -fuzz` berbeda dari `t.Parallel()` di subtest. Flag ini mengatur jumlah fuzzer worker goroutine. Nilai default = GOMAXPROCS. Di CI, set `-parallel=1` untuk deterministic behavior dan menghindari konflik resource.
+
+## Kapan JANGAN Pakai Ini
+
+- **Untuk kode yang tidak menerima input dari luar.** Fuzzing bersinar pada parser, decoder, dan apa pun yang menyentuh byte dari jaringan atau berkas. Untuk logika bisnis internal, property-based testing jauh lebih tepat sasaran.
+- **Menjalankan `-fuzz` di CI biasa.** Fuzzing berjalan tanpa batas waktu alami. Yang benar: CI memutar ulang **corpus tersimpan** sebagai uji biasa (`go test` tanpa `-fuzz`), sementara sesi fuzzing panjang dijadwalkan terpisah (nightly).
+- **Fuzz target yang memeriksa keluaran persis.** Fuzzer menghasilkan input yang tidak Anda bayangkan; yang bisa diperiksa hanyalah invarian — tidak panic, round-trip konsisten, ukuran keluaran masuk akal.
+- **Tanpa batas ukuran input.** Fuzzer pasti menemukan input raksasa dan mematikan proses dengan OOM, lalu melaporkannya sebagai temuan — padahal yang ditemukan adalah ketiadaan batas Anda sendiri.
+- **Tidak meng-commit corpus temuan.** Bila `testdata/fuzz/` tidak masuk repo, regresi yang persis sama akan ditemukan ulang berbulan-bulan kemudian, dan waktu triase-nya dibayar dua kali.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Panic di parser dari input pengguna | apakah jalur itu di-fuzz | Ada bentuk input yang belum pernah dicoba |
+| Fuzzer selalu menemukan OOM | batas ukuran di fuzz target | Belum ada penjagaan ukuran input |
+| Temuan hilang setelah pindah mesin | isi `testdata/fuzz/` | Corpus tidak di-commit |
+| Fuzzing berjam-jam tanpa temuan | seed corpus | Seed terlalu sempit; fuzzer tidak punya titik awal yang beragam |
+| CI kadang berjalan berjam-jam | apakah `-fuzz` ada di CI | Fuzzing tak berbatas bocor ke pipeline biasa |
+
+```bash
+# Eksplorasi lokal dengan batas waktu yang tegas
+go test -fuzz=FuzzParse -fuzztime=60s ./...
+
+# Inilah yang dijalankan CI: memutar ulang corpus, tanpa mesin fuzzer
+go test ./...
+
+# Temuan WAJIB masuk repo, kalau tidak akan ditemukan ulang nanti
+ls testdata/fuzz/FuzzParse/
+git add testdata/fuzz/
+
+# Reproduksi satu temuan tertentu
+go test -run='FuzzParse/582528ddfad69eb5' ./...
+
+# Perkecil input pemicu agar mudah dianalisis
+go test -fuzz=FuzzParse -fuzzminimizetime=30s ./...
+```

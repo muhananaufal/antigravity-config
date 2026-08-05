@@ -1,5 +1,7 @@
 # Prometheus RED Metrics & Instrumentation di Go
 
+> **Berlaku:** Go 1.21+ · `prometheus/client_golang` v1.19+ · **Lihat juga:** `engineering_practice/slo_error_budget.md` · `observability_resilience/opentelemetry_tracing.md` · `observability_resilience/health_check_readiness.md` · `observability_resilience/structured_logging_zerolog.md`
+
 **RED Method** adalah framework observability standar untuk service HTTP/gRPC: Rate (QPS), Errors (error rate), Duration (latency). Prometheus client Go mengekspos metrics via pull-based model — Prometheus server scrape `/metrics` endpoint setiap 15 detik.
 
 ---
@@ -354,3 +356,33 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 4. **OpenMetrics vs Prometheus Text Format:** Prometheus client Go mendukung kedua format. `EnableOpenMetrics: true` mengaktifkan format OpenMetrics yang lebih ekspresif (unit, created timestamps). Beberapa scraper lama tidak support OpenMetrics — pastikan kompatibilitas dengan Prometheus version yang digunakan.
 
 5. **Rate vs Irate untuk Alert:** `rate()` menghitung rata-rata per detik selama window (smooth tapi lambat deteksi spike). `irate()` menghitung dari 2 sample terakhir (responsif tapi noisy). Untuk alert, gunakan `rate()` dengan window 1-5 menit. Untuk dashboard real-time, `irate()` memberikan respons lebih cepat.
+
+## Kapan JANGAN Pakai Ini
+
+- **Label berkardinalitas tak terbatas** — user ID, order ID, path mentah, pesan galat. Satu label buruk cukup untuk membuat Prometheus kehabisan memori, dan pemulihannya berarti menghapus data historis. Ini kesalahan paling mahal di seluruh domain observabilitas.
+- **Histogram untuk segala hal.** Tiap histogram menghasilkan satu deret **per bucket per kombinasi label**. Sepuluh bucket × lima label bernilai puluhan = ledakan deret yang tidak terlihat sampai terlambat.
+- **Metrik untuk menjawab "apa yang terjadi pada permintaan X".** Itu wilayah trace dan log. Metrik menjawab pertanyaan agregat; memaksanya menjawab pertanyaan per-permintaan selalu berakhir sebagai masalah kardinalitas.
+- **Alert pada metrik mentah.** "CPU > 80%" berbunyi setiap malam dan dalam sebulan akan diabaikan seluruh tim. Alert yang layak membangunkan orang dibangun di atas SLO dan burn rate — lihat `engineering_practice/slo_error_budget.md`.
+- **Registry global di dalam uji.** Uji yang berjalan berurutan saling mewarisi nilai counter, dan kegagalannya jadi bergantung urutan — jenis flaky yang paling membingungkan.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Prometheus `OOMKilled` | jumlah deret per metrik | Kardinalitas meledak; cari label penyebabnya |
+| Scrape timeout | ukuran keluaran `/metrics` | Terlalu banyak deret pada satu target |
+| Nilai p99 tampak mustahil | batas bucket histogram | Bucket tidak mencakup rentang latensi nyata |
+| Alert berbunyi terus dan diabaikan | apa yang dijadikan dasar alert | Alert pada metrik mentah, bukan pada dampak ke pengguna |
+| Grafik hilang setelah deploy | perubahan nama label | Nama metrik/label bukan hal yang bebas diubah |
+
+```bash
+# Deret dengan kardinalitas terbesar -- penyebab OOM nomor satu
+curl -s http://prometheus:9090/api/v1/status/tsdb | jq '.data.seriesCountByMetricName[:10]'
+curl -s http://prometheus:9090/api/v1/status/tsdb | jq '.data.labelValueCountByLabelName[:10]'
+
+# Berapa deret yang dihasilkan satu target
+curl -s localhost:9090/metrics | grep -vc '^#'
+
+# Label yang paling banyak nilainya pada satu metrik
+curl -s 'http://prometheus:9090/api/v1/label/path/values' | jq '.data | length'
+```

@@ -1,5 +1,7 @@
 # Health Check: Liveness & Readiness Probe di Go
 
+> **Berlaku:** Go 1.21+ · Kubernetes 1.28+ · **Lihat juga:** `observability_resilience/graceful_shutdown_drain.md` · `db_sqlc/connection_pool_tuning.md` · `observability_resilience/circuit_breaker_hystrix.md` · `devops_control_planes/docker_container_go.md`
+
 Kubernetes mendelegasikan tanggung jawab kepada aplikasi untuk melaporkan status kesehatannya. Kesalahpahaman antara Liveness dan Readiness adalah penyebab utama cascading failure di production: memasukkan DB check ke Liveness menyebabkan seluruh fleet pod di-restart saat database spike.
 
 ---
@@ -334,3 +336,36 @@ func ReadinessHandler(w http.ResponseWriter, r *http.Request) {
      failureThreshold: 2
    ```
    Pastikan `timeoutSeconds` probe selalu > timeout internal Go handler (misal probe timeout 3s, Go context timeout 2s = 1s buffer).
+
+## Kapan JANGAN Pakai Ini
+
+- **Memeriksa dependensi di liveness probe.** Database yang lambat sesaat akan membuat Kubernetes membunuh **seluruh** pod yang sebenarnya sehat, dan restart massal memperparah keadaan yang sedang buruk. Liveness hanya menjawab satu pertanyaan: apakah proses ini masih waras dan perlu di-restart?
+- **Readiness yang memeriksa dependensi opsional.** Bila layanan masih bisa melayani 90% permintaan tanpa Redis, menandai diri tidak siap justru membuang 90% itu — kegagalan parsial diubah menjadi kegagalan total.
+- **Probe pada port API publik.** Saat beban puncak, probe ikut mengantre bersama trafik pengguna dan gagal — lalu pod dibunuh persis ketika sedang paling dibutuhkan. Sediakan port terpisah untuk probe.
+- **Probe tanpa timeout internalnya sendiri.** Ping database tanpa `context.WithTimeout` bisa menggantung lebih lama daripada `timeoutSeconds` probe, dan hasilnya menjadi tidak menentu.
+- **Melewatkan startup probe pada aplikasi yang lambat boot.** Tanpanya, liveness membunuh pod sebelum sempat siap — dan pod tidak akan pernah berhasil start, berapa kali pun dicoba.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| `restartCount` naik tanpa crash di log | konfigurasi liveness | Liveness membunuh pod yang sebenarnya sehat |
+| Seluruh pod tidak siap bersamaan | dependensi yang diperiksa readiness | Readiness bergantung pada satu dependensi bersama |
+| Pod tidak pernah mencapai `Ready` | startup probe | Waktu boot melebihi toleransi probe |
+| Probe gagal hanya saat trafik puncak | port yang dipakai probe | Probe antre bersama trafik pengguna |
+| Restart beruntun memperparah insiden | apakah liveness memeriksa hilir | Liveness ikut jatuh saat hilir jatuh |
+
+```bash
+kubectl describe pod <pod> | grep -A6 -E 'Liveness|Readiness|Startup'
+
+# Peristiwa probe gagal, terbaru di bawah
+kubectl get events --field-selector reason=Unhealthy --sort-by=.lastTimestamp | tail -20
+
+# Restart tanpa crash di log = hampir selalu liveness yang salah konfigurasi
+kubectl get pods -l app=api \
+  -o custom-columns='NAMA:.metadata.name,RESTART:.status.containerStatuses[0].restartCount'
+
+# Waktu respons probe -- harus jauh di bawah timeoutSeconds
+curl -sw '\n%{http_code} %{time_total}s\n' -o /dev/null localhost:8081/healthz
+curl -sw '\n%{http_code} %{time_total}s\n' -o /dev/null localhost:8081/readyz
+```
