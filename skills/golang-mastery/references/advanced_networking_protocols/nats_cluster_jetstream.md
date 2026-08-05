@@ -1,5 +1,7 @@
 # NATS & JetStream Cluster di Go
 
+> **Berlaku:** Go 1.21+ · NATS 2.10+ · **Lihat juga:** `realtime_networking/nats_jetstream_patterns.md` · `distributed_consensus_storage/raft_consensus_hashicorp.md` · `arch_patterns/event_driven_pubsub.md` · `distributed_consensus_storage/gossip_memberlist.md`
+
 ## 1. Konsep Utama & Internals
 NATS adalah sistem *messaging* sistem terdistribusi berperforma tinggi, sedangkan **JetStream** adalah subsistem persistensi terintegrasi generasi baru (pengganti NATS Streaming/STAN). NATS Core memberikan komunikasi *fire-and-forget* sub-milidetik, sementara JetStream menambahkan fitur log penyimpanan, *replay* pesan, *Consumer* (Push/Pull), dan jaminan *Exactly Once* (dengan deduplikasi *Message ID*).
 
@@ -274,3 +276,34 @@ js.CreateStream(ctx, jetstream.StreamConfig{
 1. **Split Brain Partition (Raft Consensus)**: Jika sebuah koneksi cluster terputus (Network Partition), NATS node mungkin tidak dapat mencapai kuorum RAFT. Pada saat itu, fungsi `PublishMsgAsync` JetStream tidak akan menghasilkan sukses atau error segera, melainkan bisa ter-*block* hingga timeout tercapai. *Defensive:* Jangan gunakan sinkron blokir absolut. Selalu amankan iterasi `Publish` ke JetStream dengan *Context Timeout* sehingga goroutine Web/API tidak *hang* selamanya menunggu konsensus cluster yang terpecah.
 2. **Deduplication Window Linger**: Fitur *Exactly Once* di JetStream mengandalkan header `Nats-Msg-Id`. Server melacak ID ini secara default dalam *Deduplication Window* 2 menit (bisa dikonfigurasi). *Defensive:* Jika *retry mechanism* klien Anda memakan waktu lebih dari 2 menit dan mengirim ID yang sama, *broker* akan menganggap itu pesan baru! Sesuaikan `Duplicates` config pada `StreamConfig` jika window retry aplikasi Anda mencapai hitungan jam (misalnya dengan delay exponential backoff HTTP eksternal).
 3. **Poison Pill Message**: Sebuah malformed message (misalnya JSON rusak) yang menyebabkan `msg.Nak()` di *worker* Go akan terus-menerus diserap, di-*Nak*, dan dikirim ulang oleh JetStream tanpa henti hingga mencapai limit persistensi. *Defensive:* Batasi konfigurasi Consumer dengan `MaxDeliver: 3`. Jika *worker* menerima pesan dengan `msg.Metadata().NumDelivered >= 3`, lakukan `msg.Term()` (Terminate) alih-alih `Nak()`, yang secara instruksional memberi tahu JetStream untuk menghapus pesan dari antrian selamanya, atau kirim (forward) ke *Dead Letter Queue* (Topik terpisah).
+
+## Kapan JANGAN Pakai Ini
+
+- **Cluster lintas region tanpa memahami ongkos replikasi.** JetStream memakai Raft untuk replikasi stream. Setiap penulisan menunggu kuorum, dan dengan node di beberapa region latensi tulis Anda ditentukan geografi.
+- **Replikasi `R=1` untuk data yang penting.** Satu node yang hilang berarti stream itu hilang. `R=1` sah untuk data yang bisa dibuat ulang, bukan untuk yang tidak.
+- **Stream tanpa batas dan kebijakan retensi.** Disk penuh menghentikan penerimaan untuk seluruh stream, dan pemulihannya berlangsung saat sistem sedang menolak pesan.
+- **Mengandalkan super cluster tanpa menguji partisi jaringan.** Perilaku saat region terpisah adalah hal yang harus Anda ketahui **sebelum** terjadi, bukan sesudah.
+- **Menaruh semua stream di satu cluster tanpa isolasi sumber daya.** Satu stream yang membanjir mempengaruhi seluruh cluster, dan batas antar tim menjadi tidak ada.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Latensi tulis tinggi dan stabil | penempatan replika stream | Ongkos kuorum lintas region |
+| Stream hilang saat satu node mati | jumlah replika | `R=1` untuk data penting |
+| Broker menolak pesan | pemakaian disk vs batas stream | Batas tercapai |
+| Perilaku aneh saat jaringan terganggu | topologi dan uji partisi | Perilaku partisi tidak pernah diuji |
+| Satu tim mengganggu tim lain | isolasi akun/domain | Semua berbagi cluster tanpa batas |
+
+```bash
+# Kesehatan cluster dan penempatan replika tiap stream
+nats server report jetstream
+nats stream info PESANAN --json | jq '{replicas:.config.num_replicas, cluster:.cluster.name, leader:.cluster.leader}'
+
+# Pemakaian disk vs batas
+nats server report jetstream --json | jq '.[].stats'
+
+# Node yang tertinggal dalam replikasi
+nats server list
+nats stream info PESANAN --json | jq '.cluster.replicas'
+```

@@ -1,5 +1,7 @@
 # Realtime Networking: NATS JetStream Patterns di Go
 
+> **Berlaku:** Go 1.21+ · NATS JetStream · **Lihat juga:** `advanced_networking_protocols/nats_cluster_jetstream.md` · `arch_patterns/event_driven_pubsub.md` · `realtime_networking/kafka_consumer_producer.md` · `distributed_patterns_resilience/idempotency_key_engine.md`
+
 ## 1. Konsep dan Internals
 
 NATS (secara spesifik Core NATS) adalah sistem *messaging* berbasis saraf tulang belakang (*message broker*) murni yang sangat cepat dengan semantik "At-Most-Once". Core NATS beroperasi murni di memori (RAM), membuatnya mampu memproses jutaan pesan per detik, tetapi jika *subscriber* sedang tidak *online*, pesan tersebut menguap (*lost*).
@@ -296,4 +298,34 @@ func TestJetStreamPullWorker(t *testing.T) {
 		t.Errorf("Ekspektasi proses 1x sukses, dapet %d", processedCount)
 	}
 }
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **NATS core untuk pesan yang tidak boleh hilang.** Core adalah fire-and-forget: bila tidak ada subscriber saat pesan dikirim, pesan itu hilang dan tidak ada yang tahu. JetStream yang memberi durabilitas.
+- **Stream tanpa kebijakan retensi dan batas ukuran.** Disk yang penuh menghentikan penerimaan pesan untuk seluruh stream, dan pemulihannya terjadi di bawah tekanan.
+- **Consumer push tanpa flow control.** Konsumer yang lebih lambat daripada laju publikasi akan kebanjiran, dan perilakunya menjadi sulit diprediksi. Pull consumer memberi kendali yang lebih jelas.
+- **Subject wildcard yang terlalu luas.** Konsumer menerima jauh lebih banyak daripada yang dibutuhkan, memboroskan bandwidth dan CPU untuk pesan yang langsung dibuang.
+- **Mengandalkan urutan lintas stream.** Urutan dijamin di dalam satu stream. Dua stream tidak punya hubungan waktu apa pun.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Pesan hilang tanpa jejak | core vs JetStream | Publikasi memakai core |
+| Stream berhenti menerima | batas dan retensi stream | Batas tercapai |
+| Konsumer tertinggal jauh | jumlah pesan pending | Konsumer lebih lambat dari publikasi |
+| Konsumer memproses pesan yang tidak relevan | pola subject | Wildcard terlalu luas |
+| Pesan diproses berulang | ack dan `AckWait` | Ack tidak sampai sebelum batas waktu |
+
+```bash
+# Kesehatan stream dan konsumer -- dua perintah yang menjawab sebagian besar pertanyaan
+nats stream info PESANAN
+nats consumer report PESANAN
+
+# Pesan pending dan yang sedang diproses
+nats consumer info PESANAN pemroses | grep -E 'Pending|Ack|Redelivered'
+
+# Batas stream vs pemakaian sekarang
+nats stream info PESANAN --json | jq '{bytes:.state.bytes, maxBytes:.config.max_bytes, msgs:.state.messages}'
 ```

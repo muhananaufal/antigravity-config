@@ -1,5 +1,7 @@
 # QUIC & HTTP/3 via quic-go
 
+> **Berlaku:** Go 1.21+ · `quic-go` · HTTP/3 · **Lihat juga:** `realtime_networking/tcp_connection_management.md` · `microservices_grpc/http_client_production.md` · `advanced_networking_protocols/dns_resolution_patterns.md` · `microservices_grpc/service_mesh_grpc_lb.md`
+
 ## 1. Konsep Utama & Internals
 QUIC (Quick UDP Internet Connections) adalah protokol transport layer berbasis UDP yang dirancang untuk mengatasi limitasi TCP, terutama *Head-of-Line (HoL) Blocking*. Berbeda dengan TCP, QUIC mengintegrasikan TLS 1.3 langsung pada level transport, mengurangi handshake dari 3-RTT menjadi 1-RTT atau bahkan 0-RTT (pada koneksi yang dilanjutkan/resumed). 
 
@@ -319,3 +321,33 @@ quicConfig := &quic.Config{
 1. **UDP Buffer Overflow (OS Level)**: QUIC menggunakan UDP. Kernel OS biasanya memberikan buffer receive UDP yang kecil (contoh di Linux `net.core.rmem_default` seringkali hanya 212KB). Saat ada burst traffic HTTP/3, paket UDP akan di-drop oleh kernel OS sebelum `quic-go` sempat membacanya. *Defensive:* Jangan hanya mengandalkan kode Go; pastikan Anda men-tuning sysctl di host OS (`sysctl -w net.core.rmem_max=2500000`) dan pertimbangkan mengatur ukuran buffer socket secara eksplisit di Go dengan membuat custom `net.ListenUDP` lalu meneruskannya ke `quic.Server`.
 2. **Path MTU Discovery (PMTUD) Blackholing**: QUIC mencoba menemukan Maximum Transmission Unit (MTU) secara otomatis dengan mengirim frame besar (probing). Jika router/firewall di jalur jaringan secara diam-diam membuang (drop) paket besar tanpa mengirim ICMP Fragment Needed (fenomena blackhole), koneksi bisa hang atau terputus-putus (stall). *Defensive:* Dalam skenario tertutup atau jaringan yang sangat dimanipulasi, atur `DisablePathMTUDiscovery: true` pada `quic.Config` untuk menghindari paket terbuang.
 3. **0-RTT Replay Attacks pada HTTP/3**: Fitur 0-RTT di QUIC dan TLS 1.3 sangat mempercepat koneksi, namun rentan terhadap serangan Replay (paket dikirim ulang oleh penyerang). *Defensive:* Jika mengaktifkan 0-RTT, server TIDAK BOLEH memproses request yang memodifikasi state (seperti POST/PUT/DELETE) dari data yang datang pada frame 0-RTT. Data ini harus ditolak sampai handshake 1-RTT selesai secara penuh. Untungnya, abstraksi standar di Go harusnya menangani hal ini, tapi jika menulis custom handler QUIC, Anda harus memverifikasi state `Used0RTT`.
+
+## Kapan JANGAN Pakai Ini
+
+- **Bila jaringan target memblokir UDP.** Sebagian jaringan korporat dan operator memblokir atau membatasi UDP. Tanpa fallback ke HTTP/2 yang benar-benar diuji, sebagian pengguna Anda tidak bisa terhubung sama sekali.
+- **Tanpa memperhitungkan konsumsi CPU.** QUIC menangani enkripsi dan pemulihan paket di **ruang pengguna**. Pada throughput tinggi, CPU-nya jauh di atas TCP dengan kTLS — dan itu tagihan yang nyata.
+- **Mengasumsikan middlebox memahami QUIC.** Banyak firewall, load balancer, dan alat pemantauan memperlakukan QUIC sebagai UDP tak dikenal. Observabilitas dan kontrol yang Anda andalkan bisa hilang tanpa disadari.
+- **Untuk lalu lintas internal yang sudah cepat dan andal.** Keunggulan QUIC — pemulihan cepat dari kehilangan paket, migrasi koneksi — muncul pada jaringan yang **buruk**. Di dalam satu data center, ia menambah CPU tanpa manfaat yang sebanding.
+- **Tanpa rencana observability.** Alat untuk TCP jauh lebih matang. Bila Anda belum bisa menjawab "kenapa koneksi ini lambat" untuk QUIC, jangan taruh jalur kritis di atasnya.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Sebagian pengguna tidak bisa terhubung | rasio fallback ke HTTP/2 | UDP terblokir di jaringan mereka |
+| CPU jauh lebih tinggi dari perkiraan | CPU per gigabit | Pemrosesan QUIC di ruang pengguna |
+| Tidak terlihat di alat pemantauan jaringan | dukungan QUIC pada middlebox | Lalu lintas dianggap UDP tak dikenal |
+| Tidak ada perbaikan latensi | kualitas jaringan pengguna | Jaringan sudah baik; QUIC tidak menambah apa pun |
+| Sulit mendiagnosis koneksi lambat | qlog atau metrik QUIC | Observability belum disiapkan |
+
+```bash
+# Berapa banyak yang benar-benar memakai HTTP/3 vs fallback
+curl -s localhost:9090/metrics | grep -E 'http_requests_total.*proto="(h3|h2)"'
+
+# Apakah UDP 443 bisa dijangkau dari jaringan target?
+nc -zvu api.contoh.id 443
+curl -sI --http3 https://api.contoh.id/ 2>&1 | head -3
+
+# CPU per byte: bandingkan dengan jalur HTTP/2
+go tool pprof -top 'http://localhost:6060/debug/pprof/profile?seconds=30' | grep -iE 'quic|crypto'
+```

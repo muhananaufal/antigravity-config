@@ -1,5 +1,7 @@
 # Network Proxy: SOCKS5 Server Implementation di Go
 
+> **Berlaku:** Go 1.21+ · SOCKS5 (RFC 1928) · **Lihat juga:** `advanced_networking_protocols/wireguard_userspace.md` · `cybersecurity_zerotrust/network_security_scanning.md` · `realtime_networking/tcp_connection_management.md` · `microservices_grpc/http_client_production.md`
+
 ## 1. Konsep Utama & Internals
 SOCKS5 (RFC 1928) adalah protokol proxy jaringan berlapis (Layer 5/Session Layer) yang independen dari protokol aplikasi. Tidak seperti proxy HTTP yang membaca *header*, SOCKS5 bertindak sebagai perantara TCP/UDP murni secara *blind forwarding*. Hal ini memungkinkan SOCKS5 meneruskan berbagai lalu lintas, termasuk SSH, RDP, DNS, hingga protokol *custom/proprietary* tanpa menyentuh *payload* terenkripsi (seperti TLS).
 
@@ -375,4 +377,33 @@ dialer := &net.Dialer{
 		},
 	},
 }
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **Proxy tanpa autentikasi di jaringan yang bisa dijangkau pihak lain.** Ia menjadi open relay: siapa pun yang menemukannya bisa memakai alamat IP Anda untuk apa pun, dan jejaknya mengarah ke Anda.
+- **SOCKS5 untuk lalu lintas yang butuh inspeksi lapisan aplikasi.** SOCKS5 bekerja di lapisan koneksi; ia tidak melihat HTTP. Untuk kebijakan berbasis URL atau header, proxy HTTP yang tepat.
+- **Tanpa batas jumlah koneksi per klien.** Satu klien bisa menghabiskan seluruh file descriptor dan memori proxy, dan efeknya dirasakan semua pengguna lain.
+- **Tanpa timeout pada koneksi hulu.** Koneksi ke tujuan yang menggantung menahan sumber daya di sisi Anda tanpa batas.
+- **Proxy sebagai kontrol keamanan tanpa daftar tujuan yang diizinkan.** Proxy yang meneruskan ke mana saja tidak membatasi apa pun — ia hanya memindahkan titik keluar lalu lintas.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Lalu lintas keluar ke tujuan tak dikenal | daftar tujuan yang diizinkan | Proxy meneruskan ke mana saja |
+| Alamat IP Anda muncul di daftar penyalahgunaan | autentikasi proxy | Berfungsi sebagai open relay |
+| File descriptor habis | batas koneksi per klien | Satu klien menghabiskan sumber daya |
+| Koneksi menumpuk tanpa aktivitas | timeout hulu | Koneksi menggantung tidak pernah ditutup |
+| Kebijakan tidak bisa diterapkan per URL | lapisan proxy | SOCKS5 tidak melihat lapisan aplikasi |
+
+```bash
+# Tujuan yang benar-benar dihubungi lewat proxy
+kubectl logs -l app=proxy --since=1h | jq -r '.tujuan' | sort | uniq -c | sort -rn | head -20
+
+# Koneksi aktif per klien
+ss -tan state established '( sport = :1080 )' | awk '{print $5}' | cut -d: -f1 | sort | uniq -c | sort -rn | head
+
+ls /proc/$(pgrep proxy)/fd | wc -l
+curl -s localhost:9090/metrics | grep -E 'proxy_(connections|denied|upstream_errors)'
 ```

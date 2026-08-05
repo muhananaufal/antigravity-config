@@ -1,5 +1,7 @@
 # Saga Pattern & Compensation Jobs di Golang: Background Job Processing
 
+> **Berlaku:** Go 1.21+ · **Lihat juga:** `distributed_patterns_resilience/saga_orchestration_choreography.md` · `distributed_patterns_resilience/idempotency_key_engine.md` · `background_jobs_worker/river_postgres_jobs.md` · `distributed_patterns_resilience/outbox_pattern_transactional.md`
+
 Saga Pattern adalah pola arsitektur untuk mengelola transaksi yang mencakup berbagai layanan (services) tanpa bergantung pada *Distributed Transactions* seperti Two-Phase Commit (2PC) yang sering menimbulkan *locking* berlebih dan bottleneck. Dalam implementasinya menggunakan *background jobs* di Golang, pendekatan terbaik adalah **Choreography dengan Job Chaining** yang dikombinasikan dengan basis data relasional (seperti PostgreSQL) untuk *Saga State Tracking*.
 
 Dokumen referensi ini mengupas tuntas secara *deep-dive* implementasi pola Saga, kompensasi kegagalan, deteksi *poison pill*, hingga contoh kode yang tangguh (*production-ready*) dengan *zero placeholders* dan *defensive programming*.
@@ -621,3 +623,36 @@ func TestWorker_HandlePayment_BusinessFailure_TriggersCompensation(t *testing.T)
 ---
 
 *Panduan Referensi Go Mastery - Saga Compensation Pattern*
+
+## Kapan JANGAN Pakai Ini
+
+- **Kompensasi yang tidak idempoten.** Kompensasi **akan** diulang — itu justru inti mekanismenya. Kompensasi yang menggandakan efek saat diulang lebih merusak daripada kegagalan yang ingin dipulihkannya.
+- **Kompensasi yang bisa gagal permanen tanpa jalur penyelesaian manual.** Selalu ada kasus yang tidak bisa dipulihkan otomatis. Tanpa antrean untuk manusia, kasus itu menggantung selamanya tanpa ada yang tahu.
+- **Menjalankan kompensasi tanpa memastikan langkah majunya benar-benar terjadi.** Membatalkan sesuatu yang tidak pernah dilakukan bisa merusak keadaan — misalnya mengembalikan stok yang tidak pernah dikurangi.
+- **Saga berbasis job tanpa batas waktu total.** Saga yang menggantung menahan sumber daya dan mengunci entitas bisnis tanpa batas. Harus ada titik di mana ia dinyatakan gagal dan dieskalasi.
+- **Mengasumsikan urutan terbalik selalu benar.** Sebagian langkah tidak simetris: mengirim email tidak bisa "dibatalkan", dan urutan pembatalan yang naif bisa menghasilkan keadaan yang tidak konsisten.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Kompensasi gagal berulang tanpa akhir | idempotensi kompensasi | Kompensasi tidak aman diulang |
+| Stok atau saldo berlebih | apakah langkah maju diverifikasi | Kompensasi berjalan untuk langkah yang tidak terjadi |
+| Saga menggantung berhari-hari | batas waktu total | Tidak ada titik eskalasi |
+| Kasus tersangkut tanpa penanganan | antrean penyelesaian manual | Tidak ada jalur untuk manusia |
+| Keadaan tidak konsisten setelah pembatalan | urutan kompensasi | Langkah tidak simetris dibatalkan secara naif |
+
+```sql
+-- Kompensasi yang gagal dan sudah dicoba berkali-kali: butuh manusia
+SELECT saga_id, langkah, percobaan, galat_terakhir, now() - diperbarui_pada AS diam
+FROM saga_kompensasi WHERE status = 'gagal' ORDER BY percobaan DESC LIMIT 20;
+
+-- Saga yang melewati batas waktu total
+SELECT id, jenis, status, now() - dimulai_pada AS umur
+FROM saga_instance
+WHERE status NOT IN ('selesai','dibatalkan') AND dimulai_pada < now() - interval '24 hours';
+```
+
+```bash
+curl -s localhost:9090/metrics | grep -E 'saga_(compensation|manual_queue|timeout)_total'
+```

@@ -1,5 +1,7 @@
 # Panduan Komprehensif: Distributed Cron & Job Scheduling di Golang
 
+> **Berlaku:** Go 1.21+ · `robfig/cron/v3` · **Lihat juga:** `concurrency/distributed_locks_redis.md` · `background_jobs_worker/job_observability.md` · `distributed_patterns_resilience/temporal_workflow_engine.md` · `background_jobs_worker/river_postgres_jobs.md`
+
 Dalam lingkungan *microservices* modern atau Kubernetes (K8s) dengan *multi-replica deployment*, penjadwalan tugas (*cron jobs*) menjadi jauh lebih kompleks dibandingkan *single-node deployment*. Menjalankan cron tanpa mekanisme yang tepat akan menyebabkan **Duplicate Execution** (satu job dieksekusi berkali-kali oleh pod yang berbeda) dan **Overlapping Execution** (job lama belum selesai, job baru sudah jalan).
 
 Dokumen ini adalah *deep-dive* level arsitek mengenai implementasi penjadwalan *cron* di Golang menggunakan `robfig/cron/v3` dan `go-co-op/gocron`, lengkap dengan *distributed locking*, penanganan zona waktu, observabilitas, serta *dynamic reloading*.
@@ -563,3 +565,40 @@ Menjadwalkan *background job* secara terdistribusi di Go memerlukan pergeseran *
 4. ✅ **Keluarkan Metrik (Prometheus)** untuk observabilitas status, durasi, dan waktu pengeksekusian.
 5. ✅ Pisahkan *business logic task* dari kerangka cron scheduler agar **mudah diuji (Unit Test)**.
 6. ✅ Antisipasi Pod Crash dengan pencatatan log historis eksekusi di basis data untuk proses **Catch-Up**.
+
+## Kapan JANGAN Pakai Ini
+
+- **Cron dalam proses pada armada banyak pod tanpa leader election.** Setiap pod menjalankan job yang sama pada waktu yang sama. Untuk job yang mengirim email atau menagih pelanggan, itu langsung terlihat oleh pengguna.
+- **Cron tanpa timeout.** Job yang menggantung akan tumpang tindih dengan jadwal berikutnya, lalu berikutnya lagi, sampai sumber daya habis — dan penyebabnya sulit dilihat karena setiap eksekusi tampak normal.
+- **Mengandalkan waktu server tanpa zona waktu eksplisit.** Peralihan DST membuat job berjalan **dua kali** atau **terlewat sama sekali**, satu kali setahun, di lingkungan yang tidak pernah diuji untuk itu.
+- **Job cron yang tidak idempoten.** Restart pod di dalam jendela jadwal bisa memicu eksekusi ulang, dan itu di luar kendali penjadwal.
+- **Cron untuk pekerjaan yang harus dijamin berjalan.** Pod yang mati tepat pada jadwal berarti job terlewat **tanpa jejak**. Butuh pencatatan eksekusi dan pemeriksaan job yang seharusnya berjalan tapi tidak.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Job berjalan beberapa kali per jadwal | jumlah replika vs leader election | Setiap pod menjalankan penjadwalnya sendiri |
+| Job terlewat tanpa ada yang tahu | catatan eksekusi per jadwal | Tidak ada pemeriksaan job yang tidak berjalan |
+| Anomali setahun sekali | zona waktu penjadwal | Peralihan DST |
+| Eksekusi bertumpuk | durasi job vs interval | Tidak ada timeout maupun penguncian |
+| Job berjalan pada waktu yang salah | zona waktu container vs bisnis | Container UTC, jadwal bisnis lokal |
+
+```bash
+# Satu jadwal WAJIB menghasilkan satu eksekusi -- angka > 1 adalah masalah
+kubectl logs -l app=worker --since=24h \
+  | jq -r 'select(.event=="cron_mulai") | "\(.jadwal_id) \(.slot)"' | sort | uniq -c | awk '$1>1'
+
+# Job yang seharusnya berjalan tapi tidak tercatat
+```
+
+```sql
+SELECT nama_jadwal, max(mulai_pada) AS terakhir, now() - max(mulai_pada) AS sejak
+FROM eksekusi_cron GROUP BY 1 ORDER BY sejak DESC;
+```
+
+```bash
+# Zona waktu yang benar-benar dipakai proses
+kubectl exec <pod> -- date
+kubectl exec <pod> -- sh -c 'echo $TZ; cat /etc/timezone 2>/dev/null'
+```

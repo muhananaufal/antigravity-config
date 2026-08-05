@@ -1,5 +1,7 @@
 # DNS Resolution & Custom Resolvers in Go
 
+> **Berlaku:** Go 1.21+ · `net` resolver · CoreDNS · **Lihat juga:** `microservices_grpc/service_mesh_grpc_lb.md` · `microservices_grpc/http_client_production.md` · `runtime_internals/cgo_abi_boundaries.md` · `devops_control_planes/kubernetes_cni_plugin.md`
+
 ## 1. Konsep Utama & Internals
 Dalam sistem terdistribusi, System Name Resolution (DNS) lebih dari sekadar pemetaan domain ke IP. Layanan tingkat lanjut seperti *Split-horizon DNS*, *Service Discovery* (berbasis SRV records), atau *DNS Caching* kustom untuk menghindari *rate limit* ISP memerlukan pengelolaan DNS secara teliti. 
 
@@ -225,3 +227,36 @@ net.DefaultResolver = &net.Resolver{
 1. **Truncated UDP Responses (TC Bit)**: Standar lama membatasi paket UDP DNS maksimal 512 byte (tanpa EDNS0). Jika jawaban dari server (seperti request TXT record besar atau banyak A record) melebihi batas, DNS server mengatur bit `TC=1` (Truncated). *Defensive:* Jangan mengabaikan field `in.Truncated`. Jika ini terjadi dan Anda hanya menggunakan UDP, IP yang Anda butuhkan mungkin terpotong. Seperti pada kode produksi di atas, tangkap kondisi `in.Truncated` dan secara otomatis *fallback* me-retry *query* menggunakan klien berprotokol TCP (`Net: "tcp"`).
 2. **DNS SSRF (Server-Side Request Forgery) via Bogon IP**: Penyerang mendaftarkan domain pubilk `attacker.com` untuk menunjuk ke IP internal/lokal Anda (seperti `169.254.169.254` AWS Metadata atau `127.0.0.1`). Aplikasi Go lalu me-resolve domain tersebut dan mengirim request HTTP. *Defensive:* Setelah mendapatkan `ips` dari resolver, loop melalui hasilnya dan pastikan tidak ada blok IP private (RFC 1918) atau loopback (Bogon space) jika Anda mendial ke layanan publik eksternal eksternal. Go menyediakan fungsi cek `ip.IsPrivate()` dan `ip.IsLoopback()`.
 3. **Split-Horizon Ambiguity (Search Domains Kubernetes)**: Saat aplikasi di Kubernetes mencoba me-resolve `google.com`, `/etc/resolv.conf` K8s memiliki `search default.svc.cluster.local svc.cluster.local cluster.local`. Resolusi akan mencoba `google.com.default.svc.cluster.local` terlebih dahulu (bocor internal). *Defensive:* Untuk domain publik absolut, pastikan Anda menambahkan titik di akhir domain (`google.com.`) dalam pemanggilan `LookupA`—titik di akhir menyatakan status *Fully Qualified Domain Name (FQDN)* yang memerintahkan resolver untuk mengabaikan pengaturan `search domain` di OS dan langsung menembak *root zone*.
+
+## Kapan JANGAN Pakai Ini
+
+- **Mengandalkan TTL DNS untuk failover cepat.** Resolver perantara, sistem operasi, dan pustaka aplikasi meng-cache lebih lama daripada TTL yang Anda tetapkan. Failover berbasis DNS memakan menit, bukan detik — dan kadang jauh lebih lama.
+- **Tanpa memahami perbedaan resolver cgo dan resolver Go murni.** Keduanya berperilaku berbeda soal `/etc/hosts`, `nsswitch.conf`, timeout, dan urutan pencarian. Perilaku yang Anda uji di laptop bisa berbeda dari yang berjalan di container.
+- **DNS round-robin sebagai load balancer.** Tidak ada health check: alamat yang mati tetap dikembalikan sampai record diperbarui, dan klien akan terus mencobanya.
+- **Mengabaikan `ndots` di Kubernetes.** Nilai bawaan `ndots:5` membuat nama eksternal seperti `api.contoh.id` melewati beberapa pencarian yang gagal lebih dulu. Pada jalur panas, itu latensi dan beban CoreDNS yang nyata.
+- **Nama DNS eksternal di jalur panas tanpa cache.** Setiap resolusi adalah perjalanan jaringan yang bisa gagal, dan kegagalan DNS tampak sebagai galat aplikasi yang membingungkan.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Failover memakan waktu jauh lebih lama dari TTL | cache resolver di setiap lapisan | TTL bukan jaminan |
+| Latensi tambahan pada panggilan eksternal | `ndots` dan jumlah query | Pencarian gagal berulang sebelum yang benar |
+| Perilaku berbeda antara laptop dan container | resolver cgo vs Go murni | Jalur resolusi berbeda |
+| Trafik tetap ke instans yang mati | apakah ada health check | DNS round-robin tanpa pemeriksaan |
+| CoreDNS menjadi penyempitan | QPS ke CoreDNS | Terlalu banyak query dari aplikasi |
+
+```bash
+# ndots dan search domain yang benar-benar berlaku di pod
+kubectl exec <pod> -- cat /etc/resolv.conf
+
+# Berapa query yang dibutuhkan untuk satu nama eksternal
+kubectl exec <pod> -- sh -c 'time nslookup api.contoh.id' 2>&1 | tail -5
+
+# Beban CoreDNS
+kubectl top pods -n kube-system -l k8s-app=kube-dns
+kubectl logs -n kube-system -l k8s-app=kube-dns --since=10m | grep -c NXDOMAIN
+
+# Resolver mana yang dipakai biner Anda
+go version -m ./app | grep -i netgo
+```

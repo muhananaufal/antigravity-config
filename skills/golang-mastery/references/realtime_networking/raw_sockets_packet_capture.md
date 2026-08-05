@@ -1,5 +1,7 @@
 # Realtime Networking: Raw Sockets & Packet Capture di Go
 
+> **Berlaku:** Go 1.21+ · Linux `AF_PACKET` / libpcap · **Lihat juga:** `realtime_networking/ebpf_cilium_go.md` · `system_programming_linux/syscall_epoll_nonblocking.md` · `cybersecurity_zerotrust/network_security_scanning.md` · `security_owasp/audit_logging_scrubbing.md`
+
 ## 1. Konsep dan Internals
 
 Sebagian besar aplikasi jaringan menggunakan *Stream/Datagram Sockets* standar (`net.ListenTCP` / `UDP`). Pada level ini, kernel Linux telah melucuti semua *header* Ethernet dan IP, dan aplikasi hanya memproses/mendapat datanya saja. 
@@ -244,4 +246,35 @@ func TestRawSocket(t *testing.T) {
 		t.Log("Tidak ada paket lewat.")
 	}
 }
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **Bila `pcap` atau eBPF sudah cukup.** Raw socket menuntut `CAP_NET_RAW` atau root, dan memberi kapabilitas itu ke sebuah container memperluas dampak setiap kompromi terhadapnya.
+- **Menangkap di produksi tanpa filter.** Volume paket pada layanan sibuk akan menghabiskan CPU dan disk lebih cepat daripada yang diperkirakan, dan penangkapannya sendiri menjadi insiden.
+- **Menyimpan tangkapan tanpa memikirkan isinya.** Paket memuat data pengguna dalam bentuk polos untuk lalu lintas yang tidak terenkripsi — termasuk yang tunduk aturan privasi dan retensi.
+- **Tanpa memperhitungkan paket yang hilang saat beban tinggi.** Tangkapan yang tidak lengkap **menyesatkan**: Anda menyimpulkan sesuatu tidak terjadi padahal hanya tidak tertangkap.
+- **Menjalankan dengan kapabilitas jaringan tinggi di container yang tidak membutuhkannya.** Kapabilitas harus mengikuti kebutuhan, dan penangkapan paket biasanya sementara.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Kesimpulan salah dari tangkapan | statistik paket yang di-drop | Tangkapan tidak lengkap |
+| CPU melonjak saat penangkapan aktif | filter BPF yang dipakai | Menangkap terlalu banyak |
+| Disk penuh oleh berkas tangkapan | rotasi dan batas ukuran | Tidak ada batas |
+| Data pengguna ditemukan di berkas pcap | isi tangkapan | Tidak ada penyaringan atau retensi |
+| Container punya `CAP_NET_RAW` permanen | securityContext | Kapabilitas tidak dicabut setelah selesai |
+
+```bash
+# Paket yang DI-DROP saat penangkapan -- angka ini menentukan tangkapan bisa dipercaya atau tidak
+tcpdump -i eth0 -c 1000 'tcp port 8080' 2>&1 | tail -3
+cat /proc/net/dev | head -3
+
+# Kapabilitas yang benar-benar dimiliki proses
+grep Cap /proc/$(pgrep app)/status
+kubectl get pod <pod> -o jsonpath='{.spec.containers[0].securityContext.capabilities}' | jq
+
+# Selalu pakai filter dan batas -- tanpa itu penangkapan menjadi insidennya sendiri
+tcpdump -i eth0 -s 96 -c 5000 -w /tmp/tangkap.pcap 'tcp port 8080 and not host 10.0.0.5'
 ```

@@ -1,5 +1,7 @@
 # Realtime Networking: eBPF dengan Cilium/ebpf di Go
 
+> **Berlaku:** Go 1.21+ · `cilium/ebpf` · Linux 5.10+ · **Lihat juga:** `realtime_networking/raw_sockets_packet_capture.md` · `system_programming_linux/cgroups_v2_namespaces.md` · `system_programming_linux/seccomp_bpf_sandbox.md` · `observability_resilience/prometheus_metrics_red.md`
+
 ## 1. Konsep dan Internals
 
 eBPF (*Extended Berkeley Packet Filter*) adalah terobosan fundamental di kernel Linux. Kemampuan ini mengizinkan pengguna untuk memuat *bytecode* program mikro dengan aman langsung ke dalam kernel, yang bisa dieksekusi secara sinkron setiap saat (berbasis *event*) tanpa mengubah *source code* kernel atau me- *load* *Kernel Module* yang membahayakan sistem. 
@@ -230,4 +232,37 @@ func TestEBPFXdpLoader(t *testing.T) {
 		t.Errorf("Unexpected error: %v", err)
 	}
 }
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **Bila metrik dan trace biasa sudah cukup.** eBPF mengikat kode Anda pada versi kernel dan menambah lapisan yang hanya sedikit orang di tim bisa debug. Pakai ketika Anda benar-benar butuh melihat apa yang tidak bisa diinstrumentasi dari ruang pengguna.
+- **Program yang tidak diuji terhadap verifier di setiap versi kernel target.** Program yang lolos di kernel 6.1 bisa **ditolak** di 5.10, dan penolakannya terjadi saat start di node yang kebetulan lebih tua.
+- **Map tanpa batas ukuran.** Map eBPF menempati memori kernel yang tidak bisa di-swap. Map yang tumbuh tanpa batas akan mendorong node ke tekanan memori yang mempengaruhi semua beban kerja di sana.
+- **eBPF untuk logika bisnis.** Ia untuk observasi, penyaringan, dan pengarahan lalu lintas. Aturan bisnis di dalam kernel tidak bisa diuji, tidak bisa didebug dengan alat biasa, dan mengubahnya menuntut hak akses tinggi.
+- **Menjalankan di produksi tanpa uji pada versi kernel yang persis sama.** Perbedaan kernel minor bisa mengubah struktur yang Anda baca, dan hasilnya berupa angka yang salah, bukan galat.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Program ditolak saat start di sebagian node | versi kernel per node | Verifier berbeda antar versi |
+| Node mengalami tekanan memori | ukuran map eBPF | Map tumbuh tanpa batas |
+| Angka dari eBPF tidak masuk akal | struktur kernel yang dibaca | Layout berubah antar versi kernel |
+| Sulit mendiagnosis saat ada masalah | siapa yang bisa membaca program | Pengetahuan terkonsentrasi di satu orang |
+| Beban CPU kernel naik | frekuensi hook | Program terpasang di jalur terlalu panas |
+
+```bash
+# Program dan map yang benar-benar terpasang
+bpftool prog show
+bpftool map show
+
+# Memori yang dipakai map eBPF -- tidak bisa di-swap
+bpftool map show | grep -oE 'max_entries [0-9]+' | head
+
+# Versi kernel di seluruh node: program WAJIB diuji pada semuanya
+kubectl get nodes -o custom-columns='NODE:.metadata.name,KERNEL:.status.nodeInfo.kernelVersion'
+
+# Penolakan verifier muncul di dmesg
+dmesg | grep -i bpf | tail -20
 ```

@@ -1,5 +1,7 @@
 # Panduan Komprehensif Golang Background Jobs menggunakan Asynq & Redis
 
+> **Berlaku:** Go 1.21+ · `hibiken/asynq` · Redis 7+ · **Lihat juga:** `background_jobs_worker/river_postgres_jobs.md` · `background_jobs_worker/job_observability.md` · `distributed_patterns_resilience/idempotency_key_engine.md` · `caching_strategy/redis_advanced_patterns.md`
+
 Eksekusi tugas di latar belakang (background job processing) adalah komponen kritis dalam arsitektur sistem terdistribusi modern untuk melepaskan beban dari siklus HTTP request-response. `hibiken/asynq` adalah pustaka Go terdepan yang memanfaatkan Redis sebagai perantara (message broker) untuk manajemen antrean yang persisten, andal, dan skalabel.
 
 Dokumen ini adalah standar kualitas *top 1%* (production-ready) yang mengupas tuntas arsitektur, implementasi *type-safe*, hingga penanganan *edge cases* ekstrem di *production*.
@@ -539,3 +541,35 @@ func TestEndToEndAsynqFlow(t *testing.T) {
 ## Kesimpulan
 
 Asynq menyediakan sistem *background jobs* yang *production-ready*, kokoh dengan semantik yang dipikirkan dengan cermat di atas Redis. Dengan selalu menggunakan pattern TypedTask, mengelola payload biner secara waspada, serta menaati timeout *context* internal, Anda akan menghindari >90% masalah insiden skala besar. Kunci *reliability* lainnya adalah penanganan status saat proses *crash* (via Inspector dan Opsi `ShutdownTimeout`).
+
+## Kapan JANGAN Pakai Ini
+
+- **Untuk job yang tidak boleh hilang, tanpa memahami jaminan persistensi Redis.** RDB dan AOF punya jendela kehilangan yang berbeda. Bila satu job yang hilang berarti uang atau kewajiban hukum, antrean berbasis database lebih jujur.
+- **Job tanpa batas retry dan dead letter queue.** Job beracun akan diulang selamanya dan perlahan menghabiskan seluruh kapasitas worker — sementara job sehat mengantre di belakangnya.
+- **Payload besar di dalam job.** Redis menyimpan seluruhnya di memori, dikalikan jumlah job yang mengantre. Simpan referensi ke datanya, bukan salinannya.
+- **Job yang tidak idempoten.** Semantiknya at-least-once: job **akan** berjalan dua kali suatu saat. Itu normal dan bukan anomali yang bisa dikonfigurasi hilang.
+- **Satu antrean untuk semua prioritas.** Satu job berdurasi sepuluh menit memblokir job dua detik yang menunggu di belakangnya, dan pengguna merasakannya sebagai layanan yang lambat.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Job cepat ikut terlambat | pemisahan antrean per prioritas | Job lambat memblokir yang cepat |
+| Worker sibuk tapi tidak ada kemajuan | isi antrean retry | Job beracun diulang terus |
+| Memori Redis naik cepat | ukuran payload job | Data disalin ke dalam job |
+| Efek samping terjadi dua kali | idempotensi handler | At-least-once bekerja sebagaimana mestinya |
+| Job hilang setelah Redis restart | konfigurasi persistensi | Jaminan Redis tidak sesuai kebutuhan |
+
+```bash
+# Kedalaman tiap antrean dan status job
+asynq stats
+asynq queue ls
+asynq task ls --queue=default --state=retry
+asynq task ls --queue=default --state=archived
+
+# Memori yang dipakai antrean
+redis-cli info memory | grep used_memory_human
+redis-cli --bigkeys | grep -i asynq
+
+curl -s localhost:9090/metrics | grep -E 'asynq_(tasks|queue_size|processing)'
+```

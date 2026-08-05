@@ -1,5 +1,7 @@
 # AWS Lambda dengan Golang
 
+> **Berlaku:** Go 1.21+ · AWS Lambda `provided.al2023` · **Lihat juga:** `cloud_provider_sdk/aws_sdk_go_v2.md` · `db_sqlc/connection_pool_tuning.md` · `cloud_provider_sdk/cloud_messaging_sns_sqs.md` · `observability_resilience/opentelemetry_tracing.md`
+
 AWS Lambda dengan Go sangat cepat dan stabil karena Go di-compile menjadi *static binary* (Cold Start < 200ms). Pada arsitektur custom runtime Amazon Linux 2 (`provided.al2`), Go binaries merupakan salah satu bahasa terbaik untuk serverless.
 
 ## Arsitektur Lambda (Init Phase vs Handler Phase)
@@ -279,4 +281,35 @@ func handler(ctx context.Context, sqsEvent events.SQSEvent) (SQSBatchResponse, e
 	// Return sukses ke AWS dengan array item-item yang error
 	return SQSBatchResponse{BatchItemFailures: failures}, nil
 }
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **Untuk beban yang konstan dan tinggi.** Container yang berjalan terus lebih murah pada volume tertentu, dan latensinya jauh lebih stabil karena tidak ada cold start sama sekali.
+- **Inisialisasi berat di dalam handler, bukan di `init`.** Kode di `init` berjalan sekali per container dan bisa dipakai ulang; kode di handler membayar ongkosnya pada **setiap** invocation.
+- **Koneksi database langsung dari Lambda tanpa proxy.** Setiap invocation bersamaan membuka koneksinya sendiri. Pada lonjakan, database habis koneksi sebelum Lambda mencapai batas konkurensinya. RDS Proxy ada untuk ini.
+- **Timeout Lambda yang lebih panjang daripada yang bisa ditoleransi pemanggil.** Pemanggil sudah menyerah, tetapi Anda tetap membayar eksekusi sampai selesai.
+- **Mengandalkan state antar invocation.** Container bisa didaur ulang kapan saja tanpa pemberitahuan. Cache di memori adalah optimasi, bukan jaminan.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| p99 jauh di atas p50 | rasio cold start | Inisialisasi berat atau konkurensi berayun |
+| Database kehabisan koneksi saat lonjakan | konkurensi Lambda vs `max_connections` | Koneksi langsung tanpa proxy |
+| Biaya lebih tinggi dari perkiraan | durasi × memori × invocation | Beban terlalu konstan untuk model ini |
+| Hasil kadang memakai data lama | state di memori container | Container dipakai ulang dengan cache basi |
+| Invocation berjalan meski pemanggil pergi | timeout Lambda vs timeout klien | Anggaran waktu tidak selaras |
+
+```bash
+# Cold start dan durasi inisialisasi ada di baris REPORT
+aws logs filter-log-events --log-group-name /aws/lambda/api \
+  --filter-pattern 'REPORT' --limit 20 \
+  --query 'events[].message' --output text | grep -o 'Init Duration: [0-9.]*' | head
+
+# Konkurensi vs kapasitas koneksi database
+aws lambda get-function-concurrency --function-name api
+aws cloudwatch get-metric-statistics --namespace AWS/Lambda \
+  --metric-name ConcurrentExecutions --statistics Maximum \
+  --start-time "$(date -u -d '1 hour ago' +%FT%TZ)" --end-time "$(date -u +%FT%TZ)" --period 300
 ```

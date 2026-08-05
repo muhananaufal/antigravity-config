@@ -1,5 +1,7 @@
 # Google Cloud Platform (GCP) Client Libraries in Go
 
+> **Berlaku:** Go 1.21+ · Google Cloud Client Libraries · **Lihat juga:** `cloud_provider_sdk/aws_sdk_go_v2.md` · `cybersecurity_zerotrust/spiffe_spire_workload.md` · `microservices_grpc/grpc_interceptors_middleware.md` · `security_owasp/secret_management_vault.md`
+
 Aplikasi Golang yang di-deploy di lingkungan GCP (Google Kubernetes Engine, Cloud Run, Compute Engine) memiliki standar autentikasi dan desain client SDK yang sedikit berbeda dari AWS. Library resmi berada di `cloud.google.com/go/...`.
 
 ## Application Default Credentials (ADC) Chain
@@ -338,3 +340,35 @@ func handleGCPError(err error) {
 
 6. **Cloud Spanner Session Leaks**: Spanner client menggunakan "Session Pool". Jika Anda tidak memanggil `defer iter.Stop()` pada saat read, session Spanner akan menggantung (leak) di sisi client. Lama-kelamaan aplikasi Go akan kehabisan session (max 400 default) dan seluruh query database akan freeze menunggu session kosong!
 7. **Cloud Run CPU Throttling**: Secara default, Cloud Run membatasi (throttle) alokasi CPU mendekati 0 saat *TIDAK ADA* request HTTP yang sedang diproses secara aktif (saat idle). Jika worker Go melakukan background processing (goroutine) sesudah me-return HTTP response `200 OK`, eksekusi background itu akan berjalan suaaaangat lambat atau beku. Solusinya: Aktifkan fitur "CPU always allocated" jika aplikasi butuh background tasking.
+
+## Kapan JANGAN Pakai Ini
+
+- **Berkas kredensial JSON di dalam container.** Workload Identity menghapus kebutuhan itu sepenuhnya. Berkas kunci adalah kredensial berumur panjang yang bisa disalin, dan pencabutannya sering terlambat.
+- **Client yang tidak pernah ditutup.** Sebagian client GCP memegang koneksi gRPC berumur panjang. Membuatnya berulang tanpa `Close()` membocorkan koneksi dan goroutine.
+- **Mengabaikan kuota per proyek.** Kuota berlaku lintas layanan dan lintas beban kerja dalam satu proyek. Job batch yang menghabiskan kuota akan mematikan jalur permintaan pengguna di proyek yang sama.
+- **Retry tanpa memperhatikan kode galat gRPC.** `InvalidArgument` dan `PermissionDenied` tidak akan menjadi benar karena diulang; hanya `Unavailable` dan `ResourceExhausted` yang layak.
+- **Emulator sebagai satu-satunya lingkungan uji.** Emulator tidak mereplikasi IAM, kuota, dan sebagian perilaku konsistensi. Uji jalur kritis terhadap layanan sungguhnya.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| `ResourceExhausted` saat batch berjalan | kuota per proyek | Beban batch menghabiskan kuota bersama |
+| Goroutine dan koneksi menumpuk | apakah client di-`Close` | Client dibuat ulang tanpa ditutup |
+| Berkas kunci ditemukan di image | sumber kredensial | Workload Identity belum dipakai |
+| Retry pada galat yang tidak akan berubah | klasifikasi kode gRPC | Semua galat diperlakukan sementara |
+| Lolos di emulator, gagal di produksi | perbedaan IAM dan konsistensi | Uji hanya terhadap emulator |
+
+```bash
+# Identitas yang benar-benar dipakai -- harus service account via Workload Identity
+gcloud auth list
+kubectl get sa <ksa> -o jsonpath='{.metadata.annotations.iam\.gke\.io/gcp-service-account}'
+
+# Kuota yang mendekati batas
+gcloud alpha services quota list --service=storage.googleapis.com --consumer=projects/"$PROJECT" 2>/dev/null | head
+
+# Berkas kunci di dalam image adalah temuan
+kubectl exec <pod> -- find / -name '*.json' -path '*credential*' 2>/dev/null | head
+
+curl -s 'localhost:6060/debug/pprof/goroutine?debug=1' | grep -i -c grpc
+```

@@ -1,5 +1,7 @@
 # Riverqueue (River): Background Job Processing Berbasis PostgreSQL
 
+> **Berlaku:** Go 1.21+ · `riverqueue/river` · PostgreSQL 14+ · **Lihat juga:** `background_jobs_worker/asynq_redis_jobs.md` · `distributed_patterns_resilience/outbox_pattern_transactional.md` · `db_sqlc/database_locking_strategies.md` · `db_sqlc/connection_pool_tuning.md`
+
 River (`github.com/riverqueue/river`) adalah library background job processing untuk Go yang menggunakan PostgreSQL sebagai backend penyimpanannya. Berbeda dengan Redis-backed queues (seperti Asynq atau Sidekiq), River memanfaatkan fitur ACID dari Postgres untuk menjamin *Exactly-Once Semantics* (EOS), memastikan job tidak hilang atau dieksekusi ganda dalam kondisi kegagalan jaringan atau worker.
 
 Dokumen ini adalah referensi *Top 1% Quality* untuk implementasi River di lingkungan produksi skala besar.
@@ -486,3 +488,36 @@ func TestRiver_Integration_JobFailureAndRetry(t *testing.T) {
 
 ## Kesimpulan
 River adalah solusi antrean *enterprise-grade* untuk Go dengan PostgreSQL. River membebaskan arsitektur dari keharusan merawat Redis secara terpisah dengan memberikan jaminan ACID yang absolut—sangat cocok untuk domain FinTech, Payment, dan Billing. Namun, ingatlah batasannya: Jangan gunakan untuk pub-sub *realtime* berkecepatan tinggi, optimalkan *connection pool* Postgres, dan cegah payload raksasa.
+
+## Kapan JANGAN Pakai Ini
+
+- **Bila database sudah menjadi penyempitan.** Antrean menambah beban tulis, polling, dan pembersihan ke database yang **sama** dengan jalur transaksi Anda. Keuntungan transaksionalnya nyata, tapi tidak gratis.
+- **Job berdurasi sangat lama tanpa checkpoint.** Worker yang mati di tengah mengulang dari awal. Untuk pekerjaan berjam-jam, pecah menjadi langkah yang masing-masing bisa dilanjutkan.
+- **Enqueue di luar transaksi bisnis.** Keuntungan utama River adalah enqueue yang **transaksional** dengan perubahan data. Membuangnya berarti kembali ke masalah yang dipecahkan outbox, dengan tambahan kerumitan.
+- **Polling terlalu sering pada tabel job besar.** Setiap poll adalah query. Interval harus diturunkan dari kebutuhan latensi nyata, bukan dari keinginan agar terasa responsif.
+- **Tanpa pembersihan job yang sudah selesai.** Tabel tumbuh, index membesar, dan poll ikut melambat — sistem antrean yang perlahan menjadi lambat karena keberhasilannya sendiri.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Latensi transaksi naik sejak antrean dipasang | beban tulis tambahan | Antrean dan aplikasi berbagi database |
+| Job diproses lama setelah di-enqueue | interval poll dan jumlah worker | Poll terlalu jarang atau worker kurang |
+| Tabel job membesar terus | kebijakan pembersihan | Job selesai tidak pernah dihapus |
+| Job berjalan meski transaksi rollback | apakah enqueue transaksional | Enqueue di luar transaksi |
+| Job panjang selalu mengulang dari awal | checkpoint di dalam job | Tidak ada kemajuan yang tersimpan |
+
+```sql
+-- Kesehatan antrean: backlog, umur tertua, dan yang gagal
+SELECT state, count(*), min(created_at) AS tertua
+FROM river_job GROUP BY 1 ORDER BY 2 DESC;
+
+SELECT count(*) FROM river_job
+WHERE state = 'available' AND scheduled_at < now() - interval '5 minutes';
+
+SELECT pg_size_pretty(pg_total_relation_size('river_job')) AS ukuran;
+
+-- Job yang gagal berulang: kandidat untuk dead letter
+SELECT kind, attempt, count(*) FROM river_job
+WHERE state = 'retryable' GROUP BY 1,2 ORDER BY 3 DESC LIMIT 20;
+```

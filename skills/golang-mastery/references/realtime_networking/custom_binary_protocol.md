@@ -1,5 +1,7 @@
 # Realtime Networking: Custom Binary Protocol di Go
 
+> **Berlaku:** Go 1.21+ · **Lihat juga:** `realtime_networking/tcp_connection_management.md` · `hft_zero_alloc/ticker_feed_parser.md` · `testing_quality/fuzz_testing_go.md` · `microservices_grpc/grpc_protobuf_patterns.md`
+
 ## 1. Konsep dan Internals
 
 Membangun protokol biner khusus (*Custom Binary Protocol*) seringkali dibutuhkan di lingkungan di mana performa, ukuran *payload*, dan *overhead* CPU menjadi kendala utama (contoh: *game multiplayer realtime*, *High Frequency Trading*, IoT dengan *bandwidth* terbatas). Menggunakan format teks universal seperti JSON (tebal dan *CPU intensive* untuk *parsing*) atau HTTP/1.1 (header panjang dan boros) bukanlah solusi ideal.
@@ -291,4 +293,33 @@ func TestWriteFrame_OOMProtectionMaxPayload(t *testing.T) {
 		t.Errorf("Expected ErrPayloadTooBig OOM protection, got: %v", err)
 	}
 }
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **Bila protokol yang sudah ada cukup.** Dengan protokol kustom Anda mewarisi seluruh masalah versioning, tooling, dokumentasi, dan pustaka klien untuk setiap bahasa — selamanya. Protobuf atau MessagePack menyelesaikan sebagian besar kebutuhan tanpa itu.
+- **Tanpa nomor versi di header.** Perubahan pertama akan memecahkan semua klien yang ada, dan tidak ada jalan mundur. Versi harus ada sejak pesan pertama, bahkan bila belum dipakai.
+- **Tanpa batas ukuran pesan.** Field panjang yang dibaca dari jaringan lalu dipakai untuk `make([]byte, n)` adalah vektor DoS yang lengkap: satu pesan cukup untuk mematikan proses.
+- **Endianness yang diasumsikan.** Tetapkan eksplisit di spesifikasi dan di kode. Asumsi ini akan salah pada arsitektur pertama yang berbeda, dan gejalanya berupa angka yang aneh, bukan galat.
+- **Tanpa fuzzing parser.** Protokol biner yang membaca dari jaringan adalah input paling tidak tepercaya yang dimiliki sistem Anda. Fuzzing bukan penyempurnaan di sini — ia prasyarat.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Proses mati oleh satu pesan | batas panjang sebelum alokasi | Field panjang dipercaya mentah |
+| Klien lama rusak setelah rilis | versi di header pesan | Tidak ada jalur kompatibilitas |
+| Nilai aneh dari platform tertentu | endianness | Asumsi byte order berbeda |
+| Panic di parser | apakah parser di-fuzz | Bentuk pesan yang belum pernah dicoba |
+| Pesan terbelah salah dibaca | penanganan pembacaan parsial | Batas pesan diasumsikan sama dengan batas paket |
+
+```bash
+# Parser protokol jaringan WAJIB di-fuzz
+go test -fuzz=FuzzDecodeFrame -fuzztime=10m ./protocol/...
+
+# Batas ukuran sebelum alokasi -- cari make([]byte, n) dengan n dari jaringan
+grep -rn 'make(\[\]byte' --include='*.go' ./protocol/ | head
+
+curl -s localhost:9090/metrics | grep -E 'protocol_(frames|decode_errors|oversized)_total'
+kubectl logs -l app=gateway --since=1h | grep -ciE 'frame too large|invalid version'
 ```

@@ -1,5 +1,7 @@
 # Realtime Networking: TCP Connection Management di Go
 
+> **Berlaku:** Go 1.21+ · `net` · **Lihat juga:** `realtime_networking/websocket_gnet_epoll.md` · `system_programming_linux/syscall_epoll_nonblocking.md` · `microservices_grpc/http_client_production.md` · `hft_zero_alloc/network_io_zero_copy.md`
+
 ## 1. Konsep dan Internals
 
 Manajemen koneksi TCP di Go sangat bergantung pada implementasi `net.Conn` dan *runtime network poller*. TCP adalah protokol berbasis aliran (*byte-stream*), berorientasi koneksi (*connection-oriented*), dan andal (*reliable*). Namun, keandalannya dijamin hanya dalam kondisi jaringan normal. Di dunia *realtime* skala besar, *socket* TCP rentan terhadap anomali seperti *Half-Open Connections* (kabel dicabut tanpa mengirim paket FIN), antrean penuh, dan penipisan *File Descriptor*.
@@ -272,4 +274,34 @@ func TestTCPConnectionManager(t *testing.T) {
 		t.Errorf("Harusnya mendapat error EOF (Koneksi ditutup), namun sukses")
 	}
 }
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **Koneksi berumur panjang tanpa keepalive.** NAT, firewall, dan load balancer memutus koneksi yang diam tanpa memberi tahu kedua belah pihak. Aplikasi baru menyadarinya saat mencoba mengirim — sering beberapa menit setelah datanya seharusnya terkirim.
+- **Mengabaikan `SetDeadline`.** Koneksi yang menggantung menahan goroutine dan file descriptor tanpa batas. Ini bentuk kebocoran yang paling sering ditemukan pada layanan jaringan Go.
+- **Membiarkan Nagle dan delayed ACK berinteraksi tanpa disadari.** Pada protokol permintaan-respons berukuran kecil, kombinasi keduanya bisa menambahkan puluhan milidetik yang tidak terjelaskan. `SetNoDelay(true)` untuk jalur latensi rendah.
+- **Buffer besar untuk semua koneksi.** Memori dikalikan jumlah koneksi. Pada sepuluh ribu koneksi, buffer 64 KB masing-masing arah sudah lebih dari satu gigabyte.
+- **Mengasumsikan `Write` mengirimkan seluruh buffer.** Ia bisa parsial. Kode yang tidak memeriksa jumlah byte tertulis akan kehilangan data secara acak di bawah beban.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Koneksi mati tidak terdeteksi | keepalive dan read deadline | Tidak ada mekanisme deteksi |
+| Goroutine menumpuk pada operasi jaringan | deadline pada koneksi | Koneksi menggantung selamanya |
+| Latensi tambahan ~40 ms yang tidak dijelaskan | Nagle + delayed ACK | `SetNoDelay` belum dipasang |
+| Memori naik sebanding jumlah koneksi | ukuran buffer per koneksi | Buffer terlalu besar |
+| Data terpotong di bawah beban | penanganan `Write` parsial | Jumlah byte tertulis tidak diperiksa |
+
+```bash
+# Koneksi dan antrean kirim/terima -- Send-Q yang menumpuk berarti penerima lambat
+ss -tin state established | head -20
+ss -tan | awk '{print $1}' | sort | uniq -c
+
+# Goroutine yang menggantung di jaringan
+curl -s 'localhost:6060/debug/pprof/goroutine?debug=1' | grep -B2 -A3 'net\.' | head -20
+
+# Setelan keepalive kernel (aplikasi tetap harus menyetelnya sendiri)
+sysctl net.ipv4.tcp_keepalive_time net.ipv4.tcp_keepalive_intvl net.ipv4.tcp_keepalive_probes
 ```

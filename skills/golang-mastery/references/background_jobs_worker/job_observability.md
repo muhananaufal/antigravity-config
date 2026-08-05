@@ -5,6 +5,8 @@ tags: ["golang", "background-jobs", "observability", "prometheus", "opentelemetr
 
 # Observabilitas Background Jobs di Golang (Top 1% Engineering Guide)
 
+> **Berlaku:** Go 1.21+ · Prometheus · **Lihat juga:** `observability_resilience/prometheus_metrics_red.md` · `background_jobs_worker/worker_pool_patterns.md` · `engineering_practice/slo_error_budget.md` · `observability_resilience/structured_logging_zerolog.md`
+
 Dalam sistem terdistribusi, memproses tugas di latar belakang (background jobs/workers) adalah hal yang krusial untuk menjaga latensi respons API tetap rendah. Namun, tanpa observabilitas yang memadai, antrean tugas bisa menjadi "kotak hitam" (black box) yang rentan terhadap penumpukan diam-diam (silent backlog), zombie jobs, atau kegagalan berulang yang menguras resource sistem.
 
 Dokumen ini adalah referensi komprehensif untuk merancang, mengimplementasikan, dan mengelola observabilitas tingkat lanjut untuk sistem pemrosesan job asinkron di Golang menggunakan Prometheus (Metrics), OpenTelemetry (Tracing), dan Structured Logging.
@@ -574,4 +576,36 @@ func TestWorker_MaxRetries_DLQ(t *testing.T) {
 
 1. **Jangan Jadikan Antrean sebagai "Black Box".** Jika Anda tidak memiliki Prometheus Dashboard yang berisi metrik kedalaman antrean (`job_queue_depth`), maka Anda beroperasi dalam kebutaan.
 2. **Korelasikan Log dengan HTTP Layer.** Jangan mencetak `Error saving to DB` tanpa menyertakan context *siapa* dan *dari request mana* event itu terjadi. Penuhi requirement ini via OpenTelemetry TextMapCarrier.
-3. **Defensive Labels:** Jangan gunakan UUID (seperti `job_id`) di *label metrik Prometheus*. Cukup letakkan UUID di *Log Attributes* atau *Trace Spans* agar tidak terjadi cardinality explosion yang memakan habis memori infrastruktur observabilitas Anda. 
+3. **Defensive Labels:** Jangan gunakan UUID (seperti `job_id`) di *label metrik Prometheus*. Cukup letakkan UUID di *Log Attributes* atau *Trace Spans* agar tidak terjadi cardinality explosion yang memakan habis memori infrastruktur observabilitas Anda.
+
+## Kapan JANGAN Pakai Ini
+
+- **Metrik job tanpa label jenis job.** Angka agregat tidak bisa menjawab job **mana** yang bermasalah, dan saat insiden itulah satu-satunya pertanyaan yang penting.
+- **Label berkardinalitas tinggi seperti job ID atau user ID.** Satu label itu cukup untuk membuat Prometheus kehabisan memori. Job ID adalah wilayah log dan trace, bukan metrik.
+- **Menghitung kegagalan job dari log.** Penghitungan berbasis log tertunda, mahal pada skala, dan tidak bisa dijadikan dasar alert yang andal. Counter yang tepat.
+- **Alert pada setiap kegagalan tunggal untuk job yang memang sering gagal lalu berhasil.** Itu melatih tim mengabaikan alert. Alert pada tingkat kegagalan atau pada job yang gagal setelah semua retry habis.
+- **Tidak mengukur waktu tunggu di antrean.** Job yang dieksekusi dalam 200 ms tetapi menunggu 40 menit adalah job yang terlambat bagi pengguna. Durasi eksekusi saja menyembunyikan itu sepenuhnya.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Tidak bisa menjawab job mana yang bermasalah | label pada metrik job | Metrik terlalu agregat |
+| Prometheus kehabisan memori | kardinalitas label job | Job ID masuk ke label |
+| Pengguna melapor lambat, metrik tampak sehat | waktu tunggu antrean | Hanya durasi eksekusi yang diukur |
+| Alert diabaikan tim | frekuensi alert vs tindakan | Alert pada kegagalan tunggal |
+| Kegagalan baru terlihat dari keluhan | apakah ada counter kegagalan | Kegagalan hanya tercatat di log |
+
+```bash
+# Tiga metrik minimum untuk sistem job: tunggu, proses, hasil
+curl -s localhost:9090/metrics \
+  | grep -E 'job_(queue_wait_seconds|duration_seconds|total)\{'
+
+# Kardinalitas: pastikan tidak ada job_id di label
+curl -s localhost:9090/metrics | grep -oE 'job_total\{[^}]*\}' | head -5
+curl -s http://prometheus:9090/api/v1/status/tsdb | jq '.data.seriesCountByMetricName[:10]'
+
+# PromQL yang layak dipasang:
+#   histogram_quantile(0.99, rate(job_queue_wait_seconds_bucket[5m]))
+#   sum by (jenis) (rate(job_total{hasil="gagal"}[5m]))
+```

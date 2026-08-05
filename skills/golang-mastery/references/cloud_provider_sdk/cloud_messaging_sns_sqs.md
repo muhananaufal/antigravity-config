@@ -1,5 +1,7 @@
 # Cloud Messaging (SNS & SQS) Design Patterns
 
+> **Berlaku:** Go 1.21+ · SNS / SQS · **Lihat juga:** `arch_patterns/event_driven_pubsub.md` · `distributed_patterns_resilience/idempotency_key_engine.md` · `background_jobs_worker/asynq_redis_jobs.md` · `cloud_provider_sdk/aws_sdk_go_v2.md`
+
 Arsitektur perpesanan asinkron menggunakan AWS Simple Notification Service (SNS) dan Simple Queue Service (SQS) adalah tulang punggung sistem Microservices berskala luas (seperti Gojek, Netflix).
 
 ## 1. Pola SNS → SQS Fan-Out
@@ -219,3 +221,37 @@ func StartConsumer(ctx context.Context, client *sqs.Client, queueURL string) {
 }
 ```
 Ini memastikan worker Golang aman dari pembekuan (*zombie process*) dan tidak pernah mensisakan *in-flight message* tanpa menghapusnya.
+
+## Kapan JANGAN Pakai Ini
+
+- **SQS standar bila urutan penting.** Antrean standar tidak menjamin urutan sama sekali. FIFO menjamin, tetapi dengan batas throughput dan semantik grup yang berbeda — pilih sadar, jangan berharap.
+- **Tanpa dead letter queue.** Pesan beracun akan diulang sampai batas retensi habis, memakan kapasitas konsumer sepanjang itu, dan hilang tanpa ada yang pernah melihatnya.
+- **Visibility timeout lebih pendek daripada waktu pemrosesan.** Pesan menjadi terlihat lagi sementara masih diproses, dan konsumer kedua mengambilnya. Duplikasi ini terjadi diam-diam dan konsisten.
+- **Short polling.** Ia menaikkan biaya (lebih banyak permintaan kosong) **dan** latensi (pesan menunggu poll berikutnya). Long polling hampir selalu pilihan yang benar.
+- **Fan-out SNS tanpa memikirkan konsumer yang paling lambat.** Satu konsumer yang tertinggal tidak memperlambat yang lain, tetapi antreannya sendiri akan menumpuk sampai retensi habis dan pesan hilang.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Pesan diproses dua kali secara konsisten | visibility timeout vs durasi proses | Timeout terlalu pendek |
+| Pesan hilang tanpa jejak | apakah DLQ terpasang | Pesan beracun habis retensinya |
+| Biaya SQS tinggi dengan trafik rendah | `WaitTimeSeconds` | Short polling menghasilkan banyak permintaan kosong |
+| Urutan kejadian salah | tipe antrean | Standar tidak menjamin urutan |
+| Umur pesan tertua terus naik | konsumer vs laju produksi | Konsumer tidak sanggup mengejar |
+
+```bash
+# Empat atribut yang menjelaskan hampir semua masalah SQS
+aws sqs get-queue-attributes --queue-url "$Q" --attribute-names \
+  ApproximateNumberOfMessages ApproximateNumberOfMessagesNotVisible \
+  VisibilityTimeout ReceiveMessageWaitTimeSeconds RedrivePolicy
+
+# Umur pesan tertua: metrik kesehatan antrean yang sebenarnya
+aws cloudwatch get-metric-statistics --namespace AWS/SQS \
+  --metric-name ApproximateAgeOfOldestMessage --dimensions Name=QueueName,Value=pesanan \
+  --statistics Maximum --start-time "$(date -u -d '1 hour ago' +%FT%TZ)" \
+  --end-time "$(date -u +%FT%TZ)" --period 300
+
+# DLQ yang terisi berarti ada yang tidak pernah bisa diproses
+aws sqs get-queue-attributes --queue-url "$DLQ" --attribute-names ApproximateNumberOfMessages
+```

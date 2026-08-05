@@ -1,5 +1,7 @@
 # MQTT Broker & Client Implementation di Go
 
+> **Berlaku:** Go 1.21+ · MQTT 3.1.1 / 5.0 · **Lihat juga:** `embedded_tinygo/mqtt_edge_messaging.md` · `advanced_networking_protocols/nats_cluster_jetstream.md` · `distributed_patterns_resilience/idempotency_key_engine.md` · `realtime_networking/tcp_connection_management.md`
+
 ## 1. Konsep Utama & Internals
 MQTT (Message Queuing Telemetry Transport) adalah protokol *pub/sub* *stateful* berbasis TCP/IP yang didesain spesifik untuk IoT dan jaringan *low-bandwidth/high-latency*. Berbeda dengan sistem stateless seperti HTTP, MQTT mempertahankan koneksi secara persisten di sentral broker. 
 
@@ -289,3 +291,33 @@ client.Publish("cpu/usage", 0, false, "80%")
 2. **Topic Wildcard Bomb (Broker Side)**: IoT client yang terkompromi (hacked) bisa men-subscribe ke `#` (menarik copy seluruh data broker) atau mempublish ke kedalaman struktur `a/b/c/d/e/...` tanpa henti, menyebabkan keparahan alokasi trie-tree broker. *Defensive:* Jika menggunakan Embedded Broker (Mochi), terapkan custom *AuthHook* yang memvalidasi *Authorized Paths* klien. Kunci regex klien agar hanya boleh publish/subscribe di folder `sensors/{client_id}/*`.
 3. **Ghost Retained Message Linger**: Pesan *retained* QoS 1 menetap selamanya di storage/RAM broker hingga ditimpa oleh retained message yang lebih baru di topik yang sama. Saat device IoT lama pensiun, state lamanya tetap menghantui UI *dashboard*. *Defensive:* Sediakan API *Tombstone*. Untuk menghapus pesan *retained*, Anda HARUS secara eksplisit mengirim pesan ke topik tersebut dengan `Payload` berupa *byte array* **Kosong** (0 byte) dan flag `Retained = true`. Broker akan mengenali itu sebagai instruksi hapus.
 4. **Clean Session Mismatch (Persistent Memory Leak)**: Jika klien *mobile app* terhubung dengan `CleanSession=false` dan men-subscribe topik (misalnya "alerts/global"), lalu user meng-uninstall app, Broker masih menyimpan setiap pesan QoS 1 secara permanen untuk klien tersebut (menunggu ia kembali online selamanya). *Defensive:* Konfigurasi *Session Expiry Interval* (di MQTT v5) atau rutin melakukan *pruning* klien tidak aktif (dead client pruning) di dalam konfigurasi broker agar *storage* tidak korup.
+
+## Kapan JANGAN Pakai Ini
+
+- **QoS 2 kecuali benar-benar membutuhkan exactly-once.** Ia menuntut empat kali perjalanan pesan dan penyimpanan state di kedua sisi. QoS 1 ditambah idempotensi di aplikasi hampir selalu lebih murah dan lebih sederhana untuk hasil yang sama.
+- **Client ID yang tidak unik.** Dua klien dengan ID sama akan saling memutus dalam siklus tak berujung, dan gejalanya tampak seperti masalah jaringan — bukan masalah konfigurasi.
+- **Clean session untuk perangkat yang harus menerima pesan saat offline.** Dengan clean session, langganan dan pesan yang tertunda dibuang setiap kali perangkat terputus.
+- **Topic wildcard yang terlalu luas pada broker besar.** Satu langganan `#` menarik seluruh lalu lintas broker ke satu klien, dan itu bisa menjatuhkan klien maupun membebani broker.
+- **Retained message tanpa rencana pembersihan.** Ia bertahan di broker selamanya dan dikirim ke setiap subscriber baru — termasuk nilai yang sudah lama tidak relevan.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Perangkat terputus-sambung terus | keunikan client ID | Dua perangkat memakai ID yang sama |
+| Pesan hilang saat perangkat offline | clean session dan QoS | Sesi tidak persisten |
+| Satu klien membebani broker | pola langganan | Wildcard terlalu luas |
+| Nilai lama muncul di klien baru | retained message | Tidak ada pembersihan |
+| Latensi tinggi pada QoS 2 | tingkat QoS yang dipakai | Empat perjalanan per pesan |
+
+```bash
+# Klien yang terhubung dan pola langganannya
+mosquitto_sub -h broker -t '$SYS/broker/clients/connected' -C 1
+mosquitto_sub -h broker -t '$SYS/broker/subscriptions/count' -C 1
+
+# Client ID yang muncul berulang di log = tabrakan ID
+kubectl logs -l app=mqtt --since=1h | grep -oE 'client [A-Za-z0-9_-]+' | sort | uniq -c | sort -rn | head
+
+# Retained message pada sebuah topic
+mosquitto_sub -h broker -t 'perangkat/+/status' -C 5 -v
+```

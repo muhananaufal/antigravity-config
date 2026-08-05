@@ -1,5 +1,7 @@
 # gRPC-Web & Connect RPC di Ekosistem Go
 
+> **Berlaku:** Go 1.21+ · Connect RPC · gRPC-Web · **Lihat juga:** `microservices_grpc/grpc_protobuf_patterns.md` · `microservices_grpc/grpc_streaming_patterns.md` · `microservices_grpc/openapi_ogen_codegen.md` · `microservices_grpc/rest_chi_middleware_stack.md`
+
 ## 1. Konsep Utama & Internals
 gRPC beroperasi murni di atas HTTP/2 dengan implementasi *binary framing* dan *trailing headers* yang ketat. Arsitektur ini menantang bagi klien web browser karena API native browser (`fetch` atau XHR) tidak mengizinkan pembacaan langsung dari *trailing headers* di HTTP/2 sebelum stream selesai. Hal ini melahirkan gRPC-Web (protokol modifikasi berbasis HTTP/1.1 atau HTTP/2 tanpa trailer).
 
@@ -251,3 +253,35 @@ func AuthInterceptor(...) ... {
 2. **Timeout Propagation Silence**: Browser sering tidak mengirim *gRPC deadline* atau header `Connect-Timeout-Ms`. Jika klien seluler secara tiba-tiba kehilangan sinyal, RPC di backend bisa hang, menunggu database selamanya. *Defensive:* Jangan pernah membiarkan eksekusi RPC dengan `context.Background()` telanjang. Di tingkat interceptor Connect, periksa ketiadaan deadline, lalu paksa `context.WithTimeout` cadangan (misal 15 detik) untuk melindungi backend dari *goroutine leak* massal.
 3. **HTTP/2 H2C Plaintext Cleartext**: Connect-go membutuhkan `golang.org/x/net/http2/h2c` jika berjalan di belakang *Load Balancer* Kubernetes internal (dimana ALB/Ingress men-terminate SSL, dan meneruskan trafik plaintext HTTP/2 ke pod). Tanpa `h2c.NewHandler`, klien internal gRPC murni akan gagal melakukan *handshake* karena server Go default `net/http` memblokir HTTP/2 *cleartext* yang tak dienkripsi TLS.
 4. **Error Mapping ke REST Status Codes (JSON Clients)**: Klien Connect protocol (JSON) memetakan kode error gRPC ke HTTP Status (contoh: `CodeNotFound` menjadi `404`). *Defensive:* Jangan melempar sembarang Go `error` biasa dari handler. Jika Anda mengembalikan `errors.New("user not found")`, itu akan menjadi HTTP 500 Internal Error. Kembalikan `connect.NewError(connect.CodeNotFound, err)` agar frontend mendapat 404 dan dapat merender halaman "Not Found" dengan presisi.
+
+## Kapan JANGAN Pakai Ini
+
+- **gRPC-Web tanpa proxy penerjemah.** Browser tidak bisa berbicara gRPC secara langsung — ia tidak punya akses ke trailer HTTP/2 yang dibutuhkan protokolnya. Tanpa Envoy atau padanannya, tidak ada yang akan bekerja.
+- **Streaming dua arah dari browser.** gRPC-Web tidak mendukungnya sepenuhnya. Bila desain Anda membutuhkannya, WebSocket atau SSE adalah jawaban yang jujur.
+- **Connect untuk API publik tanpa memikirkan konsumer non-Go.** Connect ramah bagi klien Go dan browser, tetapi ekosistem klien untuk bahasa lain lebih tipis daripada gRPC atau REST biasa.
+- **Mengandalkan trailer HTTP.** Sebagian proxy dan CDN membuangnya diam-diam. Status yang dikirim di trailer akan hilang, dan klien melihat respons yang tampak sukses padahal gagal.
+- **Mengabaikan CORS dan preflight di gerbang.** Ini penyebab kegagalan paling umum dan paling membingungkan pada integrasi browser — dan galatnya muncul di konsol browser, bukan di log server Anda.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Browser gagal tanpa galat di log server | konfigurasi CORS dan preflight | Permintaan ditolak sebelum mencapai handler |
+| Status galat tidak sampai ke klien | apakah trailer dilewatkan proxy | Trailer dibuang di jalur |
+| Streaming tidak bekerja dari browser | dukungan protokol | gRPC-Web tidak mendukung dua arah |
+| Klien bahasa lain kesulitan integrasi | ketersediaan pustaka | Ekosistem Connect lebih tipis |
+| Ukuran payload lebih besar dari perkiraan | pengodean base64 pada gRPC-Web | Mode teks menambah sekitar 33% |
+
+```bash
+# Preflight CORS: gagal di sini berarti browser tidak pernah mengirim permintaan sebenarnya
+curl -si -X OPTIONS https://api.contoh.id/paket.Layanan/Metode \
+  -H 'Origin: https://app.contoh.id' \
+  -H 'Access-Control-Request-Method: POST' | head -20
+
+# Connect menerima permintaan JSON biasa -- ini cara tercepat memastikannya hidup
+curl -sX POST https://api.contoh.id/paket.Layanan/Metode \
+  -H 'Content-Type: application/json' -d '{}' | head
+
+# Apakah proxy melewatkan trailer?
+curl -sv --http2 https://api.contoh.id/paket.Layanan/Metode 2>&1 | grep -i trailer
+```

@@ -1,5 +1,7 @@
 # AWS SDK for Go v2: Referensi Lengkap dan Praktik Terbaik
 
+> **Berlaku:** Go 1.21+ · AWS SDK for Go v2 · **Lihat juga:** `cloud_provider_sdk/aws_secrets_ssm.md` · `cloud_provider_sdk/cloud_storage_patterns.md` · `microservices_grpc/http_client_production.md` · `distributed_patterns_resilience/retry_backoff_jitter.md`
+
 AWS SDK for Go v2 dirancang ulang dari awal untuk mengatasi limitasi dari v1, terutama terkait modularitas, performa, dan konsumsi memori. 
 
 ## Arsitektur SDK (V2 vs V1)
@@ -370,4 +372,36 @@ func TestDownload(t *testing.T) {
 	// err := DownloadFile(context.Background(), mockClient, "bucket", "key")
     // assert.NoError(t, err)
 }
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **Membuat client baru per permintaan.** Setiap client membawa konfigurasi, resolver kredensial, dan klien HTTP dengan pool koneksinya sendiri. Membuatnya berulang membuang keep-alive dan menambah latensi TLS handshake di setiap panggilan.
+- **Kredensial statis di kode atau variabel lingkungan.** IAM role untuk beban kerja — IRSA di EKS, instance profile di EC2 — menghapus seluruh kelas masalah rotasi dan kebocoran. Kredensial statis adalah utang yang harus dibayar suatu hari.
+- **Membiarkan retry bawaan berjalan pada operasi yang tidak idempoten.** SDK akan mengulang atas nama Anda. Untuk operasi yang menciptakan sesuatu, itu berarti dua objek.
+- **Mengabaikan pagination.** `ListObjectsV2` dan sebagian besar API `List` mengembalikan halaman. Kode yang membaca halaman pertama saja akan **salah diam-diam** — dan hanya ketika datanya sudah cukup banyak, yaitu di produksi.
+- **Region yang di-hardcode.** Layanan yang suatu saat harus berjalan multi-region jadi tidak bisa dipindah tanpa menyentuh kode di banyak tempat.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Latensi panggilan AWS tinggi dan konstan | apakah client dibuat ulang | Handshake TLS di setiap permintaan |
+| Objek duplikat setelah timeout | idempotensi operasi + retry SDK | Retry mengulang operasi yang menciptakan |
+| Hasil `List` kurang dari yang ada | penanganan `NextContinuationToken` | Pagination diabaikan |
+| `ThrottlingException` saat beban tinggi | laju permintaan vs kuota | Perlu backoff dan pembatasan konkurensi |
+| Kredensial kedaluwarsa di produksi | sumber kredensial | Kredensial statis alih-alih role |
+
+```bash
+# Kredensial yang benar-benar dipakai -- Arn harus berupa role, bukan user
+aws sts get-caller-identity
+
+# Throttling dari sisi SDK
+kubectl logs -l app=api --since=1h | grep -ciE 'ThrottlingException|RequestLimitExceeded|SlowDown'
+
+# Kredensial statis di kode atau manifest
+grep -rnE 'AKIA[0-9A-Z]{16}' --include='*.go' --include='*.yaml' .
+kubectl get deploy api -o jsonpath='{.spec.template.spec.containers[0].env}' | jq | grep -i aws
+
+curl -s localhost:9090/metrics | grep -E 'aws_sdk_(requests|retries|duration)'
 ```

@@ -1,5 +1,7 @@
 # Realtime Networking: WebSocket via Epoll (gnet) di Go
 
+> **Berlaku:** Go 1.21+ · `gnet` / `gorilla/websocket` · **Lihat juga:** `system_programming_linux/syscall_epoll_nonblocking.md` · `realtime_networking/tcp_connection_management.md` · `microservices_grpc/service_mesh_grpc_lb.md` · `game_backend/realtime_state_sync.md`
+
 ## 1. Konsep dan Internals
 
 WebSocket adalah protokol komunikasi dua arah (*full-duplex*) yang bermula sebagai HTTP *handshake* lalu di- *upgrade* secara permanen menjadi koneksi TCP persisten. Meskipun library standar `nhooyr.io/websocket` atau `gorilla/websocket` sangat idiomatis dan bagus, mereka menggunakan pendekatan standar "1 Goroutine = 1 Connection".
@@ -261,4 +263,35 @@ func TestWebSocketFrameCodec(t *testing.T) {
 		t.Errorf("Server frame salah. Got: %v, Expected: %v", serverFrame, expectedServer)
 	}
 }
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **Framework epoll kustom bila jumlah koneksi tidak besar.** `net/http` dengan goroutine per koneksi cukup sampai puluhan ribu koneksi, jauh lebih mudah didebug, dan terintegrasi penuh dengan penjadwal Go.
+- **WebSocket untuk komunikasi satu arah server ke klien.** Server-Sent Events lebih sederhana, bekerja melewati proxy lama, dan otomatis melakukan reconnect di sisi browser tanpa kode tambahan.
+- **Tanpa ping/pong dan batas waktu baca.** Koneksi yang mati secara diam-diam — kabel dicabut, NAT kedaluwarsa — tidak akan terdeteksi, dan server menyimpan ribuan koneksi hantu.
+- **Broadcast dengan mengiterasi seluruh koneksi di goroutine yang sama.** Satu klien yang lambat membaca menahan pengiriman ke semua klien lain. Setiap koneksi butuh buffer dan penulis sendiri, dengan kebijakan saat buffer penuh.
+- **Melewati load balancer tanpa sticky session atau state bersama.** Koneksi WebSocket berumur panjang menempel di satu pod; tanpa state bersama, pesan untuk pengguna itu tidak bisa dikirim dari pod lain.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Jumlah koneksi naik terus tanpa turun | ping/pong dan read deadline | Koneksi mati tidak terdeteksi |
+| Semua klien lambat menerima broadcast | arsitektur pengiriman | Satu klien lambat menahan semuanya |
+| Memori naik sebanding jumlah koneksi | ukuran buffer per koneksi | Buffer terlalu besar dikalikan koneksi |
+| Pesan tidak sampai ke sebagian pengguna | routing pesan antar pod | Tidak ada state atau bus bersama |
+| Koneksi terputus tiap beberapa menit | idle timeout di LB/proxy | Keepalive lebih panjang dari timeout perantara |
+
+```bash
+# Koneksi yang benar-benar terbuka vs yang dicatat aplikasi
+ss -tan state established '( sport = :8080 )' | wc -l
+curl -s localhost:9090/metrics | grep -E 'ws_(connections|broadcast|slow_clients)'
+
+# File descriptor: batas nyata jumlah koneksi
+ls /proc/$(pgrep app)/fd | wc -l
+cat /proc/$(pgrep app)/limits | grep 'open files'
+
+# Idle timeout perantara -- sumber putus koneksi berkala
+kubectl get ingress <nama> -o yaml | grep -i timeout
 ```

@@ -1,5 +1,7 @@
 # AWS Secrets Manager & Parameter Store dengan Golang
 
+> **Berlaku:** Go 1.21+ · AWS Secrets Manager / SSM Parameter Store · **Lihat juga:** `security_owasp/secret_management_vault.md` · `cybersecurity_zerotrust/secrets_rotation_automated.md` · `arch_patterns/config_management.md` · `cloud_provider_sdk/aws_sdk_go_v2.md`
+
 Mengelola secrets dalam aplikasi Cloud Native (K8s/ECS/Lambda) tidak boleh menggunakan file hardcoded atau environment variable biasa tanpa enkripsi. AWS menawarkan dua layanan utama: **Secrets Manager** dan **Systems Manager (SSM) Parameter Store**.
 
 ## 1. AWS Secrets Manager vs Parameter Store
@@ -300,4 +302,38 @@ func handler(ctx context.Context, event secretsmanager.RotationEvent) error {
 	}
 	return nil
 }
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **Mengambil rahasia pada setiap permintaan.** Ada kuota API dan biaya per panggilan, dan pada trafik tinggi keduanya terasa. Cache dengan masa berlaku yang lebih pendek daripada periode rotasi.
+- **Cache rahasia selamanya.** Rotasi menjadi tidak berlaku, dan proses lama tetap memakai kredensial lama sampai di-restart — tanpa ada yang menyadarinya sampai kredensial lama dicabut.
+- **Menyimpan rahasia besar di SSM Parameter Store standar.** Ada batas ukuran nilai; melewatinya berarti memecah rahasia menjadi beberapa parameter dan menyusunnya kembali di kode — kerumitan yang tidak perlu.
+- **Rahasia tanpa kebijakan IAM yang sempit.** Peran yang bisa membaca `/*` menghapus seluruh manfaat pemisahan rahasia. Batasi per path, dan tinjau siapa yang punya akses.
+- **SSM sebagai konfigurasi runtime yang bisa diubah tanpa jejak.** Perubahan perilaku produksi yang tidak melalui review dan tidak tercatat membuat insiden tidak bisa direkonstruksi.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Throttling dari Secrets Manager | laju panggilan `GetSecretValue` | Rahasia diambil per permintaan |
+| Rotasi tidak berlaku sampai restart | TTL cache rahasia | Cache tanpa masa berlaku |
+| Biaya API lebih tinggi dari perkiraan | jumlah panggilan per hari | Tidak ada cache sama sekali |
+| Satu peran bisa membaca semua rahasia | kebijakan IAM | Path terlalu luas |
+| Perilaku berubah tanpa deploy | riwayat perubahan parameter | Konfigurasi diubah langsung |
+
+```bash
+# Siapa yang bisa membaca apa
+aws iam simulate-principal-policy \
+  --policy-source-arn "$ROLE_ARN" --action-names ssm:GetParameter \
+  --resource-arns 'arn:aws:ssm:*:*:parameter/*' --query 'EvaluationResults[].EvalDecision'
+
+# Kapan rahasia terakhir dirotasi
+aws secretsmanager describe-secret --secret-id app/db \
+  --query '{rotasi:RotationEnabled, terakhir:LastRotatedDate, jadwal:RotationRules}'
+
+# Riwayat perubahan parameter -- tanpa ini perubahan tidak bisa diaudit
+aws ssm get-parameter-history --name /app/config/mode --query 'Parameters[].[LastModifiedDate,LastModifiedUser]'
+
+kubectl logs -l app=api --since=1h | grep -ci 'ThrottlingException'
 ```

@@ -1,5 +1,7 @@
 # Cloud Storage Patterns (S3 / GCS) di Golang
 
+> **Berlaku:** Go 1.21+ · S3 / GCS · **Lihat juga:** `cloud_provider_sdk/aws_sdk_go_v2.md` · `media_asset_pipeline/govips_jit_image_engine.md` · `caching_strategy/http_cdn_caching.md` · `security_owasp/audit_logging_scrubbing.md`
+
 Bekerja dengan Cloud Storage (AWS S3, Google Cloud Storage, Azure Blob) dalam Golang membutuhkan pemahaman mendalam tentang manajemen memori (`io.Reader` / `io.Writer`) dan batasan jaringan. 
 
 ## 1. Multipart Upload (S3/GCS) >5MB
@@ -306,4 +308,37 @@ if res.ContentLength > (partSize * 2) {
 	// batalkan request dan gunakan metode download single-stream tradisional.
 	return fmt.Errorf("server did not respect byte range, received full %d bytes", res.ContentLength)
 }
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **Untuk akses acak berfrekuensi tinggi.** Latensi object storage adalah puluhan milidetik per objek. Sebagai pengganti database atau cache, ia akan selalu mengecewakan.
+- **Menyimpan sangat banyak objek kecil.** Biaya per permintaan mendominasi biaya penyimpanan, dan operasi listing menjadi sangat lambat. Gabungkan objek kecil sebelum menyimpannya.
+- **Presigned URL berumur panjang.** Ia adalah **kredensial yang bisa diteruskan siapa saja** — dibagikan lewat pesan, tersimpan di riwayat browser, terindeks bila bocor ke halaman publik. Umurnya harus sependek yang bisa diterima alur kerjanya.
+- **Mengandalkan listing untuk menemukan objek.** Listing mahal, dan pada sebagian penyedia bersifat eventually consistent. Simpan indeks objek di database yang Anda kendalikan.
+- **Multipart upload tanpa membersihkan bagian yang gagal.** Bagian yang tertinggal tetap ditagih selamanya dan tidak terlihat pada listing objek biasa.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Biaya penyimpanan tidak sesuai ukuran data | multipart upload yang belum selesai | Bagian gagal tidak pernah dibersihkan |
+| Biaya API mendominasi tagihan | jumlah objek dan permintaan | Terlalu banyak objek kecil |
+| Objek yang baru ditulis tidak ditemukan | apakah bergantung pada listing | Konsistensi listing tidak dijamin |
+| URL lama masih bisa dipakai | masa berlaku presigned URL | Umur URL terlalu panjang |
+| Latensi tidak membaik meski di-cache | pola akses | Object storage dipakai sebagai database |
+
+```bash
+# Multipart upload yang menggantung -- ditagih tapi tak terlihat di listing biasa
+aws s3api list-multipart-uploads --bucket data-produksi \
+  --query 'Uploads[?Initiated<`2026-08-01`].[Key,Initiated]' --output table
+
+# Jumlah objek dan ukurannya
+aws s3 ls s3://data-produksi --recursive --summarize | tail -3
+
+# Aturan lifecycle: pembersihan otomatis harus ada, bukan manual
+aws s3api get-bucket-lifecycle-configuration --bucket data-produksi
+
+# Akses publik yang tidak disengaja
+aws s3api get-public-access-block --bucket data-produksi
 ```

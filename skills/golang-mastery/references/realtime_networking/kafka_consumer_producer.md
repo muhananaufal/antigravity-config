@@ -1,5 +1,7 @@
 # Realtime Networking: Kafka Consumer/Producer di Go
 
+> **Berlaku:** Go 1.21+ · `segmentio/kafka-go` / `twmb/franz-go` · **Lihat juga:** `arch_patterns/event_driven_pubsub.md` · `distributed_patterns_resilience/outbox_pattern_transactional.md` · `distributed_patterns_resilience/idempotency_key_engine.md` · `background_jobs_worker/job_observability.md`
+
 ## 1. Konsep dan Internals
 
 Apache Kafka adalah platform *distributed event streaming* yang didesain untuk menangani *throughput* triliunan kejadian per hari dengan latensi sangat rendah. Tidak seperti antrian pesan tradisional (seperti RabbitMQ), Kafka menggunakan model berbasis *append-only log*. Data tidak dihapus seketika setelah dibaca oleh *consumer*, melainkan dipertahankan hingga batas retensi tercapai. Hal ini memungkinkan *replayability* dan analisis data *time-travel*.
@@ -326,4 +328,34 @@ func TestReliableConsumerInitialization(t *testing.T) {
 		t.Errorf("Close returned unexpected error: %v", err)
 	}
 }
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **Auto-commit offset.** Offset ter-commit berdasarkan waktu, bukan berdasarkan selesainya pemrosesan. Pesan yang gagal diproses tetap dianggap selesai dan **hilang tanpa jejak**. Commit setelah berhasil, bukan sebelum.
+- **Satu consumer group untuk beban yang berbeda.** Lag bercampur, dan Anda tidak bisa mengetahui pemrosesan mana yang tertinggal. Satu group per tujuan konsumsi.
+- **Partisi lebih sedikit daripada konsumer.** Konsumer berlebih akan menganggur sepenuhnya — menambah pod tidak menambah throughput sama sekali, dan itu sering baru disadari setelah scaling yang sia-sia.
+- **Produser tanpa `acks=all` untuk data yang tidak boleh hilang.** `acks=1` berarti pesan hilang bila leader gagal sebelum replikasi selesai.
+- **Mengubah kunci partisi tanpa memikirkan urutan.** Urutan hanya dijamin **dalam** satu partisi. Mengubah kunci memindahkan entitas ke partisi lain, dan pesan lama serta baru bisa diproses tidak berurutan.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Pesan hilang setelah konsumer crash | mode commit offset | Auto-commit menandai selesai sebelum diproses |
+| Menambah pod tidak menambah throughput | jumlah partisi vs konsumer | Konsumer berlebih menganggur |
+| Lag tumbuh hanya di satu partisi | sebaran kunci partisi | Kunci tidak merata, atau ada pesan lambat |
+| Kejadian entitas diproses tidak berurutan | apakah kunci partisi berubah | Entitas berpindah partisi |
+| Pesan hilang saat broker failover | setelan `acks` | `acks=1` tidak menunggu replikasi |
+
+```bash
+# Lag per partisi -- ini metrik utama, dan harus dilihat PER PARTISI
+kafka-consumer-groups --bootstrap-server "$BROKER" --describe --group pesanan
+
+# Jumlah partisi vs jumlah konsumer aktif
+kafka-topics --bootstrap-server "$BROKER" --describe --topic pesanan | head -3
+kubectl get deploy consumer -o jsonpath='{.status.replicas}'
+
+# Sebaran offset antar partisi: timpang berarti kunci tidak merata
+kafka-run-class kafka.tools.GetOffsetShell --broker-list "$BROKER" --topic pesanan
 ```

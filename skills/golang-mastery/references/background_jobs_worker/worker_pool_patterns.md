@@ -5,6 +5,8 @@ description: "Panduan mendalam tentang arsitektur worker pool, backpressure, fan
 
 # 🏭 Golang Worker Pool Patterns & Background Job Internals
 
+> **Berlaku:** Go 1.21+ · **Lihat juga:** `concurrency/worker_pool_errgroup.md` · `distributed_patterns_resilience/bulkhead_isolation.md` · `background_jobs_worker/job_observability.md` · `db_sqlc/connection_pool_tuning.md`
+
 Artikel ini membahas berbagai pola worker pool dan pemrosesan background job tingkat lanjut di Go. Sebagai *production-grade* engineering, kita harus menjauhi goroutine leak, mengelola memory footprint (backpressure), dan menangani error secara deterministik.
 
 ## 1. Arsitektur Dasar: Fan-out / Fan-in Pattern
@@ -533,4 +535,34 @@ func TestDynamicPool_ScaleUp(t *testing.T) {
 	
 	// Validasi secara observasional atau dengan mock
 }
+```
+
+## Kapan JANGAN Pakai Ini
+
+- **Ukuran pool statis untuk beban yang berubah sepanjang hari.** Pool yang pas pada jam sibuk terlalu besar pada dini hari, dan sebaliknya. Bila bebannya berayun besar, ukuran harus mengikuti — atau setidaknya ditinjau berkala dengan data.
+- **Pool tanpa backpressure.** Antrean masuk yang tidak dibatasi hanya memindahkan masalah dari CPU ke memori, dan kegagalannya berubah dari "lambat" menjadi `OOMKilled`.
+- **Worker yang tidak membedakan galat sementara dan permanen.** Keduanya butuh perlakuan berbeda: yang sementara di-retry, yang permanen langsung ke dead letter. Menyamakannya berarti salah satunya ditangani salah.
+- **Pool tanpa metrik utilisasi.** Tanpa angka utilisasi dan waktu tunggu, penyetelan ukuran pool hanya tebakan yang diulang setiap kali ada keluhan.
+- **Satu pool untuk pekerjaan dengan profil sumber daya berbeda.** Job CPU-bound dan job I/O-bound punya angka optimal yang jauh berbeda; memaksakan satu batas berarti salah untuk keduanya.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Memori naik saat lonjakan trafik | batas antrean masuk | Tidak ada backpressure |
+| Worker menganggur tapi antrean panjang | pemisahan jenis pekerjaan | Satu jenis job memblokir yang lain |
+| Utilisasi selalu 100% | ukuran pool vs beban | Pool terlalu kecil untuk beban sekarang |
+| Utilisasi selalu rendah | ukuran pool | Sumber daya terbuang |
+| Galat permanen diulang berkali-kali | klasifikasi galat | Semua galat diperlakukan sebagai sementara |
+
+```bash
+# Empat angka yang menentukan penyetelan pool
+curl -s localhost:9090/metrics \
+  | grep -E 'worker_(active|queue_depth|wait_seconds|process_seconds)'
+
+# Rasio waktu tunggu terhadap waktu kerja: > 1 berarti pool terlalu kecil
+# PromQL:
+#   rate(worker_wait_seconds_sum[5m]) / rate(worker_process_seconds_sum[5m])
+
+go tool pprof -top http://localhost:6060/debug/pprof/block
 ```

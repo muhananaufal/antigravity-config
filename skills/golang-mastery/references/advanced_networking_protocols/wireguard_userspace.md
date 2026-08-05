@@ -1,5 +1,7 @@
 # WireGuard Userspace (wireguard-go) Implementation
 
+> **Berlaku:** Go 1.21+ · `wireguard-go` · **Lihat juga:** `advanced_networking_protocols/network_proxy_socks5.md` · `security_owasp/mtls_certificate_rotation.md` · `cybersecurity_zerotrust/spiffe_spire_workload.md` · `cybersecurity_zerotrust/network_security_scanning.md`
+
 ## 1. Konsep Utama & Internals
 
 WireGuard menggunakan **Noise Protocol Framework (IKpsk2 variant)** — handshake 1.5-RTT yang jauh lebih simpel dibanding TLS:
@@ -315,3 +317,35 @@ Banyak engineer men-deploy `wireguard-go` untuk trafik 10 Gbps antar layanan (*S
 3. **Endpoint Roaming NAT:** WG stateless — jika IP peer berubah (pindah koneksi seluler), traffic drop tanpa error. Aktifkan `PersistentKeepalive = 25` seconds di peer config agar NAT mapping dipertahankan oleh ISP router.
 4. **Key Rotation tanpa Downtime:** WireGuard mendukung `preshared_key` per-peer sebagai tambahan lapisan keamanan (post-quantum resistance layer). Saat rotate private key, urutan: generate key baru, update UAPI config dengan key baru, update `public_key` di semua peers — lakukan secara koordinasi agar tidak ada window dimana handshake gagal karena peer masih kenal key lama.
 5. **Replay Attack Window:** WireGuard menggunakan sliding window counter untuk mencegah replay attack. Window default 2000ms. Jika ada clock skew besar antara initiator dan responder (> 180 detik), handshake akan ditolak (`timestamp out of range`). Pastikan NTP sinkron di semua node WireGuard.
+
+## Kapan JANGAN Pakai Ini
+
+- **Implementasi userspace bila modul kernel tersedia.** Selisih kinerjanya besar — beberapa kali lipat pada throughput tinggi. Userspace masuk akal untuk portabilitas dan lingkungan tanpa akses kernel, bukan sebagai pilihan bawaan.
+- **Kunci yang tidak pernah dirotasi dan tidak bisa dicabut.** Peer yang perangkatnya hilang tetap bisa masuk sampai kuncinya dihapus manual dari setiap peer lain. Rencanakan mekanisme pencabutan sebelum membutuhkannya.
+- **`AllowedIPs` yang terlalu luas.** Di WireGuard, `AllowedIPs` adalah **kontrol routing sekaligus otorisasi**. `0.0.0.0/0` pada satu peer berarti peer itu boleh mengaku sebagai alamat mana pun.
+- **WireGuard sebagai pengganti otorisasi aplikasi.** Ia membuktikan bahwa lalu lintas berasal dari peer yang memegang kunci. Apa yang boleh dilakukan peer itu tetap urusan aplikasi.
+- **Tanpa memperhitungkan MTU.** Enkapsulasi mengurangi MTU efektif. Tanpa penyesuaian, paket besar terfragmentasi atau hilang, dan gejalanya berupa "koneksi bekerja tapi transfer besar gagal" — salah satu masalah jaringan yang paling membingungkan.
+
+## Cara Mendeteksi Gejalanya di Produksi
+
+| Gejala | Yang dilihat | Artinya |
+| :--- | :--- | :--- |
+| Koneksi terbentuk tapi transfer besar gagal | MTU pada antarmuka | Fragmentasi akibat enkapsulasi |
+| Throughput jauh di bawah harapan | userspace vs kernel | Implementasi userspace pada beban tinggi |
+| Peer yang sudah tidak dipakai masih terhubung | daftar peer dan rotasi kunci | Tidak ada pencabutan |
+| Peer bisa menjangkau lebih dari seharusnya | `AllowedIPs` per peer | Otorisasi routing terlalu luas |
+| Handshake berulang terus | NAT keepalive | Sesi NAT kedaluwarsa di antara handshake |
+
+```bash
+# Peer, handshake terakhir, dan AllowedIPs -- ketiganya menjawab sebagian besar masalah
+wg show
+wg show wg0 allowed-ips
+wg show wg0 latest-handshakes
+
+# MTU: sumber "koneksi bekerja tapi transfer besar gagal"
+ip link show wg0 | grep -o 'mtu [0-9]*'
+ping -M do -s 1372 -c 3 10.8.0.2     # cari ukuran terbesar yang lolos tanpa fragmentasi
+
+# Peer yang sudah lama tidak melakukan handshake: kandidat dicabut
+wg show wg0 latest-handshakes | awk '$2 == 0 || $2 < '"$(( $(date +%s) - 86400 ))"''
+```
