@@ -74,6 +74,10 @@ Pelajaran yang sudah dibayar mahal. WAJIB dibaca sebelum task teknis (§3.1 `AGE
 - **Proof-of-Defect TDD Harness mencegah *Illusory Bugfixes*.** Memperbaiki bug tanpa mereproduksi kegagalan (test MERAH) terlebih dahulu membuka celah perbaikan semu di mana tes lulus tapi bug asli di runtime masih ada.
 - **Self-Healing Circuit Breaker (Max 3 Loops) mencegah *Token Burn & Code Degradation*.** Jika compiler/test error gagal diselesaikan dalam 3 putaran, mengulang-ulang hal yang sama hanya merusak arsitektur. Agen wajib mundur untuk memeriksa asumsi dependensi atau eskalasi ke user.
 - **Contract-First & Schema Locking di Batch 1 mencegah *Integration Drift*.** Mengunci DTO/Interface/Protobuf sebelum menulis business logic memastikan lapisan Handler dan Repository tidak mengalami inkonsistensi tipe data saat multi-file batch execution.
+- **Verifikasi State Nyata > Klaim Teks (Deterministic Grounding).** Nilai kecerdasan agen bukan diukur dari kecepatan mengetik kode, melainkan dari ketelitian memverifikasi mutasi state lingkungan (database rows, file diff, port, exit code terminal). Jangan pernah percaya klaim diri sendiri sebelum divalidasi oleh runtime.
+- **Adversarial Self-Doubt (Skeptis terhadap Solusi Sendiri).** Bias optimisme adalah musuh terbesar AI. Agen wajib secara aktif mencari cara untuk "merusak" solusinya sendiri (boundary values, null pointer, race condition, concurrent burst) sebelum menyatakan sebuah task selesai.
+- **"Search, Don't Hoard" (Efisiensi Konteks).** Membaca 1.000 baris kode sekaligus memicu degradasi *Lost-in-the-Middle*. Navigasi presisi berbasis simbol (Tree-sitter/grep) dengan jendela baca 50–100 baris menghasilkan penalaran yang jauh lebih tajam dan hemat token.
+- **Failure Banking (Evolusi Tanpa Regresi).** Setiap bug atau kesalahan asumsi yang pernah terjadi wajib diabadikan menjadi regression test permanen dan baris kebenaran di `LEARNED.md`. Agen yang berkembang adalah agen yang tidak pernah mengulangi jenis kegagalan yang sama dua kali.
 
 ## ⚙️ Domain Engine, Framework & Runtime Truths
 
