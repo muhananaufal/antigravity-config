@@ -274,18 +274,36 @@ Maksimal 2 baris, ditaruh di **PALING AKHIR** respon. Format wajib:
 
 ---
 
-## 6. Laporan Hasil Test (Production Observability Evidence)
+## 6. Laporan Hasil Test & Patch Receipt (SOTA Verification Evidence)
 
 WAJIB memuat perintah yang dijalankan **dan** outputnya apa adanya. DILARANG mengklaim lulus tanpa menampilkan bukti konsol.
 
 ```markdown
-### 🧪 Laporan Hasil Test & Verifikasi
-- **Perintah:** `<command>`
-- **Exit Code:** `0`
-- **Output Konsol:**
+### 🧾 SOTA Patch Receipt & Verification Evidence
+- **Target Git Commit:** `abcdef1` (Working Tree: Clean)
+- **Diff Delta:** `+45 lines, -12 lines across 3 files`
+- **Perintah Verifikasi:** `<command>` (misal: `go test -race -v ./...`)
+- **Exit Code:** `0` (Success)
+- **Durasi Eksekusi:** `1.42s`
+- **Output Konsol Faktual:**
 ```text
 <raw terminal output apa adanya>
 ```
 - **Deteksi Race / Concurrency:** `0 data races detected`
 - **Komparasi Baseline:** `Baseline: 42 passed -> Current: 45 passed, 0 failed`
+
+---
+
+### 🧪 Proof-of-Defect Reproduction Receipt (Wajib untuk Task Bugfix)
+1. **Fase 1 (Proof of Failure):** Skrip/Test Reproduksi dijalankan $\rightarrow$ **MERAH (Failed / Exit Code $\ne 0$)**
+   ```text
+   --- FAIL: TestOrderDoubleChargeBug (0.05s)
+       order_test.go:42: expected error on duplicate transaction, got 200 OK
+   ```
+2. **Fase 2 (Proof of Fix):** Perbaikan diimplementasikan $\rightarrow$ **HIJAU (Passed / Exit Code 0)**
+   ```text
+   === RUN   TestOrderDoubleChargeBug
+   --- PASS: TestOrderDoubleChargeBug (0.02s)
+   PASS
+   ```
 ```

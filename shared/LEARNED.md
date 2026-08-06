@@ -71,6 +71,9 @@ Pelajaran yang sudah dibayar mahal. WAJIB dibaca sebelum task teknis (§3.1 `AGE
 - **Forensic Blast Radius Matrix di Brownfield adalah penyelamat dari *Downstream Silent Failures*.** Mengubah model/repo tanpa memetakan consumer downstream (queue worker, reporting query, read replicas) berisiko memicu lock contention dan serialization error yang tidak terdeteksi oleh unit test lokal.
 - **STRIDE Threat Model di tingkat RFC mewujudkan *Shift-Left Security*.** Memikirkan spoofing, tampering, dan DoS sebelum menulis kode 10x lebih murah daripada menambal vulnerabilitas setelah API berada di staging.
 - **Blameless 5-Whys Post-Mortem (`docs/rca/`) mengubah *Emergency Pause* menjadi aset pengetahuan permanen.** Setiap blocker arsitektural wajib menghasilkan guardrail baru di `LEARNED.md` agar tidak pernah terulang.
+- **Proof-of-Defect TDD Harness mencegah *Illusory Bugfixes*.** Memperbaiki bug tanpa mereproduksi kegagalan (test MERAH) terlebih dahulu membuka celah perbaikan semu di mana tes lulus tapi bug asli di runtime masih ada.
+- **Self-Healing Circuit Breaker (Max 3 Loops) mencegah *Token Burn & Code Degradation*.** Jika compiler/test error gagal diselesaikan dalam 3 putaran, mengulang-ulang hal yang sama hanya merusak arsitektur. Agen wajib mundur untuk memeriksa asumsi dependensi atau eskalasi ke user.
+- **Contract-First & Schema Locking di Batch 1 mencegah *Integration Drift*.** Mengunci DTO/Interface/Protobuf sebelum menulis business logic memastikan lapisan Handler dan Repository tidak mengalami inkonsistensi tipe data saat multi-file batch execution.
 
 ## ⚙️ Domain Engine, Framework & Runtime Truths
 

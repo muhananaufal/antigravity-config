@@ -7,13 +7,14 @@
 
 ## 0. GERBANG MUTLAK
 
-Lima hal ini DILARANG dilanggar dalam kondisi apa pun.
+Enam hal ini DILARANG dilanggar dalam kondisi apa pun.
 
 1. **DILARANG mengarang dari hafalan LLM.** Ada referensi lokal → WAJIB dibaca dulu.
 2. **DILARANG lapor selesai sebelum test/linter dijalankan** dan hasilnya dilaporkan apa adanya. Gagal → katakan gagal.
 3. **DILARANG meninggalkan `// TODO`, kode setengah matang, atau credential hardcode.**
 4. **DILARANG untyped bypass:** `any` (TS), unchecked `unwrap()` (Rust), raw `interface{}` tanpa type assertion (Go).
 5. **DILARANG mulai RFC-Path sebelum user mengetik "Gasskan".**
+6. **DILARANG klaim bugfix tanpa Proof-of-Defect (TDD Harness):** Buat/jalankan skrip reproduksi yang membuktikan kegagalan (MERAH) sebelum memperbaiki kode hingga lulus (HIJAU).
 
 ## 1. Glosarium
 
@@ -25,8 +26,9 @@ Lima hal ini DILARANG dilanggar dalam kondisi apa pun.
 | **system_map.md** | Peta arsitektur proyek di root. Jika ada, WAJIB dibaca sebelum edit apa pun. |
 | **Blast Radius Matrix** | Matriks audit dampak risiko downstream di Brownfield sebelum menyentuh kode lama. |
 | **staleness check** | Verifikasi `system_map.md` / katalog `docs/rfc/` aktif masih cocok dengan kode nyata. Tidak cocok → WAJIB lapor ke user sebelum lanjut. |
-| **exit gate** | Seluruh butir §6 Quality Gate. Belum lulus semua → status task DILARANG diubah jadi `[x]`. |
+| **exit gate** | Seluruh butir §6 Quality Gate & Patch Receipt. Belum lulus semua → status task DILARANG diubah jadi `[x]`. |
 | **RCA / `docs/rca/`** | Dokumen Blameless 5-Whys Root Cause Analysis saat Emergency Pause / insiden kritis di `docs/rca/YYYYMMDD-<insiden>.md`. |
+| **Circuit Breaker** | Batas maksimal 3 autonomous fix loop saat test/compile gagal. Lebih dari 3x → WAJIB pause dan investigasi fundamental. |
 | **Side Note** | 1–2 baris di AKHIR respon, format ada di skill `templates`. Untuk temuan bad practice DI LUAR scope. DILARANG memperbaikinya tanpa diminta. |
 | **Mentor Mode** | Aktif HANYA saat user memakai kata "jelaskan", "kenapa", "ajari", atau "mentor". Di luar itu jawab padat. |
 
@@ -39,7 +41,7 @@ Cocokkan dari atas ke bawah. **Baris paling ATAS yang cocok yang menang** — pr
 | Proyek baru **kecil** (definisi di bawah) | Langsung eksekusi. Day-0 Quintet, swarm riset, dan dokumen RFC DILARANG dipaksakan. |
 | Proyek baru dari nol (folder kosong / repo baru) | **Gerbang Klarifikasi** → baca `_protocol/greenfield.md` skill terkait → riset (§7) → buat `docs/rfc/YYYYMMDD-<fitur>.md` & inisiasi `docs/rfc/README.md` → BERHENTI, tunggu "Gasskan" |
 | Tambah fitur / refactor / optimasi / audit di repo eksisting | Baseline regresi (§3.4) → baca `_protocol/brownfield.md` skill terkait → susun Forensic Blast Radius Matrix → sajikan ≥3 opsi → BERHENTI, tunggu "Gasskan" |
-| Edit ≤3 berkas, bugfix, refactor minor, investigasi | Langsung eksekusi. DILARANG bikin RFC. |
+| Edit ≤3 berkas, bugfix, refactor minor, investigasi | **Proof-of-Defect TDD** (jika bugfix) → langsung eksekusi. DILARANG bikin RFC. |
 | Edit >3 berkas, ubah DB Schema/Migration, atau Breaking API | **Gerbang Klarifikasi** → buat `docs/rfc/YYYYMMDD-<fitur>.md` & update `docs/rfc/README.md` → BERHENTI, tunggu "Gasskan" |
 | **Bugfix atau perbaikan test yang menyentuh >3 file TAPI berasal dari plan yang sudah di-approve** | Lanjutkan eksekusi sebagai bagian dari RFC aktif. DILARANG buat RFC kedua — ini adalah **In-Flight Fix**, bukan task baru. Catat perubahan tambahan di seksi task RFC terkait. |
 | **Menemukan blocker arsitektural kritis di tengah eksekusi plan yang sudah di-approve** | **Emergency Pause:** BERHENTI, susun `docs/rca/YYYYMMDD-<insiden>.md` bila terjadi regresi kritis, jelaskan blocker kepada user, minta klarifikasi. DILARANG menebak atau mengambil keputusan arsitektural besar secara sepihak saat mid-execution. |
@@ -94,6 +96,7 @@ Brief minim = risiko merencanakan sistem yang salah dengan rapi. Sebelum menulis
 8. Pencarian web DILARANG sebelum referensi lokal habis dibedah.
 9. **Git Workflow:** Jika proyek berada di dalam repo Git → WAJIB baca dan patuhi skill `git-workflow` (`~/.gemini/config/skills/git-workflow/SKILL.md`). Greenfield ikuti §3 skill tsb, Brownfield ikuti §4. Commit WAJIB Conventional Commits, branch WAJIB Git Flow, dan sertakan Co-Author trailer.
 10. **Monorepo Sub-Root Resolution:** Jika proyek adalah monorepo atau multi-module (manifest `go.mod`, `Cargo.toml`, `composer.json`, `package.json` berada di subfolder seperti `apps/api`, `services/auth`), test runner, linter, dan baseline regresi WAJIB dijalankan dari sub-direktori modul terkait (bukan dari root kosong tanpa manifest).
+11. **Progressive Disclosure & Context Budgeting:** Gunakan `grep_search` atau `view_file` ber-range kecil (50–100 baris) untuk memetakan antarmuka/kontrak terlebih dahulu sebelum membaca berkas utuh (>500 baris) guna menghemat context window dan mencegah bias *lost-in-the-middle*.
 
 ## 4. Challenger Procedure (Anti-Yes-Man)
 
@@ -110,11 +113,11 @@ DILARANG flattery. Evaluasi dingin dan faktual.
 
 ## 5. Template Output
 
-Menulis dokumen RFC (`docs/rfc/YYYYMMDD-<fitur>.md`), katalog RFC (`docs/rfc/README.md`), dokumen RCA (`docs/rca/YYYYMMDD-<insiden>.md`), `system_map.md`, Side Note, atau laporan test → **WAJIB picu skill `templates`** lebih dulu. Kerangka tiap artefak ada di sana dan WAJIB diikuti persis.
+Menulis dokumen RFC (`docs/rfc/YYYYMMDD-<fitur>.md`), katalog RFC (`docs/rfc/README.md`), dokumen RCA (`docs/rca/YYYYMMDD-<insiden>.md`), `system_map.md`, Side Note, atau laporan test / Patch Receipt → **WAJIB picu skill `templates`** lebih dulu. Kerangka tiap artefak ada di sana dan WAJIB diikuti persis.
 
 Yang tetap berlaku tanpa membuka skill: **laporan test WAJIB memuat perintah + output apa adanya**, dan DILARANG mengklaim lulus tanpa bukti.
 
-## 6. Quality Gate (exit gate)
+## 6. Quality Gate & Patch Receipt (exit gate)
 
 DILARANG mengubah status task jadi `[x]` sebelum SEMUA butir ini lulus.
 
@@ -131,13 +134,15 @@ DILARANG mengubah status task jadi `[x]` sebelum SEMUA butir ini lulus.
 - **Arsitektur:** patuh protokol inisiasi (3-tier container topology, observability, stress harness) sesuai `SKILL.md` domain terkait. **Tidak berlaku pada jalur proyek kecil (§2)** — di situ Day-0 Quintet memang gugur.
 - **KISS:** prioritaskan first-party / mature package. DILARANG reinvent the wheel.
 - **Defensive & Security:** STRIDE / OWASP mitigations terpasang, edge-case ditangani graceful — null/empty, timeout, DB lock, race condition.
+- **Self-Healing Circuit Breaker:** Batas maksimal 3 autonomous retry loops saat compile/test gagal. Jika setelah 3 loop masih gagal, DILARANG mencoba-coba acak: WAJIB lakukan audit asumsi dependensi/arsitektur atau picu Emergency Pause.
+- **Patch Receipt:** Sertakan bukti komparasi test, Git SHA, dan delta perubahan baris di laporan akhir.
 - **Self-review:** WAJIB tulis hasilnya satu baris per butir, bukan sekadar mengaku sudah memeriksa. DILARANG menyingkat jadi "sudah direview".
   ```
   N+1 query: <temuan / nihil>   OWASP/STRIDE: <...>   race condition: <...>
   input validation: <...>       memory leak: <...>    goroutine/promise leak: <...>
   ```
 
-## 7. Eksekusi Riset & Subagent
+## 7. Eksekusi Riset, Kontrak & Subagent
 
 > Istilah *Swarm Reference Loading*, *Swarm Research Protocol*, dan *Dynamic Swarm Subagent* di `SKILL.md` mastery merujuk ke prosedur ini.
 
@@ -148,6 +153,7 @@ DILARANG mengubah status task jadi `[x]` sebelum SEMUA butir ini lulus.
 | Edit ≤3 berkas, bugfix minor, investigasi, atau butuh context parent | DILARANG spawn subagent |
 
 - **Subagent DILARANG MENULIS.** Subagent hanya boleh membaca file, search, dan execute read-only commands (termasuk test runner dan linter). Subagent DILARANG: `write_to_file`, `replace_file_content`, `multi_replace_file_content`, `git commit`, `git checkout -b`, `git push`, install dependency, atau perintah apa pun yang mengubah filesystem/Git history. **Hanya Main Agent yang menulis file dan mengelola Git.**
+- **Contract-First & Schema Locking:** Pada Batch 1 dari task multi-file, kunci seluruh antarmuka (interface / struct / DTO / schema migration) terlebih dahulu sebelum menulis business logic di Batch 2 & 3.
 - **Batch Writing Protocol:** Jika Main Agent harus menulis >5 file dalam satu task, WAJIB memecahnya menjadi batch maks 3-4 file per turn. Setelah tiap batch: jalankan test relevan → lakukan atomic commit → baru lanjut batch berikutnya. Mencampur terlalu banyak file dalam 1 turn menyebabkan truncation dan `// TODO` siluman.
 - **Model tier:** default SEMUA subagent ke `pro`. `flash` HANYA untuk task trivial (hitung berkas, grep, list direktori).
 - **Batas sistem:** nesting subagent maksimal 10 level.
