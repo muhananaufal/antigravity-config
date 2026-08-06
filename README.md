@@ -190,7 +190,7 @@ Koleksi template baku L7/L8:
 * **Stacked PRs & Micro-Branching (Devin Protocol):** Branching terisolasi per batch RFC untuk integrasi bertahap yang aman.
 * **Dual-Avatar Attribution Trailer:**
   ```text
-  Co-authored-by: Antigravity <antigravity@google.com>
+  Co-authored-by: AETHERIS <aetheris-agent@users.noreply.github.com>
   ```
 
 ### 8. `brainstorm`

@@ -342,11 +342,11 @@ feat(auth): implement jwt rs256 verification and test suite
 
 Implement RS256 token validation with fail-fast env checks and unit tests.
 
-Co-authored-by: Antigravity <antigravity@google.com>
+Co-authored-by: AETHERIS <aetheris-agent@users.noreply.github.com>
 ```
 
 > **Catatan Platform:**
-> - Saat berjalan di **Google Antigravity:** gunakan `Co-authored-by: Antigravity <antigravity@google.com>`
+> - Saat berjalan di **Google Antigravity (AETHERIS):** gunakan `Co-authored-by: AETHERIS <aetheris-agent@users.noreply.github.com>`
 > - Saat berjalan di **Claude Code:** gunakan `Co-authored-by: Claude <noreply@anthropic.com>`
 > - Trailer diletakkan di **baris paling akhir** setelah 1 baris kosong (*blank line*) pemisah.
 
