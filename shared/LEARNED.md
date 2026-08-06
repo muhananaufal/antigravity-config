@@ -67,6 +67,10 @@ Pelajaran yang sudah dibayar mahal. WAJIB dibaca sebelum task teknis (§3.1 `AGE
 - **Jangan gabung konsep berbeda dalam satu label domain.** `caching_strategy_cdn` mencampur caching aplikasi (Redis, cache-aside — Core) dengan CDN infra (Cloudflare — Niche). `api_versioning_gateway_routing` mencampur API versioning (Core untuk public API) dengan gateway routing (Infra). Label yang cacat menghasilkan klasifikasi yang cacat.
 - **Angka tanpa sumber = karangan.** "95% pangsa pasar", "kerumitan 300%", "cold-start <10ms" — arahnya mungkin benar tapi presisinya fiktif. Kalau tidak punya data, tulis "mayoritas" atau "signifikan", jangan fabrikasi angka spesifik.
 - **Structured logging (Pino/slog/tracing) adalah BASELINE, bukan kemewahan.** `console.log` di production NestJS adalah anti-pattern. OTel sudah jadi standar industri. Mengklasifikasikan telemetri sebagai Niche menghasilkan engineer yang tidak bisa debug production.
+- **Katalog Master RFC (`docs/rfc/README.md`) mencegah *Orphan Design Docs*.** Tanpa registri indeks sentral, tim dan AI kehilangan jejak status implementasi RFC (`PROPOSED` vs `IMPLEMENTED`).
+- **Forensic Blast Radius Matrix di Brownfield adalah penyelamat dari *Downstream Silent Failures*.** Mengubah model/repo tanpa memetakan consumer downstream (queue worker, reporting query, read replicas) berisiko memicu lock contention dan serialization error yang tidak terdeteksi oleh unit test lokal.
+- **STRIDE Threat Model di tingkat RFC mewujudkan *Shift-Left Security*.** Memikirkan spoofing, tampering, dan DoS sebelum menulis kode 10x lebih murah daripada menambal vulnerabilitas setelah API berada di staging.
+- **Blameless 5-Whys Post-Mortem (`docs/rca/`) mengubah *Emergency Pause* menjadi aset pengetahuan permanen.** Setiap blocker arsitektural wajib menghasilkan guardrail baru di `LEARNED.md` agar tidak pernah terulang.
 
 ## ⚙️ Domain Engine, Framework & Runtime Truths
 

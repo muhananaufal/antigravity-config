@@ -20,10 +20,13 @@ Lima hal ini DILARANG dilanggar dalam kondisi apa pun.
 | Istilah | Arti pasti |
 | :--- | :--- |
 | **Gasskan** | Kata persetujuan user. Sebelum kata ini muncul, RFC-Path DILARANG dieksekusi. |
-| **RFC / `docs/rfc/`** | Dokumen perancangan terpadu (PRD + Desain Teknis + Batch Tasks) di `docs/rfc/YYYYMMDD-<fitur>.md`. Kerangka wajibnya ada di skill `templates`. |
+| **RFC / `docs/rfc/`** | Dokumen perancangan terpadu (PRD + Desain Teknis + STRIDE + Batch Tasks) di `docs/rfc/YYYYMMDD-<fitur>.md`. Kerangka wajibnya ada di skill `templates`. |
+| **RFC Catalog** | Katalog status master seluruh RFC repositori di `docs/rfc/README.md`. |
 | **system_map.md** | Peta arsitektur proyek di root. Jika ada, WAJIB dibaca sebelum edit apa pun. |
-| **staleness check** | Verifikasi `system_map.md` / dokumen RFC aktif masih cocok dengan kode nyata. Tidak cocok → WAJIB lapor ke user sebelum lanjut. |
+| **Blast Radius Matrix** | Matriks audit dampak risiko downstream di Brownfield sebelum menyentuh kode lama. |
+| **staleness check** | Verifikasi `system_map.md` / katalog `docs/rfc/` aktif masih cocok dengan kode nyata. Tidak cocok → WAJIB lapor ke user sebelum lanjut. |
 | **exit gate** | Seluruh butir §6 Quality Gate. Belum lulus semua → status task DILARANG diubah jadi `[x]`. |
+| **RCA / `docs/rca/`** | Dokumen Blameless 5-Whys Root Cause Analysis saat Emergency Pause / insiden kritis di `docs/rca/YYYYMMDD-<insiden>.md`. |
 | **Side Note** | 1–2 baris di AKHIR respon, format ada di skill `templates`. Untuk temuan bad practice DI LUAR scope. DILARANG memperbaikinya tanpa diminta. |
 | **Mentor Mode** | Aktif HANYA saat user memakai kata "jelaskan", "kenapa", "ajari", atau "mentor". Di luar itu jawab padat. |
 
@@ -34,12 +37,12 @@ Cocokkan dari atas ke bawah. **Baris paling ATAS yang cocok yang menang** — pr
 | JIKA task-nya… | MAKA WAJIB… |
 | :--- | :--- |
 | Proyek baru **kecil** (definisi di bawah) | Langsung eksekusi. Day-0 Quintet, swarm riset, dan dokumen RFC DILARANG dipaksakan. |
-| Proyek baru dari nol (folder kosong / repo baru) | **Gerbang Klarifikasi** → baca `_protocol/greenfield.md` skill terkait → riset (§7) → buat `docs/rfc/YYYYMMDD-<fitur>.md` → BERHENTI, tunggu "Gasskan" |
-| Tambah fitur / refactor / optimasi / audit di repo eksisting | Baseline regresi (§3.4) → baca `_protocol/brownfield.md` skill terkait → audit → sajikan ≥3 opsi → BERHENTI, tunggu "Gasskan" |
+| Proyek baru dari nol (folder kosong / repo baru) | **Gerbang Klarifikasi** → baca `_protocol/greenfield.md` skill terkait → riset (§7) → buat `docs/rfc/YYYYMMDD-<fitur>.md` & inisiasi `docs/rfc/README.md` → BERHENTI, tunggu "Gasskan" |
+| Tambah fitur / refactor / optimasi / audit di repo eksisting | Baseline regresi (§3.4) → baca `_protocol/brownfield.md` skill terkait → susun Forensic Blast Radius Matrix → sajikan ≥3 opsi → BERHENTI, tunggu "Gasskan" |
 | Edit ≤3 berkas, bugfix, refactor minor, investigasi | Langsung eksekusi. DILARANG bikin RFC. |
-| Edit >3 berkas, ubah DB Schema/Migration, atau Breaking API | **Gerbang Klarifikasi** → buat `docs/rfc/YYYYMMDD-<fitur>.md` → BERHENTI, tunggu "Gasskan" |
+| Edit >3 berkas, ubah DB Schema/Migration, atau Breaking API | **Gerbang Klarifikasi** → buat `docs/rfc/YYYYMMDD-<fitur>.md` & update `docs/rfc/README.md` → BERHENTI, tunggu "Gasskan" |
 | **Bugfix atau perbaikan test yang menyentuh >3 file TAPI berasal dari plan yang sudah di-approve** | Lanjutkan eksekusi sebagai bagian dari RFC aktif. DILARANG buat RFC kedua — ini adalah **In-Flight Fix**, bukan task baru. Catat perubahan tambahan di seksi task RFC terkait. |
-| **Menemukan blocker arsitektural kritis di tengah eksekusi plan yang sudah di-approve** | **Emergency Pause:** BERHENTI, jelaskan blocker kepada user, minta klarifikasi. DILARANG menebak atau mengambil keputusan arsitektural besar secara sepihak saat mid-execution. |
+| **Menemukan blocker arsitektural kritis di tengah eksekusi plan yang sudah di-approve** | **Emergency Pause:** BERHENTI, susun `docs/rca/YYYYMMDD-<insiden>.md` bila terjadi regresi kritis, jelaskan blocker kepada user, minta klarifikasi. DILARANG menebak atau mengambil keputusan arsitektural besar secara sepihak saat mid-execution. |
 | User bertanya / berdiskusi soal teknis tanpa minta kode | Jawab saja. DILARANG menulis atau mengubah kode. |
 | **Brainstorming teknikal / arsitektural** (diskusi stack, pilih pola, evaluasi trade-off sistem) | Picu skill `brainstorm` (§Teknikal). Catat keputusan + asumsi di `LEARNED.md` setelah sesi. DILARANG langsung menulis kode tanpa ada "Gasskan". |
 | Obrolan ringan, pertanyaan non-teknis, atau brainstorming di luar programming | Jawab langsung. **§3, §5, §6, §7 TIDAK berlaku** — DILARANG menempelkan pengingat test atau gerbang mutu. Dari §9 hanya butir pencatatan `LEARNED.md` yang TETAP berlaku. Brainstorming serius → picu skill `brainstorm`. |
@@ -56,7 +59,7 @@ Kecil bila **keempat** syarat ini benar. Satu saja meleset → jalur proyek baru
 | Ringkas | Perkiraan <10 berkas sumber | Berkas test dan config |
 
 **Tetap WAJIB meski kecil:** §0 Gerbang Mutlak · §6 Quality Gate.
-**Gugur:** Day-0 Quintet · swarm riset · dokumen RFC (`docs/rfc/`) · menunggu "Gasskan".
+**Gugur:** Day-0 Quintet · swarm riset · dokumen RFC (`docs/rfc/`) · katalog RFC · menunggu "Gasskan".
 
 Ragu antara kecil dan penuh → **tanya user satu kalimat**, jangan menebak. Meracik `docker-compose.yml` 3-tier + OTel + k6 untuk skrip 100 baris = pelanggaran §6 KISS.
 
@@ -79,7 +82,7 @@ Brief minim = risiko merencanakan sistem yang salah dengan rapi. Sebelum menulis
 ## 3. Sebelum Menyentuh Kode
 
 1. **WAJIB baca `~/.gemini/config/shared/LEARNED.md`** — pelajaran yang sudah dibayar mahal di sesi-sesi lalu. DILARANG mengulangi jalan yang sudah terbukti buntu di sana.
-2. WAJIB cek `AGENTS.md`, `CLAUDE.md`, `system_map.md`, `docs/rfc/`, `CHANGELOG.md` di root proyek.
+2. WAJIB cek `AGENTS.md`, `CLAUDE.md`, `system_map.md`, `docs/rfc/README.md`, `docs/rfc/`, `CHANGELOG.md` di root proyek.
 3. Ada `system_map.md` / dokumen RFC → WAJIB *staleness check*.
 4. **Baseline regresi** (repo eksisting) — WAJIB jalankan test suite yang ada **SEBELUM** mengubah apa pun, lalu catat hasilnya.
    - Tanpa pembanding, klaim "test lulus" setelah perubahan tidak bermakna.
@@ -89,7 +92,7 @@ Brief minim = risiko merencanakan sistem yang salah dengan rapi. Sebelum menulis
 6. **Master Decision Tree:** Jika task adalah perancangan arsitektur sistem baru, pemilihan tech-stack, atau pembuatan proyek dari nol → WAJIB baca `~/.gemini/config/skills/master-decision-tree/SKILL.md` terlebih dahulu. DILARANG langsung memilih bahasa/framework sebelum melewati pohon keputusan. Berlaku juga untuk fitur besar di Brownfield yang membutuhkan keputusan arsitektur baru (misal: menambahkan message broker, memilih strategi caching, atau memecah monolit).
 7. Referensi mastery berada di `~/.gemini/config/skills/{stack}-mastery/references/` (misal: `golang-mastery`, `rust-mastery`, `laravel-mastery`, `nestjs-mastery`).
 8. Pencarian web DILARANG sebelum referensi lokal habis dibedah.
-9. **Git Workflow:** Jika proyek berada di dalam repo Git → WAJIB baca dan patuhi skill `git-workflow` (`~/.gemini/config/skills/git-workflow/SKILL.md`). Greenfield ikuti §3 skill tsb, Brownfield ikuti §4. Commit WAJIB Conventional Commits, branch WAJIB Git Flow.
+9. **Git Workflow:** Jika proyek berada di dalam repo Git → WAJIB baca dan patuhi skill `git-workflow` (`~/.gemini/config/skills/git-workflow/SKILL.md`). Greenfield ikuti §3 skill tsb, Brownfield ikuti §4. Commit WAJIB Conventional Commits, branch WAJIB Git Flow, dan sertakan Co-Author trailer.
 10. **Monorepo Sub-Root Resolution:** Jika proyek adalah monorepo atau multi-module (manifest `go.mod`, `Cargo.toml`, `composer.json`, `package.json` berada di subfolder seperti `apps/api`, `services/auth`), test runner, linter, dan baseline regresi WAJIB dijalankan dari sub-direktori modul terkait (bukan dari root kosong tanpa manifest).
 
 ## 4. Challenger Procedure (Anti-Yes-Man)
@@ -107,7 +110,7 @@ DILARANG flattery. Evaluasi dingin dan faktual.
 
 ## 5. Template Output
 
-Menulis dokumen RFC (`docs/rfc/YYYYMMDD-<fitur>.md`), `system_map.md`, Side Note, atau laporan test → **WAJIB picu skill `templates`** lebih dulu. Kerangka tiap artefak ada di sana dan WAJIB diikuti persis.
+Menulis dokumen RFC (`docs/rfc/YYYYMMDD-<fitur>.md`), katalog RFC (`docs/rfc/README.md`), dokumen RCA (`docs/rca/YYYYMMDD-<insiden>.md`), `system_map.md`, Side Note, atau laporan test → **WAJIB picu skill `templates`** lebih dulu. Kerangka tiap artefak ada di sana dan WAJIB diikuti persis.
 
 Yang tetap berlaku tanpa membuka skill: **laporan test WAJIB memuat perintah + output apa adanya**, dan DILARANG mengklaim lulus tanpa bukti.
 
@@ -127,10 +130,10 @@ DILARANG mengubah status task jadi `[x]` sebelum SEMUA butir ini lulus.
 - **Zero placeholder:** lihat §0.3. Rahasia WAJIB lewat `.env` + schema validation.
 - **Arsitektur:** patuh protokol inisiasi (3-tier container topology, observability, stress harness) sesuai `SKILL.md` domain terkait. **Tidak berlaku pada jalur proyek kecil (§2)** — di situ Day-0 Quintet memang gugur.
 - **KISS:** prioritaskan first-party / mature package. DILARANG reinvent the wheel.
-- **Defensive:** edge-case ditangani graceful — null/empty, timeout, DB lock, race condition.
+- **Defensive & Security:** STRIDE / OWASP mitigations terpasang, edge-case ditangani graceful — null/empty, timeout, DB lock, race condition.
 - **Self-review:** WAJIB tulis hasilnya satu baris per butir, bukan sekadar mengaku sudah memeriksa. DILARANG menyingkat jadi "sudah direview".
   ```
-  N+1 query: <temuan / nihil>   OWASP: <...>          race condition: <...>
+  N+1 query: <temuan / nihil>   OWASP/STRIDE: <...>   race condition: <...>
   input validation: <...>       memory leak: <...>    goroutine/promise leak: <...>
   ```
 

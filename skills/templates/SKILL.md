@@ -1,6 +1,6 @@
 ---
 name: templates
-description: Gunakan skill ini ketika menulis atau memperbarui artefak baku proyek — docs/rfc/YYYYMMDD-<fitur>.md (All-in-One RFC/PRD/Task), system_map.md, laporan hasil test, atau Side Note. Berisi kerangka wajib tiap artefak berstandar Senior Principal Engineer (L7/L8) beserta aturan pengisiannya.
+description: Gunakan skill ini ketika menulis atau memperbarui artefak baku proyek — docs/rfc/YYYYMMDD-<fitur>.md (All-in-One RFC/PRD/Task), docs/rfc/README.md (RFC Master Catalog), docs/rca/YYYYMMDD-<insiden>.md (5-Whys Post-Mortem), system_map.md, laporan hasil test, atau Side Note. Berisi kerangka wajib tiap artefak berstandar Senior Principal Engineer (L7/L8) beserta aturan pengisiannya.
 ---
 
 # Template Artefak (World-Class Principal Engineer Standard)
@@ -71,6 +71,16 @@ Dokumen tunggal terpadu untuk perancangan fitur baru, refactor besar, atau inisi
 - **Idempotency & Deduplication:** <!-- Pencegahan double-spending / double-execution (Idempotency Key, Unique Constraint, Distributed Lock) -->
 - **Failure & Degradation Modes:** <!-- Circuit breaker, fallback cache, timeout handling saat downstream service mati -->
 
+### 3.4 STRIDE Threat Model & Security Perimeter
+| Vektor Ancaman STRIDE | Potensi Celah / Skenario Serangan | Mitigasi Arsitektural & Guardrails |
+| :--- | :--- | :--- |
+| **Spoofing** (Pemalsuan identitas) | Peniruan caller / fake client token | Verifikasi JWT RS256 / HMAC Signature + Webhook Secret |
+| **Tampering** (Manipulasi payload) | Modifikasi data invoice saat in-transit | Payload integrity hashing + strict schema validation |
+| **Repudiation** (Penyangkalan aksi) | User menyangkal order yang dibuat | Immutable audit log event with timestamp & IP capture |
+| **Information Disclosure** (Kebocoran data) | PII bocor di response / structured log | Log masking (slog/tracing filter) + zero raw stacktrace |
+| **Denial of Service** (Beban komputasi) | ReDoS, payload flooding, slowloris | Rate-limiting (Token Bucket) + request timeout 5s |
+| **Elevation of Privilege** (Bypass RBAC) | Horizontal/Vertical Privilege Escalation | Tenant-scoped RBAC guard + RLS Policy di database |
+
 ---
 
 ## 4. Rencana Eksekusi & Living Task Checklist (Batch Protocol §7)
@@ -119,7 +129,82 @@ Dokumen tunggal terpadu untuk perancangan fitur baru, refactor besar, atau inisi
 
 ---
 
-## 2. `system_map.md` (Living Architecture Map & Topology SSOT)
+## 2. `docs/rfc/README.md` (Living RFC Master Catalog & Indexer)
+
+Wajib berada di `docs/rfc/README.md`. Bertindak sebagai registri arsitektur sentral untuk seluruh dokumen RFC di repositori. **WAJIB diperbarui setiap kali RFC baru dibuat atau statusnya berubah.**
+
+```markdown
+# 📚 RFC Architecture Catalog & Master Index
+
+Dokumentasi rancangan arsitektur, keputusan sistem (ADR), dan riwayat implementasi teknis.
+
+| RFC ID | Inisiatif Fitur / Arsitektur | Domain / Modul | Target Branch | Status | Tanggal Rilis |
+| :--- | :--- | :--- | :--- | :---: | :---: |
+| `20260801` | [Order State Machine](20260801-order-state-machine.md) | Order / Core | `feature/order-sm` | `IMPLEMENTED` | 2026-08-01 |
+| `20260806` | [Payment Resilience & Idempotency](20260806-payment-idempotency.md) | Fintech | `feature/pay-retry` | `ACCEPTED` | 2026-08-06 |
+
+### Panduan Siklus Status RFC:
+* `PROPOSED`: Sedang dalam tahap perancangan & review (menunggu "Gasskan").
+* `ACCEPTED`: Telah disetujui user ("Gasskan"), siap/sedang dieksekusi.
+* `IMPLEMENTED`: Seluruh batch task tuntas dan lolos Quality Gate.
+* `SUPERSEDED`: Digantikan oleh dokumen RFC yang lebih baru (sertakan link ke RFC pengganti).
+```
+
+---
+
+## 3. `docs/rca/YYYYMMDD-<nama-insiden>.md` (Blameless 5-Whys Root Cause Analysis)
+
+Dipicu saat terjadi **Emergency Pause (§2 `AGENTS.md`)**, insiden regresi kritis di production/staging, atau kegagalan berulang yang membingungkan.
+
+```markdown
+# RCA: <Nama Insiden / Kegagalan Sistem>
+
+- **Tanggal Insiden:** YYYY-MM-DD
+- **Tingkat Keparahan (Severity):** `SEV-1 (Critical Outage)` | `SEV-2 (Degraded)` | `SEV-3 (Internal Blocker)`
+- **Status:** `IDENTIFIED` | `RESOLVED` | `MONITORED`
+
+---
+
+## 1. Ringkasan Insiden & Dampak (Impact Summary)
+- **Deskripsi Gejala:** <!-- Apa yang rusak? Error code apa yang muncul? -->
+- **Dampak Nyata:** <!-- Berapa transaksi gagal? Latensi melonjak berapa ms? Test suite mana yang merah? -->
+- **Waktu Deteksi s/d Mitigasi:** <!-- Durasi downtime / blocking -->
+
+---
+
+## 2. Kronologi Kejadian (Incident Timeline)
+- `10:00:00` - Inisiasi deploy / eksekusi task dimulai.
+- `10:02:15` - Endpoint X mulai mengembalikan `500 Internal Server Error`.
+- `10:04:00` - Emergency Pause dipicu oleh Main Agent.
+- `10:07:30` - Rollback skema DB / revert commit dieksekusi. Sistem kembali stabil.
+
+---
+
+## 3. Investigasi 5-Whys (Root Cause Analysis)
+1. **Mengapa sistem mengembalikan error 500?**
+   -> Handler gagal meng-insert data ke tabel `order_transactions`.
+2. **Mengapa insert gagal?**
+   -> Kolom `currency_code` menolak nilai null karena constraint `NOT NULL` baru.
+3. **Mengapa nilai `currency_code` null?**
+   -> Payload dari legacy webhook tidak menyertakan field mata uang.
+4. **Mengapa migrasi menambahkan constraint `NOT NULL` tanpa default value?**
+   -> Skema migrasi tidak menerapkan pola *Expand and Contract Pattern*.
+5. **Mengapa ketiadaan pola migrasi ini tidak tertangkap saat review?** (*Root Cause*)
+   -> Belum ada validasi otomatis (*Architectural Fitness Function*) untuk backward compatibility pada payload legacy.
+
+---
+
+## 4. Tindakan Korektif & Guardrails Permanen (Action Items)
+| Tindakan Perbaikan | Tipe | Target Berkas / Modul | Status |
+| :--- | :--- | :--- | :---: |
+| Tambahkan fallback default `'IDR'` pada kolom migrasi | Quick Fix | `migrations/20260806_fix_currency.sql` | `[x]` |
+| Pasang test skenario *Legacy Payload Without Currency* | Test Harness | `tests/integration/webhook_test.go` | `[x]` |
+| Catat pelajaran ini ke `~/.gemini/config/shared/LEARNED.md` | Knowledge Sync | `shared/LEARNED.md` | `[x]` |
+```
+
+---
+
+## 4. `system_map.md` (Living Architecture Map & Topology SSOT)
 
 Wajib berada di root repositori. Memetakan arsitektur nyata, kepemilikan data, dan batas sistem secara hidup.
 
@@ -179,7 +264,7 @@ Wajib berada di root repositori. Memetakan arsitektur nyata, kepemilikan data, d
 
 ---
 
-## 3. Side Note
+## 5. Side Note
 
 Maksimal 2 baris, ditaruh di **PALING AKHIR** respon. Format wajib:
 
@@ -189,7 +274,7 @@ Maksimal 2 baris, ditaruh di **PALING AKHIR** respon. Format wajib:
 
 ---
 
-## 4. Laporan Hasil Test (Production Observability Evidence)
+## 6. Laporan Hasil Test (Production Observability Evidence)
 
 WAJIB memuat perintah yang dijalankan **dan** outputnya apa adanya. DILARANG mengklaim lulus tanpa menampilkan bukti konsol.
 
