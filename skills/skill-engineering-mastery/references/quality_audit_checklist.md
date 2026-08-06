@@ -49,7 +49,7 @@ Kode tidak boleh diserahkan jika belum lolos *syntax check* dan unit testing.
 ### Lapis 2: Sinkronisasi Absolut (Routing SKILL.md vs Disk Folder)
 Mencegah penyakit "Broken Link Hantu" di masa depan, layaknya trauma Docker image yang hilang.
 - **Tindakan:** Setiap path direktori atau file markdown referensi yang ditulis di `SKILL.md` WAJIB dicek keberadaannya secara fisik menggunakan tool `list_dir`.
-- **Standar Cekal:** Jika `SKILL.md` merujuk pada `references/auth_flow.md` tapi file aslinya adalah `references/auth.md`, GAGAL Keras. Fix path-nya!
+- **Standar Cekal:** Jika `SKILL.md` merujuk pada `references/<topic>.md` tapi file aslinya adalah `references/<topic_other>.md`, GAGAL Keras. Fix path-nya!
 
 ### Lapis 3: Pemindaian Zero `// TODO` & Placeholder
 Kode atau dokumen tidak boleh meninggalkan pekerjaan rumah bagi user.
@@ -63,7 +63,7 @@ Khusus untuk penulisan dokumentasi teknis atau referensi AI (misal file di dalam
 
 ### Lapis 5: Analisis Trade-Off Netral
 Setiap keputusan arsitektur (misal: memilih gRPC vs REST, PostgreSQL vs MongoDB) tidak boleh bersifat partisan buta.
-- **Tindakan:** Setiap usulan utama dalam *implementation plan* harus memuat minimal:
+- **Tindakan:** Setiap usulan utama dalam dokumen RFC (`docs/rfc/`) harus memuat minimal:
   - **3 Kelebihan (Pros):** Kenapa teknologi ini bagus?
   - **3 Kekurangan/Kelemahan (Cons/Trade-offs):** Apa harga yang harus dibayar? (Latency, kompleksitas DevOps, biaya komputasi).
 - **Standar Cekal:** Menyematkan "(Recommended)" tanpa meninjau 3 kekurangan kritikal dari teknologi tersebut.
@@ -75,7 +75,7 @@ Kode tidak boleh polos tanpa pertahanan diri.
 
 ### Lapis 7: Status Kepantasan di Kanban Tracker
 Penyelesaian administrasi.
-- **Tindakan:** Edit file `task.md` atau `quality_tracker.md` dari `[/]` (WIP) menjadi `[x]` (Done).
+- **Tindakan:** Edit seksi Batch Tasks pada dokumen RFC (`docs/rfc/`) atau task context dari `[/]` (WIP) menjadi `[x]` (Done).
 - **Standar Cekal:** Melapor ke user selesai tapi file status Kanban belum di-update.
 
 ---
@@ -95,7 +95,7 @@ Setiap agen yang menyerahkan hasil kerjanya kepada pengguna atau Parent Agent di
 | **Gate 4: Content Density >=130 Lines**| ✅ LULUS | Skrip `audit_final_trinity.ps1` -> `PASSED` | File referensi terverifikasi >130 baris padat bernutrisi. |
 | **Gate 5: Neutral Trade-off Analysis** | ✅ LULUS | Terdapat 3 Pros & 3 Cons di opsi arsitektur | Evaluasi objektif tanpa pemaksaan rekomendasi buta. |
 | **Gate 6: OWASP & Edge Case Defense** | ✅ LULUS | Proteksi SQLi, Rate-Limiting, OOM Recovery terpasang | Minimal 3 Edge Cases produksi teratasi di dalam kode. |
-| **Gate 7: Kanban Board Sync** | ✅ LULUS | `task.md` dan `quality_tracker.md` di-update | Seluruh item `[/]` resmi diketuk menjadi `[x]`. |
+| **Gate 7: Kanban Board Sync** | ✅ LULUS | Batch Tasks RFC dan context tracker di-update | Seluruh item `[/]` resmi diketuk menjadi `[x]`. |
 ```
 
 ---

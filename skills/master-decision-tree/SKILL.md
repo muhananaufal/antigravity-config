@@ -1,8 +1,13 @@
+---
+name: master-decision-tree
+description: Gunakan skill ini ketika merancang arsitektur sistem baru, memilih tech-stack, membuat proyek dari nol, atau menambahkan komponen arsitektur besar (message broker, caching strategy, pecah monolit). WAJIB dilewati sebelum memilih bahasa/framework apa pun.
+---
+
 # 🌳 Master Decision Tree — Principal Engineering Architectural Guide
 
 > **Filosofi:** Dokumen ini adalah peta keputusan arsitektural yang bersifat **language-agnostic** (bebas bahasa pemrograman). Ia tidak bertanya "Pakai Go atau Laravel?", melainkan bertanya "Apa masalah bisnisnya?" — lalu mengarahkan Anda ke solusi yang tepat beserta referensi spesifik di perpustakaan keempat bahasa kita (Golang, Rust, Laravel, NestJS).
 >
-> **Kapan Dibaca:** Sebelum menulis `implementation_plan.md` untuk proyek baru (Greenfield) ATAU sebelum merancang fitur besar di proyek eksisting (Brownfield). Agen AI WAJIB melewati pohon ini sebelum memilih stack atau arsitektur.
+> **Kapan Dibaca:** Sebelum menulis dokumen RFC (`docs/rfc/`) untuk proyek baru (Greenfield) ATAU sebelum merancang fitur besar di proyek eksisting (Brownfield). Agen AI WAJIB melewati pohon ini sebelum memilih stack atau arsitektur.
 >
 > **Cara Membaca:** Ikuti pohon dari atas ke bawah. Setiap NODE adalah pertanyaan. Jawab, lalu ikuti cabangnya. Berhenti di DAUN (leaf) yang memberikan keputusan final beserta rujukan domain.
 
@@ -704,3 +709,20 @@ NODE 10.1: Bagaimana strategi pengujian yang tepat?
 3. **Audit Arsitektur:** Baca BAGIAN 6 (Observability), 9 (Security), 10 (Testing) untuk mengecek apakah sistem eksisting sudah memenuhi baseline.
 
 > **Ingat:** Pohon ini adalah KOMPAS, bukan PETA. Ia memberi arah, bukan langkah-langkah kode spesifik. Setelah Anda menemukan arah yang tepat dari pohon ini, baru buka referensi domain spesifik di `SKILL.md` masing-masing bahasa untuk mendapatkan kode dan arsitektur detail.
+
+## LANGKAH WAJIB BERIKUTNYA SETELAH KEPUTUSAN ARSITEKTUR
+
+**Sebelum menulis satu baris kode pun**, lakukan dua langkah ini secara berurutan:
+
+1. **Buka skill `git-workflow`** (`~/.gemini/config/skills/git-workflow/SKILL.md`) dan ikuti:
+   - Greenfield → protokol §3 (mulai dari Langkah 0: buat `.gitignore` dulu)
+   - Brownfield → protokol §4 (mulai dari `git pull --rebase`)
+
+2. **Buat branch kerja** sesuai Git Flow §1:
+   ```
+   git checkout -b feature/<nama-fitur>   # untuk fitur baru
+   git checkout -b fix/<nama-bug>         # untuk perbaikan bug
+   git checkout -b refactor/<nama-scope>  # untuk refactoring
+   ```
+
+   DILARANG menulis kode di `main` atau `develop` secara langsung.

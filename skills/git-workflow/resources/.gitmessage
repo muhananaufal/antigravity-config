@@ -1,0 +1,38 @@
+# ──────────────────────────────────────────────
+# Conventional Commits Template
+# ──────────────────────────────────────────────
+# <type>(<scope>): <subject>          ← REQUIRED (≤50 chars)
+#
+# <body>                               ← OPTIONAL (wrap at 72 chars)
+#
+# <footer>                             ← OPTIONAL
+# ──────────────────────────────────────────────
+#
+# Types:
+#   feat      New feature
+#   fix       Bug fix
+#   docs      Documentation only
+#   style     Formatting (no logic change)
+#   refactor  Neither fix nor feature
+#   perf      Performance improvement
+#   test      Adding/fixing tests
+#   build     Build system or dependencies
+#   ci        CI/CD configuration
+#   chore     Other (no src/test change)
+#   revert    Reverts a previous commit
+#
+# Rules:
+#   - Subject: imperative mood ("add" not "added")
+#   - Subject: no period at end
+#   - Subject: ≤50 characters
+#   - Body: explain WHAT and WHY, not HOW
+#   - Footer: reference issues (Closes #123)
+#   - Breaking: add ! after type (feat!:) or
+#     BREAKING CHANGE: in footer
+#
+# Examples:
+#   feat(auth): add OAuth2 Google login
+#   fix(cart): prevent negative quantity
+#   refactor(order): extract tax calculator
+#   feat(api)!: change response format
+#

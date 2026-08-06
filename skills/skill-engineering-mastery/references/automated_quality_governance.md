@@ -54,7 +54,7 @@ Ini adalah skrip PowerShell komplit untuk mendeteksi *file* tipis, memindai kata
 #>
 Param (
     [string]$TargetFolder = "C:\Users\muhan\.gemini\config\skills\skill-engineering-mastery\references",
-    [string]$TrackerFile = "C:\Users\muhan\.gemini\config\skills\skill-engineering-mastery\quality_tracker.md"
+    [string]$TrackerFile = ""
 )
 
 $ErrorActionPreference = "Stop"

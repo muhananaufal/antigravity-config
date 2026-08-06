@@ -11,7 +11,7 @@
 | Runtime, Observability & Security | `php_runtime_internals/` `observability_apm/` `security/` `zero_trust_enterprise_security/` `microservices_mesh/` |
 | +1 per domain niche | sesuai tabel Auto-Detect di `SKILL.md` |
 
-3 core WAJIB, niche elastis — 3 niche terdeteksi berarti 6 subagent paralel. DILARANG menulis kode atau `implementation_plan.md` sebelum semua subagent melapor.
+3 core WAJIB, niche elastis — 3 niche terdeteksi berarti 6 subagent paralel. DILARANG menulis kode atau dokumen RFC (`docs/rfc/`) sebelum semua subagent melapor.
 
 ## 2. Day-0 Quintet — WAJIB ada di root
 

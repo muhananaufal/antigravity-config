@@ -45,7 +45,7 @@ Sebuah direktori Skill Bundle enterprise wajib memisahkan ranah **Core** (inti y
 
 Konsistensi adalah nyawa dari sebuah ekosistem. Aturan penamaan wajib mengikuti kaidah abadi berikut:
 - **Nama Skill Bundle:** Menggunakan format `<teknologi>-mastery` atau `<domain>-engineering-mastery` (kebab-case). Contoh: `python-mastery`, `kubernetes-ops-mastery`, `devops-cloud-mastery`.
-- **File Referensi Markdown:** Menggunakan `snake_case.md`, sangat deskriptif, lugas, dan bebas singkatan membingungkan. Jika menunjukkan struktur hierarki pengetahuan, disajikan dalam sub-folder penamaan jelas (misal: `references/distributed_patterns_resilience/transactional_outbox_watermill.md`).
+- **File Referensi Markdown:** Menggunakan `snake_case.md`, sangat deskriptif, lugas, dan bebas singkatan membingungkan. Jika menunjukkan struktur hierarki pengetahuan, disajikan dalam sub-folder penamaan jelas (misal: `references/<domain>/topic_name.md`).
 - **Skrip Eksekusi:** Gunakan kata kerja imperatif + objek + ekstensi native shell (`.ps1` untuk PowerShell Windows, `.sh` untuk Bash Linux/macOS). Contoh: `audit_rust_supreme.ps1`, `verify_200_files.sh`.
 
 ## 4. Pemisahan Mutlak: Core vs Niche
@@ -124,7 +124,7 @@ Berikut adalah kesalahan fatal yang dilarang keras dan melanggar hukum rekayasa 
 *   **Benar (✅):** `SKILL.md` dibiarkan ramah token (~120–160 baris), hanya memadai manifesto *Core Protocol*, panduan *Swarm Dispatcher Routing*, tabel Auto-Detect Niche, dan resep verifikasi terminal. Seluruh materi detail teknis dipecah merata ke direktori `references/`.
 
 ❌ **Anti-Pattern 2: File Stubs Tipis & Pemalas**
-*   **Salah (❌):** Membuat file referensi seperti `references/realtime_eventing/websocket.md` yang hanya berisi 18 baris narasi pendek "Gunakan library socket.io dan pastikan koneksi stabil." Ini adalah sampah digital yang merugikan.
+*   **Salah (❌):** Membuat file referensi seperti `references/<domain>/topic.md` yang hanya berisi 18 baris narasi pendek "Gunakan library X dan pastikan koneksi stabil." Ini adalah sampah digital yang merugikan.
 *   **Benar (✅):** File referensi harus berbobot dan padat (>130 baris), membedah internal arsitektur, diagram ASCII, *Connection Lifetime*, *Heartbeat Ping/Pong*, pencegahan *Memory Leaks di Goroutine/Event Loop*, *Horizontal Scaling dengan Redis Pub/Sub*, dan contoh implementasi kode produksi lengkap yang bebas dari tulisan `// TODO`.
 
 ## 8. Production Edge Cases

@@ -9,7 +9,7 @@
 | 3 core tetap | Arsitektur · Database/Storage · Keamanan OWASP · Konkurensi · DevOps/Container |
 | +1 per domain niche | sesuai tabel Auto-Detect pada skill stack terkait (K8s Operator, HFT zero-alloc, Fintech ledger, AI Scout, dll) |
 
-DILARANG menulis kode atau menerbitkan `implementation_plan.md` sebelum seluruh subagent melapor.
+DILARANG menulis kode atau menerbitkan dokumen RFC (`docs/rfc/`) sebelum seluruh subagent melapor.
 
 ## 2. Day-0 Quintet — WAJIB ada di root
 

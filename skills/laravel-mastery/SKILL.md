@@ -9,12 +9,14 @@ SSOT arsitektur & rekayasa Laravel enterprise, SaaS high-throughput, dan resilie
 
 ## 🚦 Protokol Eksekusi (WAJIB dibaca sesuai situasi)
 
+> **SEBELUM membuka tabel di bawah:** Jika ini adalah proyek baru atau keputusan arsitektur besar, WAJIB lewati `master_decision_tree.md` (`~/.gemini/config/skills/master-decision-tree/SKILL.md`) terlebih dahulu. DILARANG langsung memilih Laravel sebagai stack tanpa justifikasi dari Decision Tree.
+
 | Situasi | WAJIB baca dulu sebelum menulis apa pun |
 | :--- | :--- |
 | Inisiasi project baru dari nol (empty folder / new repository) | `references/_protocol/greenfield.md` |
 | Tambah fitur / modifikasi / optimasi / audit di repo eksisting | `references/_protocol/brownfield.md` |
 
-DILARANG membuat `implementation_plan.md` atau menulis kode sebelum protokol yang relevan dibaca tuntas.
+DILARANG membuat dokumen RFC (`docs/rfc/`) atau menulis kode sebelum protokol yang relevan dibaca tuntas.
 
 ## 📦 Core References (WAJIB Baca Setiap Project Laravel)
 

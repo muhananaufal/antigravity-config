@@ -19,6 +19,8 @@ SSOT arsitektur backend TypeScript enterprise (36 Domain, 138 Berkas). Zero-Tole
 
 ## 🚦 Protokol Eksekusi (WAJIB dibaca sesuai situasi)
 
+> **SEBELUM membuka tabel di bawah:** Jika ini adalah proyek baru atau keputusan arsitektur besar, WAJIB lewati `master_decision_tree.md` (`~/.gemini/config/skills/master-decision-tree/SKILL.md`) terlebih dahulu. DILARANG langsung memilih NestJS sebagai stack tanpa justifikasi dari Decision Tree.
+
 | Situasi | WAJIB baca dulu sebelum menulis apa pun |
 | :--- | :--- |
 | Inisiasi project baru dari nol | `references/_protocol/greenfield.md` |
@@ -26,7 +28,7 @@ SSOT arsitektur backend TypeScript enterprise (36 Domain, 138 Berkas). Zero-Tole
 | Operasi menyentuh >3 berkas atau >3 domain | `references/_protocol/greenfield.md` bagian **Swarm Research Protocol** |
 | Keputusan arsitektur / menantang pilihan stack (Challenger Mode) | `references/_protocol/tradeoff.md` |
 
-DILARANG membuat `implementation_plan.md` atau menulis kode sebelum protokol yang relevan dibaca tuntas.
+DILARANG membuat dokumen RFC (`docs/rfc/`) atau menulis kode sebelum protokol yang relevan dibaca tuntas.
 
 ---
 
@@ -93,10 +95,12 @@ DILARANG mengubah status task jadi `[x]` sebelum SEMUA gerbang ini lulus.
 
 | Gerbang | Perintah | Kriteria lulus |
 | :--- | :--- | :--- |
-| Kode proyek | `powershell -NoProfile -ExecutionPolicy Bypass -File ~/.gemini/config/scripts/quality_gate.ps1 -Full` | nol placeholder, nol credential hardcode |
+| **Global Quality Gate** | `powershell -NoProfile -ExecutionPolicy Bypass -File ~/.gemini/config/scripts/quality_gate.ps1 -Full` | nol placeholder, nol credential hardcode, test lulus |
 | TypeScript | `tsc --noEmit` | nol error |
 | Linter | `eslint .` | nol warning |
 | Test | `jest` / SWC | nol kegagalan |
+
+> **PENTING:** Global Quality Gate (`quality_gate.ps1`) adalah gerbang primer yang WAJIB dijalankan. Tabel bahasa di atas adalah pelengkap spesifik NestJS — tidak menggantikan global gate.
 
 Ditolak bila ditemukan: warning kompilasi TypeScript · kegagalan ESLint · unit test Jest/SWC gagal · placeholder malas (`// TODO`, `// FIXME`) · kredensial statis yang tidak diambil dari `.env`.
 

@@ -1,4 +1,4 @@
-$dirs = @('C:\Users\muhan\.gemini\config\skills\golang-mastery\references\security_owasp', 'C:\Users\muhan\.gemini\config\skills\golang-mastery\references\cybersecurity_zerotrust', 'C:\Users\muhan\.gemini\config\skills\golang-mastery\references\cloud_native_k8s_operators')
+$dirs = @("C:\Users\muhan\.gemini\config\skills\golang-mastery\references\security_owasp", "C:\Users\muhan\.gemini\config\skills\golang-mastery\references\cybersecurity_zerotrust", "C:\Users\muhan\.gemini\config\skills\golang-mastery\references\cloud_native_k8s_operators")
 foreach ($d in $dirs) {
     if (Test-Path $d) {
         $files = Get-ChildItem -Path $d -Filter *.md

@@ -162,14 +162,32 @@ if ($Transcript -and (Test-Path -LiteralPath $Transcript)) {
     }
 }
 
-# --- Gate 3 (hanya -Full): linter + test sesuai stack ---
+# --- Gate 3 (hanya -Full): linter + test sesuai stack (Monorepo & Sub-Root Aware) ---
 $ranCommands = @()
 if ($Full) {
-    $stacks = @()
-    if (Test-Path (Join-Path $Path 'go.mod'))        { $stacks += 'go' }
-    if (Test-Path (Join-Path $Path 'Cargo.toml'))    { $stacks += 'rust' }
-    if (Test-Path (Join-Path $Path 'composer.json')) { $stacks += 'php' }
-    if (Test-Path (Join-Path $Path 'package.json'))  { $stacks += 'node' }
+    $projectUnits = @() # array of PSCustomObject @{ Dir = ...; Rel = ...; Stack = ... }
+
+    function Find-Manifests([string]$baseDir) {
+        $units = @()
+        # 1. Cek root direktori
+        if (Test-Path (Join-Path $baseDir 'go.mod'))        { $units += [PSCustomObject]@{ Dir = $baseDir; Rel = '.'; Stack = 'go' } }
+        if (Test-Path (Join-Path $baseDir 'Cargo.toml'))    { $units += [PSCustomObject]@{ Dir = $baseDir; Rel = '.'; Stack = 'rust' } }
+        if (Test-Path (Join-Path $baseDir 'composer.json')) { $units += [PSCustomObject]@{ Dir = $baseDir; Rel = '.'; Stack = 'php' } }
+        if (Test-Path (Join-Path $baseDir 'package.json'))  { $units += [PSCustomObject]@{ Dir = $baseDir; Rel = '.'; Stack = 'node' } }
+
+        # 2. Jika di root kosong atau struktur monorepo, telusuri subfolder (depth 1..2)
+        $subDirs = Get-ChildItem -LiteralPath $baseDir -Directory -Depth 2 -ErrorAction SilentlyContinue | Where-Object { -not (Test-Skipped $_.FullName) }
+        foreach ($sd in $subDirs) {
+            $relPath = $sd.FullName.Substring($baseDir.Length).TrimStart('\','/')
+            if (Test-Path (Join-Path $sd.FullName 'go.mod'))        { $units += [PSCustomObject]@{ Dir = $sd.FullName; Rel = $relPath; Stack = 'go' } }
+            if (Test-Path (Join-Path $sd.FullName 'Cargo.toml'))    { $units += [PSCustomObject]@{ Dir = $sd.FullName; Rel = $relPath; Stack = 'rust' } }
+            if (Test-Path (Join-Path $sd.FullName 'composer.json')) { $units += [PSCustomObject]@{ Dir = $sd.FullName; Rel = $relPath; Stack = 'php' } }
+            if (Test-Path (Join-Path $sd.FullName 'package.json'))  { $units += [PSCustomObject]@{ Dir = $sd.FullName; Rel = $relPath; Stack = 'node' } }
+        }
+        return $units
+    }
+
+    $projectUnits = @(Find-Manifests $Path)
 
     $cmds = @{
         go   = @('go vet ./...','go test -race ./...')
@@ -178,26 +196,29 @@ if ($Full) {
         node = @('npm test --silent')
     }
 
-    Push-Location $Path
-    try {
-        foreach ($s in $stacks) {
-            foreach ($c in $cmds[$s]) {
-                $exe = ($c -split ' ')[0]
-                if (-not (Get-Command $exe -ErrorAction SilentlyContinue) -and -not (Test-Path $exe)) {
-                    Write-Output "SKIP  $c  (perkakas tidak terpasang)"
-                    continue
+    if ($projectUnits.Count -eq 0) {
+        Write-Output "SKIP  deteksi stack gagal - tidak ada go.mod/Cargo.toml/composer.json/package.json di root maupun subfolder (depth 2)"
+    } else {
+        foreach ($unit in $projectUnits) {
+            Push-Location $unit.Dir
+            try {
+                foreach ($c in $cmds[$unit.Stack]) {
+                    $exe = ($c -split ' ')[0]
+                    if (-not (Get-Command $exe -ErrorAction SilentlyContinue) -and -not (Test-Path $exe)) {
+                        Write-Output "SKIP  [$($unit.Rel)] $c  (perkakas tidak terpasang)"
+                        continue
+                    }
+                    Write-Output "RUN   [$($unit.Rel)] $c"
+                    $out = & cmd /c "$c 2>&1"
+                    $ranCommands += "[$($unit.Rel)] $c"
+                    if ($LASTEXITCODE -ne 0) {
+                        $violations.Add("GAGAL        [$($unit.Rel)] $c (exit $LASTEXITCODE)")
+                        ($out | Select-Object -Last 25) | ForEach-Object { Write-Output "      $_" }
+                    }
                 }
-                Write-Output "RUN   $c"
-                $out = & cmd /c "$c 2>&1"
-                $ranCommands += $c
-                if ($LASTEXITCODE -ne 0) {
-                    $violations.Add("GAGAL        $c (exit $LASTEXITCODE)")
-                    ($out | Select-Object -Last 25) | ForEach-Object { Write-Output "      $_" }
-                }
-            }
+            } finally { Pop-Location }
         }
-        if ($stacks.Count -eq 0) { Write-Output "SKIP  deteksi stack gagal - tidak ada go.mod/Cargo.toml/composer.json/package.json" }
-    } finally { Pop-Location }
+    }
 }
 
 # --- Laporan ---

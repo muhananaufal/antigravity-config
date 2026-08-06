@@ -11,7 +11,7 @@
 | Security & Resilience | `security_owasp/` `observability_resilience/` `distributed_patterns_resilience/` `caching_strategy/` |
 | +1 per domain niche | sesuai tabel Auto-Detect di `SKILL.md` |
 
-3 core WAJIB, niche elastis — 4 niche terdeteksi berarti 7 subagent paralel. DILARANG menulis `implementation_plan.md` sebelum semua subagent melapor.
+3 core WAJIB, niche elastis — 4 niche terdeteksi berarti 7 subagent paralel. DILARANG menulis dokumen RFC (`docs/rfc/`) sebelum semua subagent melapor.
 
 ## 2. Day-0 Quintet — WAJIB ada di root
 

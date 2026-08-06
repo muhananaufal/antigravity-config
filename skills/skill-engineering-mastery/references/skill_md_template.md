@@ -40,9 +40,9 @@ Digunakan saat menangani repositori eksisting/legacy.
 
 ## 4. Tabel Auto-Detect Niche Domain
 
-Agen wajib melakukan *parsing* manifes proyek untuk menentukan file Niche mana dari direktori `references/niche/` yang harus dimuat oleh Subagent.
+Agen wajib melakukan *parsing* manifes proyek untuk menentukan file Niche mana dari direktori `references/` yang harus dimuat oleh Subagent.
 
-| Deteksi (Regex / Dependency Match) | Kondisi Repositori | File Niche yang Dipicu (`references/niche/...`) | Subagent Role |
+| Deteksi (Regex / Dependency Match) | Kondisi Repositori | File Niche yang Dipicu (`references/...`) | Subagent Role |
 | :--- | :--- | :--- | :--- |
 | `github.com/redis/go-redis` | Proyek Golang menggunakan Redis | `caching_redis_pubsub.md` | Redis Optimization Engineer |
 | `"react": "^18.0.0"` | Proyek Node.js dengan React | `react_concurrent_mode.md` | React Architecture Specialist |
