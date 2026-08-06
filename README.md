@@ -1,7 +1,7 @@
-# ⚡ AETHERIS — Autonomous Engineering & Governance Ecosystem
+# ⚡ AETHERIS — Autonomous Software Engineering Engine
 
 > **SSOT (Single Source of Truth) Architecture & Knowledge Engine**  
-> Repositori konfigurasi sentral untuk mengontrol seluruh kapabilitas, aturan tata kelola, protokol rekayasa perangkat lunak (*Software Engineering*), memori persisten, integrasi multi-tool, dan *domain mastery* standar Principal Engineer (L7/L8).
+> Repositori konfigurasi sentral untuk mengontrol seluruh kapabilitas, aturan arsitektur, protokol rekayasa perangkat lunak (*Software Engineering*), memori persisten, integrasi multi-tool, dan *domain mastery* standar Principal Engineer (L7/L8).
 
 ---
 
@@ -266,4 +266,4 @@ Seluruh komponen dalam ekosistem ini diaudit secara berkala dengan garansi:
 * ✅ **100% Conventional Commits Compliance** dengan Dual-Avatar Attribution.
 
 ---
-*Dikelola dan dirawat oleh AETHERIS Autonomous Engineering & Governance Team.*
+*Dikelola dan dirawat oleh AETHERIS Autonomous Engineering Team.*
