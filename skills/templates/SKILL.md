@@ -30,12 +30,19 @@ Dokumen tunggal terpadu untuk perancangan fitur baru, refactor besar, atau inisi
 # RFC: <Judul Fitur atau Inisiatif Sistem>
 
 - **Status:** `PROPOSED` | `ACCEPTED` | `IMPLEMENTED` | `SUPERSEDED`
+- **RFC Tier (T-Shirt Size):** `Tier 1 (Full RFC)` | `Tier 2 (Mini RFC 1-Pager)`
+  <!-- Tier 1: Perubahan arsitektur/DB, high-load, breaking API. Tier 2: Penambahan endpoint sederhana, minor rework -->
 - **Tanggal:** YYYY-MM-DD
 - **Target Branch:** `feature/<nama-fitur>`
+- **RACI Governance Matrix (Top 1% VP Standard):**
+  - **Responsible (Author):** AI Main Agent / Lead Engineer
+  - **Accountable (Approver):** User / Principal Architect (Menunggu kata "Gasskan")
+  - **Consulted (Security & QA):** Adversarial QA Subagent / Domain Mastery Reference
+  - **Informed (Stakeholders):** Tim Operasional, Tim Frontend, Tim Support
 
 ---
 
-## 1. Konteks & Problem Statement (PRD Core)
+## 1. Konteks & Problem Statement (PRD & AWS Working Backwards Core)
 - **Latar Belakang & Urgensi:** <!-- Masalah nyata yang dipecahkan, dampak bisnis/sistem, dan alasan kenapa harus dikerjakan sekarang -->
 - **Scope Boundaries:**
   - **IN-SCOPE:** <!-- Fitur, modul, endpoint, dan kapabilitas konkret yang akan dibangun -->
@@ -44,6 +51,10 @@ Dokumen tunggal terpadu untuk perancangan fitur baru, refactor besar, atau inisi
   - **Target Throughput / Load:** `[fakta/inferensi/spekulasi]` <!-- misal: 2.500 RPS peak, 50jt records/hari -->
   - **Latency SLA:** `p95 < 50ms`, `p99 < 150ms`
   - **Asumsi Sistem & Tenant:** <!-- B2B/B2C, multi-tenant RLS, single-region/multi-region, RPO/RTO target -->
+- **AWS Working Backwards (Adversarial PR/FAQ & Buy vs. Build Justification):**
+  - **Buy vs. Build vs. Partner:** <!-- Justifikasi klinis mengapa merakit di internal ketimbang adopsi SaaS / Open-Source library eksisting ("Code is a liability") -->
+  - **FAQ 1: Apa yang terjadi bila beban trafik melonjak 5x dari asumsi awal dalam semalam?** -> <!-- Evaluasi elastisitas sistem & bottleneck kritis -->
+  - **FAQ 2: Bagaimana fallback experience bagi pelanggan jika dependensi pihak ketiga (payment, SSO, broker) mengalami outage mati total?** -> <!-- Degradasi graceful (202 Accepted / offline cache) -->
 
 ---
 
@@ -95,15 +106,20 @@ sequenceDiagram
 - **Pola Migrasi DB:** `Expand and Contract Pattern` <!-- Tahap 1: Tambah kolom nullable; Tahap 2: Dual-write & backfill; Tahap 3: Contract/Drop kolom usang -->
 - **Data Consistency & Isolation:** <!-- ACID Transaction boundary, isolation level (Read Committed / Serializable), Lock strategy (Optimistic / Pessimistic) -->
 
-### 3.3 Kontrak API & Event Interface
+### 3.3 FinOps, Unit Economics & Data Lifecycle (TTL & Cold Storage)
+- **Unit Economics Target:** <!-- Perhitungan estimasi ongkos komputasi/storage, misal: < $0.05 per 1.000 request atau $2 / active tenant / bulan -->
+- **Data Retention & Pruning Strategy (TTL):** <!-- Kapan data operasional dihapus atau di-prune agar tabel tidak meledak ruah (misal: log event dibersihkan setelah 30 hari) -->
+- **Cold Storage Archival:** <!-- Kebijakan pemindahan data historis mati ke storage berbiaya rendah (S3 Glacier / parquet dump) paska 90 hari -->
+
+### 3.4 Kontrak API & Event Interface
 - **Endpoint / Protobuf / Message Payload:** <!-- Request/Response schema, Error codes, Header Idempotency-Key -->
 - **Backward Compatibility:** <!-- Jaminan nol breaking changes terhadap client/consumer eksisting -->
 
-### 3.4 Penanganan Konkurensi, Race Conditions & Failure Domains
+### 3.5 Penanganan Konkurensi, Race Conditions & Failure Domains
 - **Idempotency & Deduplication:** <!-- Pencegahan double-spending / double-execution (Idempotency Key, Unique Constraint, Distributed Lock) -->
 - **Failure & Degradation Modes:** <!-- Circuit breaker, fallback cache, timeout handling saat downstream service mati -->
 
-### 3.5 STRIDE Threat Model & Security Perimeter
+### 3.6 STRIDE Threat Model & Security Perimeter
 | Vektor Ancaman STRIDE | Potensi Celah / Skenario Serangan | Mitigasi Arsitektural & Guardrails |
 | :--- | :--- | :--- |
 | **Spoofing** (Pemalsuan identitas) | Peniruan caller / fake client token | Verifikasi JWT RS256 / HMAC Signature + Webhook Secret |
@@ -157,13 +173,17 @@ sequenceDiagram
 
 ---
 
-## 6. Prosedur Rollback & Canary Strategy
+## 6. Prosedur Rollback, On-Call Runbook & Cross-Functional Blast Radius
+- **Cross-Functional & Downstream Blast Radius (VP Standard):**
+  - **Upstream / Downstream Services Terdampak:** <!-- Daftar service atau antarmuka yang akan putus/melambat apabila fitur ini mengalami crash atau latency spike -->
+  - **Customer Support Triage Guidance:** <!-- Skrip penjelasan & status code apa yang harus disampaikan tim support jika user mengalami transaksi pending/gagal -->
 - **Feature Flag / Canary Ramp-up:** `FLAG_NAME` <!-- Default OFF -> 5% -> 25% -> 100% -->
 - **Pemicu Rollback (Rollback Triggers):** Error rate > 0.5% atau p99 latency > 250ms selama 2 menit berturut-turut.
-- **Langkah Rollback Cepat:**
-  1. Matikan feature flag / revert service deploy.
-  2. Perintah rollback skema DB (aman dieksekusi karena skema backward-compatible): `migrate down 1`.
-  3. Verifikasi status kesehatan downstream service.
+- **Langkah Rollback & 3 AM On-Call Emergency Runbook:**
+  1. **Triase Cepat:** Periksa dashboard RED metric & structured log pada `trace_id` terkait. Jika error rate memuncak, langsung lakukan mitigasi step 2 tanpa menunggu persetujuan.
+  2. **Matikan Feature Flag / Revert Traffic:** Kembalikan traffic ke jalur eksisting / revert service image kubernetes ke previous release.
+  3. **Rollback Skema DB:** Eksekusi migrasi mundur (aman karena skema backward-compatible): `migrate down 1`.
+  4. **Verifikasi Kesehatan:** Konfirmasikan pemulihan status kesehatan downstream service & bersihkan dead-letter queue (DLQ) jika diperlukan.
 ```
 
 ---
@@ -175,14 +195,16 @@ Wajib berada di `docs/rfc/README.md`. Bertindak sebagai registri arsitektur sent
 ```markdown
 # 📚 RFC Architecture Catalog & Master Index
 
-Dokumentasi rancangan arsitektur, keputusan sistem (ADR), dan riwayat implementasi teknis.
+Dokumentasi rancangan arsitektur, keputusan sistem (ADR), dan riwayat implementasi teknis berstandar Top 1% Vice Principal Engineering (L8/L9).
 
-| RFC ID | Inisiatif Fitur / Arsitektur | Domain / Modul | Target Branch | Status | Tanggal Rilis |
-| :--- | :--- | :--- | :--- | :---: | :---: |
-| `20260801` | [Order State Machine](20260801-order-state-machine.md) | Order / Core | `feature/order-sm` | `IMPLEMENTED` | 2026-08-01 |
-| `20260806` | [Payment Resilience & Idempotency](20260806-payment-idempotency.md) | Fintech | `feature/pay-retry` | `ACCEPTED` | 2026-08-06 |
+| RFC ID | Inisiatif Fitur / Arsitektur | Tier (T-Shirt) | Domain / Modul | Target Branch | Status | Tanggal Rilis |
+| :--- | :--- | :--- | :--- | :--- | :---: | :---: |
+| `20260801` | [Order State Machine](20260801-order-state-machine.md) | `Tier 1 (Full)` | Order / Core | `feature/order-sm` | `IMPLEMENTED` | 2026-08-01 |
+| `20260806` | [Payment Resilience & Idempotency](20260806-payment-idempotency.md) | `Tier 1 (Full)` | Fintech | `feature/pay-retry` | `ACCEPTED` | 2026-08-06 |
 
-### Panduan Siklus Status RFC:
+### Panduan Siklus Status & Klasifikasi RFC Tiering:
+* `Tier 1 (Full RFC)`: Perubahan arsitektur sistem baru, pemecahan monolit, migrasi skema DB berisiko tinggi, atau breaking API. Menggunakan seluruh 6 Bab kerangka lengkap.
+* `Tier 2 (Mini RFC 1-Pager)`: Penambahan endpoint lokal non-breaking, optimasi query minor, atau tweak internal modul. Dipadatkan dalam <2 halaman dengan tetap mematuhi gerbang mutu.
 * `PROPOSED`: Sedang dalam tahap perancangan & review (menunggu "Gasskan").
 * `ACCEPTED`: Telah disetujui user ("Gasskan"), siap/sedang dieksekusi.
 * `IMPLEMENTED`: Seluruh batch task tuntas dan lolos Quality Gate.
