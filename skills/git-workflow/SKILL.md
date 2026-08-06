@@ -316,6 +316,23 @@ git add tests/
 git commit -m "test(order): add integration tests for order creation"
 ```
 
+### Co-Author Attribution Protocol (Pair Programming Trailer)
+
+Untuk memunculkan atribusi kolaborasi ganda (*dual avatar*) di GitHub / GitLab, pesan commit yang dibuat oleh AI Agent dapat menyertakan Git trailer `Co-authored-by:` di bagian footer:
+
+```text
+feat(auth): implement jwt rs256 verification and test suite
+
+Implement RS256 token validation with fail-fast env checks and unit tests.
+
+Co-authored-by: Antigravity <antigravity@google.com>
+```
+
+> **Catatan Platform:**
+> - Saat berjalan di **Google Antigravity:** gunakan `Co-authored-by: Antigravity <antigravity@google.com>`
+> - Saat berjalan di **Claude Code:** gunakan `Co-authored-by: Claude <noreply@anthropic.com>`
+> - Trailer diletakkan di **baris paling akhir** setelah 1 baris kosong (*blank line*) pemisah.
+
 ### Rollback Protocol — Jika Quality Gate Gagal Mid-Atomic
 
 Skenario: Commit 1 & 2 sudah dilakukan, Commit 3 gagal Quality Gate.
