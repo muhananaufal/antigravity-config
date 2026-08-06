@@ -6,7 +6,7 @@
 # <body>                               ← OPTIONAL (wrap at 72 chars)
 #
 # <footer>                             ← OPTIONAL
-#   Co-authored-by: Antigravity <antigravity@google.com>
+#   Co-authored-by: aetheris <agents.aetheris@gmail.com>
 # ──────────────────────────────────────────────
 #
 # Types:
@@ -36,5 +36,5 @@
 #
 #   Implement secure OAuth2 token exchange with PKCE support.
 #
-#   Co-authored-by: Antigravity <antigravity@google.com>
+#   Co-authored-by: aetheris <agents.aetheris@gmail.com>
 #
