@@ -128,6 +128,7 @@ DILARANG mengubah status task jadi `[x]` sebelum SEMUA butir ini lulus.
 > untuk sekalian linter + test suite.
 
 - **Test & lint:** `go test -race` / `cargo test` / `composer test` / `pnpm test` sesuai stack, plus linter. Harness belum ada → WAJIB rekomendasikan.
+- **Non-Tautological Assertions & Regression Banking:** Test DILARANG tautologis (misal hanya `assertNotNull(res)` tanpa cek isi data). Asersi WAJIB memvalidasi state mutasi nyata dan error code spesifik. Setiap bugfix/RCA WAJIB meninggalkan minimal 1 regression test permanen di suite.
 - **Type-safety:** nol untyped bypass (lihat §0.4).
 - **Error handling:** setiap error ditangani terstruktur. DILARANG di-swallow atau diabaikan.
 - **Zero placeholder:** lihat §0.3. Rahasia WAJIB lewat `.env` + schema validation.
@@ -150,9 +151,11 @@ DILARANG mengubah status task jadi `[x]` sebelum SEMUA butir ini lulus.
 | :--- | :--- |
 | Perlu membaca referensi >3 domain | WAJIB `invoke_subagent` paralel, 1 subagent per domain |
 | Pekerjaan independen bisa serentak | WAJIB subagent paralel |
+| Evaluasi fitur kritis / RFC Batch 3 | Opsional spawn subagent `pro` sebagai **Skeptical Adversarial QA** untuk stress-test edge case & race condition |
 | Edit ≤3 berkas, bugfix minor, investigasi, atau butuh context parent | DILARANG spawn subagent |
 
 - **Subagent DILARANG MENULIS.** Subagent hanya boleh membaca file, search, dan execute read-only commands (termasuk test runner dan linter). Subagent DILARANG: `write_to_file`, `replace_file_content`, `multi_replace_file_content`, `git commit`, `git checkout -b`, `git push`, install dependency, atau perintah apa pun yang mengubah filesystem/Git history. **Hanya Main Agent yang menulis file dan mengelola Git.**
+- **DAG Task Dependency:** Batch tugas di RFC diorganisasi dengan dependensi eksplisit (`DependsOn: [Batch X]`) agar alur eksekusi deterministik.
 - **Contract-First & Schema Locking:** Pada Batch 1 dari task multi-file, kunci seluruh antarmuka (interface / struct / DTO / schema migration) terlebih dahulu sebelum menulis business logic di Batch 2 & 3.
 - **Batch Writing Protocol:** Jika Main Agent harus menulis >5 file dalam satu task, WAJIB memecahnya menjadi batch maks 3-4 file per turn. Setelah tiap batch: jalankan test relevan → lakukan atomic commit → baru lanjut batch berikutnya. Mencampur terlalu banyak file dalam 1 turn menyebabkan truncation dan `// TODO` siluman.
 - **Model tier:** default SEMUA subagent ke `pro`. `flash` HANYA untuk task trivial (hitung berkas, grep, list direktori).

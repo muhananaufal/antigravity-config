@@ -83,23 +83,30 @@ Dokumen tunggal terpadu untuk perancangan fitur baru, refactor besar, atau inisi
 
 ---
 
-## 4. Rencana Eksekusi & Living Task Checklist (Batch Protocol §7)
+## 4. Rencana Eksekusi & Living Task Checklist (DAG & Batch Protocol §7)
 <!-- ATURAN KANBAN: Maksimal 2 item berstatus [/] (WIP) bersamaan. Centang [x] setelah batch terverifikasi -->
 
-### Batch 1: Core Domain & Data Migration
+### Batch 1: Schema Locking & Contract Initialization
+* **DependsOn:** `[]` (Fondasi Awal)
+* **Goal:** Kunci seluruh interface, DTO, struct, dan migration schema sebelum menulis business logic.
 - [ ] `[NEW]` `path/to/migration_file.sql`
 - [ ] `[NEW]` `path/to/domain_entity.go`
-- [ ] Verifikasi & Unit Test Batch 1 (Pass)
+- [ ] Verifikasi & Unit Test Contract Batch 1 (Pass)
 
 ### Batch 2: Application Logic & Port/Adapter Implementation
+* **DependsOn:** `[Batch 1]`
+* **Goal:** Implementasikan service core, use-cases, dan repository adapters.
 - [ ] `[NEW]` `path/to/service.go`
 - [ ] `[NEW]` `path/to/repository.go`
 - [ ] Verifikasi & Integration Test Batch 2 (Pass)
 
 ### Batch 3: Delivery Layer, HTTP/gRPC Transport & Wiring
+* **DependsOn:** `[Batch 2]`
+* **Goal:** Hubungkan route, controller handler, middleware, dan jalankan E2E sanity.
 - [ ] `[MODIFY]` `path/to/handler.go`
 - [ ] `[MODIFY]` `path/to/router.go`
 - [ ] Verifikasi E2E, Linting & Route Sanity Batch 3 (Pass)
+- [ ] *(Opsional)* Evaluasi Adversarial QA Subagent (Pass)
 
 ---
 
