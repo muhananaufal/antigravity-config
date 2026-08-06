@@ -182,10 +182,12 @@ Koleksi template baku L7/L8:
 * `docs/rca/YYYYMMDD-<insiden>.md`: Post-Mortem 5-Whys Blameless Root Cause Analysis.
 * `system_map.md`: Living Architecture Map & Topologi SSOT.
 * `Laporan Hasil Test & Patch Receipt`: Format bukti verifikasi SOTA dengan Proof-of-Defect TDD Harness.
+* `tests/regression/`: Spesifikasi format Failure Banking Artifact untuk mengunci kekebalan terhadap bug masa lalu.
 
 ### 7. `git-workflow`
 * Protokol Git Flow (`feature/*`, `fix/*`, `chore/*`).
 * Conventional Commits (`feat:`, `fix:`, `refactor:`, `chore:`).
+* **Stacked PRs & Micro-Branching (Devin Protocol):** Branching terisolasi per batch RFC untuk integrasi bertahap yang aman.
 * **Dual-Avatar Attribution Trailer:**
   ```text
   Co-authored-by: Antigravity <antigravity@google.com>
@@ -221,9 +223,10 @@ Sistem pengawasan kualitas otomatis dijalankan setiap kali agen menyelesaikan gi
 ### Mekanisme Pemeriksaan `scripts/quality_gate.ps1`:
 1. **Gate 1 (Placeholder Blocker):** Memindai dan memblokir keberadaan `// TODO`, `FIXME`, `implement later`, `your code here`.
 2. **Gate 2 (Secret Hardcode Blocker):** Mendeteksi private keys, API keys (`sk_live_...`, tokens), dan DB passwords.
-3. **Gate 3 (Untyped Bypass Blocker):** Mendeteksi penggunaan `any` (TS), raw `interface{}` (Go), dan `unwrap()` tanpa error handling (Rust).
-4. **Gate 4 (Phantom Test Prevention):** Memastikan perubahan pada berkas sumber diiringi eksekusi test runner riil.
-5. **Monorepo Sub-Root Matcher:** Otomatis mendeteksi keberadaan manifest di subfolder (`apps/`, `services/`) untuk memicu test runner yang tepat.
+3. **Gate 2b (Untyped Bypass Blocker):** Memblokir `any` (TS), raw `unwrap()` (Rust), dan raw `interface{}` (Go) pada baris baru.
+4. **Gate 2c (Empty Test Blocker):** Mendeteksi fungsi test kosong atau closures tanpa asersi (Meta TestGen-LLM standard).
+5. **Gate 4 (Phantom Test Prevention):** Memastikan perubahan pada berkas sumber diiringi eksekusi test runner riil.
+6. **Monorepo Sub-Root Matcher:** Otomatis mendeteksi keberadaan manifest di subfolder (`apps/`, `services/`) untuk memicu test runner yang tepat.
 
 ---
 

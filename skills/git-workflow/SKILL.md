@@ -124,6 +124,23 @@ feat: → minor bump  (1.0.0 → 1.1.0)
 
 ---
 
+## §2b. STACKED PRs & MICRO-BRANCHING (SOTA Devin Protocol)
+
+Untuk fitur besar berbasis All-in-One RFC yang mencakup banyak batch tugas:
+
+```
+develop
+  ├── feature/rfc-20260806-core-schema (Batch 1: Contract Locking & Migrations)
+  │     └── feature/rfc-20260806-domain-logic (Batch 2: Services & Repositories)
+  │           └── feature/rfc-20260806-http-transport (Batch 3: Controllers & E2E)
+```
+
+1. **Micro-Branching per Batch:** Setiap batch RFC yang bersifat independen dikerjakan dalam branch terisolasi yang di-stack di atas batch sebelumnya.
+2. **Atomic Verification Gate:** Setiap micro-branch wajib melewati seluruh test unit/integrasi dan quality gate sebelum di-merge ke branch fitur utama (`feature/rfc-*`).
+3. **Clean Squash/Rebase:** Saat seluruh batch selesai, branch di-squash/rebase secara bersih ke `develop` dengan melampirkan Patch Receipt lengkap.
+
+---
+
 ## §3. PROTOKOL GREENFIELD (Proyek Baru)
 
 Urutan langkah yang WAJIB diikuti saat membuat proyek dari nol:

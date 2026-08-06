@@ -314,3 +314,28 @@ WAJIB memuat perintah yang dijalankan **dan** outputnya apa adanya. DILARANG men
    PASS
    ```
 ```
+
+---
+
+## 7. `tests/regression/` & Failure Banking Artifact Specification
+
+Setiap perbaikan bug atau insiden post-mortem (RCA) **WAJIB meninggalkan artefak regression test permanen** dengan konvensi penamaan standar:
+
+```markdown
+### Standar File Regression Test:
+- **Go:** `tests/regression/issue_<YYYYMMDD>_<deskripsi>_test.go`
+- **Rust:** `tests/regression_issue_<YYYYMMDD>_<deskripsi>.rs`
+- **TypeScript:** `tests/regression/issue-<YYYYMMDD>-<deskripsi>.test.ts`
+- **Laravel/PHP:** `tests/Feature/Regression/Issue<YYYYMMDD><Deskripsi>Test.php`
+
+### Struktur Wajib di Dalam File Regression Test:
+```go
+// Package regression mengunci kekebalan sistem terhadap regresi issue masa lalu.
+// Reference: docs/rca/YYYYMMDD-<insiden>.md / Git Commit <sha>
+func TestRegression_IssueYYYYMMDD_DeskripsiBug(t *testing.T) {
+    // 1. Setup kondisi pemicu defect
+    // 2. Eksekusi aksi yang sebelumnya memicu crash / invalid state
+    // 3. Asersi non-tautologis: pastikan error ditangani graceful & state tetap valid
+}
+```
+

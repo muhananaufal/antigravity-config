@@ -142,6 +142,53 @@ foreach ($f in $targets) {
         if (Test-IsNew $f.FullName $h.LineNumber) { $violations.Add($msg) } else { $preexisting.Add($msg) }
     }
 }
+# --- Gate 2b: untyped bypasses (any in TS, raw unwrap in Rust, raw interface{} in Go) ---
+$UNTYPED_TS = ':\s*any\b|<any>|\bas\s+any\b'
+$UNTYPED_RS = '\.unwrap\(\)'
+$UNTYPED_GO = 'interface\{\}'
+
+foreach ($f in $targets) {
+    $pattern = $null
+    if ($f.Extension -in @('.ts','.tsx')) { $pattern = $UNTYPED_TS }
+    elseif ($f.Extension -eq '.rs')      { $pattern = $UNTYPED_RS }
+    elseif ($f.Extension -eq '.go')      { $pattern = $UNTYPED_GO }
+
+    if ($pattern) {
+        $hits = Select-String -LiteralPath $f.FullName -Pattern $pattern -AllMatches -ErrorAction SilentlyContinue
+        foreach ($h in $hits) {
+            $line = $h.Line
+            # Lewati komentar
+            if ($line -match '^\s*(//|/\*|\*)') { continue }
+            $msg = "UNTYPED_BYPASS $($f.FullName):$($h.LineNumber)  $($line.Trim())"
+            if (Test-IsNew $f.FullName $h.LineNumber) { $violations.Add($msg) } else { $preexisting.Add($msg) }
+        }
+    }
+}
+
+# --- Gate 2c: empty / tautological test detection ---
+foreach ($f in $targets) {
+    if ($f.Name -match '(_test\.go|\.test\.(ts|js|tsx|jsx)|Test\.php|tests/.*\.rs|test_.*\.py)$') {
+        $lines = Get-Content -LiteralPath $f.FullName -ErrorAction SilentlyContinue
+        for ($i = 0; $i -lt $lines.Count; $i++) {
+            $l = $lines[$i]
+            # Deteksi Go empty test: func TestXxx(t *testing.T) {}
+            if ($l -match 'func\s+Test\w+\([^)]*\)\s*\{\s*\}') {
+                $msg = "EMPTY_TEST   $($f.FullName):$($i+1)  Empty test function detected"
+                if (Test-IsNew $f.FullName ($i+1)) { $violations.Add($msg) } else { $preexisting.Add($msg) }
+            }
+            # Deteksi TS/JS empty test: it('...', () => {})
+            if ($l -match '(it|test)\s*\([^,]+,\s*(async\s*)?\(\s*\)\s*=>\s*\{\s*\}\)') {
+                $msg = "EMPTY_TEST   $($f.FullName):$($i+1)  Empty test closure detected"
+                if (Test-IsNew $f.FullName ($i+1)) { $violations.Add($msg) } else { $preexisting.Add($msg) }
+            }
+            # Deteksi Python pass test: def test_xxx(): pass
+            if ($l -match 'def\s+test_\w+\([^)]*\):\s*pass') {
+                $msg = "EMPTY_TEST   $($f.FullName):$($i+1)  Empty python test pass detected"
+                if (Test-IsNew $f.FullName ($i+1)) { $violations.Add($msg) } else { $preexisting.Add($msg) }
+            }
+        }
+    }
+}
 
 # --- Gate 4: berkas sumber berubah tapi test tidak pernah dijalankan ---
 # Sengaja sempit. Hanya menyala bila SEMUA syarat terpenuhi:
