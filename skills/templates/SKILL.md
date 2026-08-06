@@ -9,6 +9,19 @@ Kerangka di bawah WAJIB diikuti persis. §5 `AGENTS.md` menunjuk ke sini. Dokume
 
 ---
 
+## 0. All-Out Principal Planning Protocol (The AETHERIS Master Key Formula)
+
+Saat merancang arsitektur baru, membuat fitur rumit, atau menyusun Grand Blueprint / RFC, AI dan Subagent **WAJIB MENGETINGGALKAN SELURUH PEMBATASAN KETAT ONGKOS TOKEN DALAM MENJAWAB**. Anggaplah pesan *default* user senantiasa berbunyi: *"Silakan memasak, time is yours. Buatkan paling lengkap dari 5W1H dengan penanganan semua edge cases tanpa terkecuali."*
+
+### 5 Pilar Wajib (L8 Principal Standard):
+1. **First-Principles & 5W1H:** Jangan pernah melompat ke sintaks tanpa merancang landasan filosofis mengapa arsitektur atau teknologi tersebut dipilih.
+2. **Adversarial Anticipation:** Jangan mengacu pada *happy-path*. Bangun desain dengan asumsi akan diuji/dibantai oleh pengamat teknikal kritis; setiap pilihan teknikal wajib disertai justifikasi mendalam dan analisis trade-off jujur.
+3. **Exhaustive Inventory Grounding (Anti-Zero-Shot):** Lakukan audit referensi lokal (`references/`) dan sumber daya eksisting untuk memaparkan seluruh entitas/opsi domain komplit ke dalam klaster taksonomi spesifik sebelum merinci abstraksi kodenya. Hal ini menjamin 0% pemotongan karena *lost-in-the-middle bias*.
+4. **Zero-Exception Anomaly Hunting (Edge Cases):** Pada setiap dokumen perancangan, eksplorasi kasus tepi (*edge cases*) tidak boleh diabaikan atau diringkas dengan `// dll`. WAJIB memetakan minimal 5–10 anomali operasional (disk penuh, permission denied, race condition, network disconnect, korupsi konfigurasi, koneksi terputus, atau anomali struktur folder legacy) beserta mitigasi eksplisitnya.
+5. **Visual Architecture Blueprinting (Mermaid Grounding):** DILARANG menjelaskan alur sistem multi-komponen, state machine, atau skema database kompleks hanya dengan teks tebal/ASCII biasa. WAJIB mempresentasikan diagram visual eksplisit dalam blok kode `mermaid` (Flowchart, Sequence Diagram, atau ERD/Class Diagram) agar arsitektur tergambar presisi, tidak ambigu, dan siap untuk audit klinis.
+
+---
+
 ## 1. `docs/rfc/YYYYMMDD-<nama-fitur>.md` (All-in-One RFC / PRD / Batch Task)
 
 Dokumen tunggal terpadu untuk perancangan fitur baru, refactor besar, atau inisiasi proyek (Greenfield/Brownfield). Menggabungkan **Kebutuhan Bisnis (PRD)**, **Arsitektur Teknis (RFC)**, dan **Checklist Eksekusi Batch (Task)** dalam satu berkas abadi di folder `docs/rfc/`.
@@ -58,20 +71,39 @@ Dokumen tunggal terpadu untuk perancangan fitur baru, refactor besar, atau inisi
 ---
 
 ## 3. Spesifikasi Teknis & Desain Sistem Terpilih
-### 3.1 Data Model & Zero-Downtime Migration Strategy
+### 3.1 Topologi & Visualisasi Arsitektur (Mermaid Blueprint)
+<!-- WAJIB menyajikan minimal 1 diagram visual interaktif dalam blok kode `mermaid` (Sequence Diagram, Flowchart, atau ERD) yang memetakan interaksi antar komponen, alur request/event, atau relasi entitas -->
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Client / Ingress
+    participant API as API Gateway / Handler
+    participant S as Domain Service (Tx)
+    participant DB as PostgreSQL (ACID)
+    participant Q as Durable Queue / Broker
+    
+    C->>API: POST /api/v1/resource (Idempotency-Key)
+    API->>S: Validate & Execute Command
+    S->>DB: Begin ACID Transaction & Mutate State
+    DB-->>S: State Committed (200 OK)
+    S->>Q: Dispatch Durable Event (Outbox Pattern)
+    API-->>C: 201 Created (Response DTO)
+```
+
+### 3.2 Data Model & Zero-Downtime Migration Strategy
 - **Schema DDL & Entities:** <!-- Tabel baru, kolom baru, indeks, dan tipe data -->
 - **Pola Migrasi DB:** `Expand and Contract Pattern` <!-- Tahap 1: Tambah kolom nullable; Tahap 2: Dual-write & backfill; Tahap 3: Contract/Drop kolom usang -->
 - **Data Consistency & Isolation:** <!-- ACID Transaction boundary, isolation level (Read Committed / Serializable), Lock strategy (Optimistic / Pessimistic) -->
 
-### 3.2 Kontrak API & Event Interface
+### 3.3 Kontrak API & Event Interface
 - **Endpoint / Protobuf / Message Payload:** <!-- Request/Response schema, Error codes, Header Idempotency-Key -->
 - **Backward Compatibility:** <!-- Jaminan nol breaking changes terhadap client/consumer eksisting -->
 
-### 3.3 Penanganan Konkurensi, Race Conditions & Failure Domains
+### 3.4 Penanganan Konkurensi, Race Conditions & Failure Domains
 - **Idempotency & Deduplication:** <!-- Pencegahan double-spending / double-execution (Idempotency Key, Unique Constraint, Distributed Lock) -->
 - **Failure & Degradation Modes:** <!-- Circuit breaker, fallback cache, timeout handling saat downstream service mati -->
 
-### 3.4 STRIDE Threat Model & Security Perimeter
+### 3.5 STRIDE Threat Model & Security Perimeter
 | Vektor Ancaman STRIDE | Potensi Celah / Skenario Serangan | Mitigasi Arsitektural & Guardrails |
 | :--- | :--- | :--- |
 | **Spoofing** (Pemalsuan identitas) | Peniruan caller / fake client token | Verifikasi JWT RS256 / HMAC Signature + Webhook Secret |
@@ -234,13 +266,21 @@ Wajib berada di root repositori. Memetakan arsitektur nyata, kepemilikan data, d
 | `auth` | Token issuance, RBAC, SSO session | `internal/auth/` | `users`, `roles`, `permissions` | `database`, `cache` |
 | `order` | Order state machine & checkout | `internal/order/` | `orders`, `order_items` | `auth`, `payment_client` |
 
-## 3. Alur Kritis (End-to-End Trace)
-<!-- Alur request masuk s/d respons kembali, sebutkan file & method spesifik -->
+## 3. Alur Kritis & Visualisasi Topologi (End-to-End Trace)
+<!-- Alur request masuk s/d respons kembali, sebutkan file & method spesifik serta sertakan diagram alur `mermaid` -->
 1. Ingress Request: `POST /api/v1/orders` -> `internal/transport/http/order_handler.go:CreateOrder`
 2. Autentikasi & Zero-Trust Guard -> `internal/middleware/auth_jwt.go`
 3. Domain Validation & ACID Tx -> `internal/order/service.go:ProcessOrder`
 4. State Mutation -> `internal/order/repository.go` (table `orders`)
 5. Asynchronous Event Dispatch -> `internal/outbox/publisher.go:PublishOrderCreated`
+
+```mermaid
+flowchart TD
+    A["POST /api/v1/orders"] -->|JWT Guard| B["order_handler:CreateOrder"]
+    B -->|ACID Tx| C["order_service:ProcessOrder"]
+    C -->|Mutate| D[("DB: orders table")]
+    C -->|Outbox Event| E["publisher:PublishOrderCreated"]
+```
 
 ## 4. Kontrak Eksternal & Integrasi
 | Interface | Tipe | Format / Protocol | Idempotency Support | Timeout / SLA |

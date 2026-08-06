@@ -111,9 +111,17 @@ Satu prosedur, empat pemicu. Cek pemicunya, jalankan aksinya.
 
 DILARANG flattery. Evaluasi dingin dan faktual.
 
-## 5. Template Output
+## 5. Template Output & All-Out Planning Protocol
 
 Menulis dokumen RFC (`docs/rfc/YYYYMMDD-<fitur>.md`), katalog RFC (`docs/rfc/README.md`), dokumen RCA (`docs/rca/YYYYMMDD-<insiden>.md`), `system_map.md`, Side Note, atau laporan test / Patch Receipt → **WAJIB picu skill `templates`** lebih dulu. Kerangka tiap artefak ada di sana dan WAJIB diikuti persis.
+
+**All-Out Principal Planning Standard (AETHERIS Master Key Formula):**
+Khusus saat membuat atau menyusun dokumen perancangan arsitektur, Grand Blueprint, atau RFC (`docs/rfc/`), batasan penghematan token DIBEKUKAN TUNTAS ("silakan memasak, time is yours"). Agent WAJIB mengadopsi pola pikir **L8 Principal Engineer** dengan 5 Pilar:
+1. **First-Principles Rooting (5W1H):** Mulai dari fondasi filosofis 5W1H (Mengapa arsitektur ini dipilih dan apa konsekuensinya).
+2. **Adversarial Anticipation:** Antisipasi pengujian klinis ketat dari user; seluruh keputusan wajib disertai justifikasi teknis mendalam yang tangguh terhadap debat.
+3. **Exhaustive Inventory & Taxonomy Mapping:** DILARANG *zero-shot drafting*. Audit dan rekap seluruh referensi/opsi domain terkait menjadi tabel inventori komplit, lalu kelompokkan dalam klaster taksonomi spesifik agar terhindar dari *token fatigue* / *lost-in-the-middle*.
+4. **Zero-Exception Anomaly Hunting:** WAJIB menyertakan seluruh kasus tepi (*edge cases*) operasional dunia nyata tanpa terkecuali (disk penuh, permission denied, race condition, network disconnect, korupsi config, anomali legacy) beserta strategi mitigasinya. DILARANG meringkas atau menggunakan `// TODO` / `// dll`.
+5. **Visual Architecture Blueprinting (Mermaid Grounding):** DILARANG menjelaskan alur sistem multi-komponen, state machine, atau skema database kompleks hanya dengan teks tebal/ASCII biasa. WAJIB mempresentasikan diagram visual eksplisit dalam blok kode `mermaid` (Flowchart, Sequence Diagram, atau ERD/Class Diagram) agar arsitektur tergambar presisi dan siap untuk audit klinis.
 
 Yang tetap berlaku tanpa membuka skill: **laporan test WAJIB memuat perintah + output apa adanya**, dan DILARANG mengklaim lulus tanpa bukti.
 
@@ -164,7 +172,7 @@ DILARANG mengubah status task jadi `[x]` sebelum SEMUA butir ini lulus.
 ## 8. Tooling & Komunikasi
 
 - **Bahasa:** WAJIB Bahasa Indonesia. Kode, variabel, dan istilah teknis tetap bahasa aslinya.
-- **Panjang jawaban:** padat untuk tugas rutin. Mendalam HANYA saat *Mentor Mode*.
+- **Panjang & Visualisasi Jawaban:** padat untuk tugas rutin. Mendalam HANYA saat *Mentor Mode* dan **DIBEKUKAN TUNTAS / All-Out** saat menyusun dokumen perancangan arsitektur/RFC (§5). Saat menjelaskan alur sistem atau arsitektur kompleks dalam *Mentor Mode* maupun RFC, WAJIB sertakan diagram visual interaktif (blok kode `mermaid`).
 - **Edit presisi:** `replace_file_content` / `multi_replace_file_content` + `grep_search`. DILARANG rewrite berkas utuh untuk perubahan kecil.
 - **Baca berkas:** `view_file`.
 - **Pencarian web:** `search_web`, hanya setelah §3.7 terpenuhi.
