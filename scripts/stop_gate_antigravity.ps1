@@ -8,13 +8,10 @@
 
 $ErrorActionPreference = 'Continue'
 
-# --- PENANDA PASIF (SEMENTARA) ---
-# Sisa satu pertanyaan: apakah ~/.gemini/config/hooks.json GLOBAL cukup sendiri?
-# Saat hook terbukti memblokir, ada dua salinan terpasang (global + .agents/ workspace).
-# Yang workspace sudah dihapus. Kalau penanda ini muncul lagi di pemakaian Antigravity
-# berikutnya, berarti global cukup dan baris ini boleh dicabut. Kalau tidak pernah
-# muncul, hooks.json wajib per-proyek di .agents/.
-try { "$(Get-Date -Format o)" | Out-File -FilePath "$env:TEMP\agy_stop_hook_marker.txt" -Append -Encoding ascii } catch { }
+# TERJAWAB 2026-08-07: hooks.json GLOBAL cukup sendiri, .agents/hooks.json per-proyek
+# TIDAK diperlukan. Penanda pasif yang dulu dipasang di sini menghasilkan 775 entri di
+# %TEMP%\agy_stop_hook_marker.txt, jadi hook memang menyala tanpa salinan workspace.
+# Penandanya dicabut - tugasnya selesai, dan menulis ke TEMP tiap giliran hanya menumpuk sampah.
 
 # Setel $false untuk mematikan Gate 4 (blokir saat kode berubah tapi test tak pernah jalan).
 # Placeholder & secret tetap ditegakkan apa pun nilainya.

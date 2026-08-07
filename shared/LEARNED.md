@@ -11,7 +11,7 @@ Pelajaran yang sudah dibayar mahal. WAJIB dibaca sebelum task teknis (§3.1 `AGE
 - Antigravity **tidak mengekspansi `@import`** di `AGENTS.md`; aturan WAJIB ditulis literal. Agent malah `view_file` mengikuti path secara manual, sehingga aturan mati di task yang tidak memicu pembacaan berkas.
 - **Direktori rules tidak dimuat otomatis.** String lokasi `rules/` di `language_server.exe` hanya berlaku untuk rule milik plugin.
 - `AGENTS.md` literal adalah **satu-satunya** mekanisme rules global Antigravity.
-- ❓ Belum terjawab: apakah `hooks.json` global cukup sendiri, atau wajib `.agents/hooks.json` per-proyek. Penanda pasif terpasang di `stop_gate_antigravity.ps1`; cek `%TEMP%\agy_stop_hook_marker.txt`.
+- **`hooks.json` GLOBAL cukup sendiri** — `.agents/hooks.json` per-proyek TIDAK diperlukan. Terjawab 2026-08-07 lewat penanda pasif yang menghasilkan 775 entri; penandanya sudah dicabut dari `stop_gate_antigravity.ps1`.
 - **Transcript Antigravity TIDAK merekam system prompt maupun keluaran hook.** Menghitung kata kunci di sana menyesatkan — 6 kali memberi vonis salah dalam satu sesi.
 - Yang sahih hanya tiga: **argumen `tool_calls`**, **teks `PLANNER_RESPONSE`**, dan **perubahan nyata di disk**.
 - Transcript memuat hasil `view_file` dari berkas aturan itu sendiri → kata seperti `implementation_plan` dan `php artisan test` terhitung padahal cuma dibaca.
