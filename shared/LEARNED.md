@@ -38,6 +38,7 @@ Pelajaran yang sudah dibayar mahal. WAJIB dibaca sebelum task teknis (§3.1 `AGE
 - **Kutip ganda di pesan `git commit -m`** dipecah jadi argumen terpisah. Pakai `git commit -F <berkas>`.
 - Glob `*_protocol*` ikut mencocoki `networking_protocols_grpc`. Periksa hasil filter path sebelum menulis massal.
 - **Operator `&&` tidak valid** di PowerShell 5.1 → error "The token '&&' is not a valid statement separator". Pakai `;` atau jalankan perintah secara terpisah.
+- **Setiap Git commit WAJIB menyertakan Co-author trailer:** `Co-authored-by: aetheris <agents.aetheris@gmail.com>`. Setiap branch feature fase WAJIB di-merge ke `main` terlebih dahulu sebelum di-push ke remote.
 
 ## 🔍 Proses, Audit & Retrofit Korpus
 
@@ -55,6 +56,18 @@ Pelajaran yang sudah dibayar mahal. WAJIB dibaca sebelum task teknis (§3.1 `AGE
 - Audit cakupan berbeda dari audit struktur. Empat dimensi format bisa 100% sementara core domain kehilangan topik yang pasti kepakai (error handling, OAuth/OIDC, CORS, pagination). Yang menemukannya bukan pengukuran struktur, tapi mendaftar isi tiap domain lalu bertanya "apa yang ditanyakan wawancara senior dan tidak ada di sini".
 - Menandai seluruh domain sebagai Core ("semua") tanpa memeriksa isinya membuat agent membaca berkas niche di setiap proyek. `devops_control_planes` punya 5 dari 8 berkas niche. Core WAJIB menyebut berkas, bukan direktori, kecuali seluruh isinya memang selalu relevan.
 - **Berkas tulisan sendiri tetap wajib diaudit dengan standar yang sama.** Audit manual `observability_resilience` menemukan dua kekeliruan faktual di `continuous_profiling.md` yang saya tulis sendiri beberapa sesi sebelumnya: klaim label pprof tidak diwariskan ke goroutine anak (justru diwariskan lewat runtime, dan konsekuensinya terbalik), dan klaim `-ldflags "-s -w"` menghilangkan simbol profil (pclntab tidak dihapus; yang terdampak agen eBPF di luar proses). Mengecualikan berkas sendiri dari audit = mengekalkan kesalahan yang paling sulit ditemukan orang lain.
+
+## 🧪 Verifikasi Alat CLI & Code Generator
+
+- **Test hijau membuktikan berkas ditulis, bukan berkas itu kompilasi.** Di generator kode, satu-satunya gerbang yang bermakna adalah menjalankan toolchain asli pada outputnya (`go build` + `go vet` + `gofmt -l` di `t.TempDir()`). Tanpa itu, `go-aether` merilis `init` yang outputnya gagal `go build` di perintah pertama pengguna, dan 5 command per-layer yang templatnya sudah menyimpang — semua dengan suite 100% hijau.
+- **Menjalankan biner menemukan apa yang test tidak bisa.** Tiga defek nyata hanya muncul saat eksekusi: `go.mod` ber-BOM dilaporkan "bukan modul Go", `arch:domain con` sukses palsu (Win32 device), dan auditor baru menuduh kode yang alatnya sendiri hasilkan. Semua test lolos sebelum itu. **Selalu jalankan produknya, jangan berhenti di test.**
+- **Karakter BOM literal di source Go ditolak kompiler** (`invalid BOM in the middle of the file`). Untuk mencocokkan BOM, WAJIB pakai escape `"﻿"`, bukan karakter aslinya.
+- **`staticcheck` menolak jalan bila dibangun dengan Go lebih lama dari yang diminta `go.mod`** (`module requires at least go1.25, but Staticcheck was built with go1.24.3`). Verifikasi lint lokal bisa mustahil; jangan klaim "lolos lint" tanpa CI benar-benar hijau.
+- **Aturan audit/linter WAJIB diuji terhadap output alat itu sendiri.** Aturan `context.Background()` dan `log.Println` menyala pada constructor pool dan config loader — keduanya benar. Berteriak pada kode sendiri di run pertama membuat pengguna mengabaikan seluruh laporan; ongkosnya melebihi nilai aturannya.
+- **Helper level-package di template code-gen bentrok saat entitas kedua di-generate.** Semua handler mendarat di satu package, jadi `func writeJSON` jadi redeclared. Jadikan method. Test 1-modul buta terhadap kelas ini — WAJIB ada test multi-modul.
+- **`mattn/go-sqlite3` butuh cgo** dan pecah di image `CGO_ENABLED=0`. Untuk Go yang di-container-kan, pakai `modernc.org/sqlite` (murni Go).
+- **`viper.Unmarshal` tidak melihat nilai yang hanya ada di environment** kecuali key-nya sudah dikenal lewat `SetDefault`/`BindEnv`. Tanpa itu `DB_USER`/`DB_PASS` diam-diam kosong di setiap deployment tanpa `.env`.
+- **Cobra melewati `PersistentPostRunE` saat `RunE` mengembalikan error.** Pelepasan resource (lock, file handle) WAJIB lewat `defer` di pembungkus `Execute()`, bukan di hook Post.
 
 ## 🏛️ Arsitektur, Stack Decisions & Mastery Taxonomy
 
