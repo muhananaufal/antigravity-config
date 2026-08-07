@@ -44,9 +44,16 @@
 ├── hooks.json                  # Lifecycle Hooks (Quality Gate Otomatis saat Stop)
 ├── mcp_config.json             # Integrasi MCP Servers (StitchMCP, Chrome DevTools)
 │
+├── docs/
+│   └── rfc/                    # RFC Architecture Catalog & dokumen perancangan/audit
+│
+├── projects/                   # State per-proyek Antigravity (ter-gitignore, tidak diversikan)
+│
 ├── scripts/
-│   ├── quality_gate.ps1        # Script Ratchet Quality Gate (Linter, Blocker, Tests)
-│   └── stop_gate_antigravity.ps1 # Wrapper Execution Hook untuk Antigravity Engine
+│   ├── quality_gate.ps1        # Gerbang mutu KODE PROYEK (ratchet, placeholder, secret, linter, test)
+│   ├── audit_references.ps1    # Gerbang mutu BERKAS REFERENSI skill bundle (kepadatan, encoding, klaim)
+│   ├── stop_gate_antigravity.ps1 # Wrapper Stop hook untuk Antigravity (hooks.json)
+│   └── stop_gate_claude.ps1    # Wrapper Stop hook untuk Claude Code (~/.claude/settings.json)
 │
 ├── shared/
 │   ├── LEARNED.md              # Living Brain SSOT (Pelajaran, Bug Triggers, Runtime Truths)
@@ -55,11 +62,11 @@
 ├── skills/                     # 9 Skill Bundles Berisi Ratusan Referensi Produksi
 │   ├── brainstorm/             # Protokol Brainstorming Teknikal & Non-Teknikal
 │   ├── git-workflow/           # Git Flow, Conventional Commits, Dual-Avatar Attribution
-│   ├── golang-mastery/         # Go High-Perf, Concurrency, SQLC, gRPC (31 Domain Refs)
-│   ├── laravel-mastery/        # Laravel Octane, Reverb, Horizon, Multi-tenant (31 Refs)
+│   ├── golang-mastery/         # Go High-Perf, Concurrency, SQLC, gRPC (30 domain, 221 berkas)
+│   ├── laravel-mastery/        # Laravel Octane, Reverb, Horizon, Multi-tenant (27 domain, 136 berkas)
 │   ├── master-decision-tree/   # Matriks Pemilihan Bahasa & Arsitektur Sistem
-│   ├── nestjs-mastery/         # NestJS Hexagonal, Fastify, Microservices (31 Refs)
-│   ├── rust-mastery/           # Rust Async Tokio, Axum, Zero-Cost, Lock-free (31 Refs)
+│   ├── nestjs-mastery/         # NestJS Hexagonal, Fastify, Microservices (36 domain, 139 berkas)
+│   ├── rust-mastery/           # Rust Async Tokio, Axum, Zero-Cost, Lock-free (34 domain, 195 berkas)
 │   ├── skill-engineering-mastery/ # Meta-Skill Pembuatan & Audit Skill Baru
 │   └── templates/              # Master Template RFC, RCA, System Map, & Patch Receipts
 │
@@ -144,7 +151,7 @@ Seluruh dokumen teknis wajib mengikuti standar arsitektur L7/L8 yang didefinisik
 ## 🛠️ Skill Bundles & Domain Mastery (`skills/`)
 
 ### 1. `golang-mastery`
-Panduan rekayasa backend Golang tingkat tinggi mencakup 31 domain referensi produksi:
+Panduan rekayasa backend Golang tingkat tinggi mencakup 30 domain referensi produksi:
 * **Concurrency & Runtime:** Goroutine lifecycle, channel multiplexing, lock-free atomics, runtime memory allocator, sync.Pool.
 * **Database & Storage:** SQLC type-safe query generation, pgx connection pooling, Transactional Outbox, dynamic sharding.
 * **Transport & Microservices:** gRPC streaming, Protobuf v3, Chi routing, HTTP/2 & HTTP/3 tuning, mTLS security.
@@ -152,21 +159,21 @@ Panduan rekayasa backend Golang tingkat tinggi mencakup 31 domain referensi prod
 * **Advanced Systems:** Linux eBPF telemetry, Kubernetes custom controllers/operators, SIMD vectorization, zero-allocation serialization.
 
 ### 2. `rust-mastery`
-Panduan rekayasa sistem Rust performa tinggi mencakup 31 domain referensi produksi:
+Panduan rekayasa sistem Rust performa tinggi mencakup 34 domain referensi produksi:
 * **Memory Safety & Concurrency:** Lifetime annotations, Borrow checker patterns, Tokio multi-threaded async runtime, crossbeam lock-free queues.
 * **Microservices & Web:** Axum web framework, Tower middleware stack, SQLx compile-time checked queries, Tonic gRPC.
 * **Low-Level & Performance:** Unsafe Rust containment, FFI C-ABI integration, Custom Allocators (jemalloc/mimalloc), SIMD auto-vectorization, Miri undefined behavior validation.
 * **Client & Embedded:** Tauri desktop engine, Bevy game ECS, WebAssembly (WASM) host bindings, eBPF Aya framework.
 
 ### 3. `laravel-mastery`
-Panduan arsitektur modern enterprise Laravel mencakup 31 domain referensi produksi:
+Panduan arsitektur modern enterprise Laravel mencakup 27 domain referensi produksi:
 * **High-Performance Engines:** Laravel Octane (Swoole/FrankenPHP), Swoole State Resetters, Reverb WebSockets, Horizon queue orchestration.
 * **Database & Scale:** Eloquent optimization, N+1 query prevention, Multi-Tenancy Row Level Security (RLS), Read-Replica split, Redis token bucket.
 * **Fintech & Security:** Cashier subscription billing, Idempotent webhook handling, Zero-Trust Sanctum/Passport auth, STRIDE input sanitation.
 * **Frontend & Reporting:** Livewire v3 / Inertia.js integration, Dompdf precision layout rendering engine truths.
 
 ### 4. `nestjs-mastery`
-Panduan arsitektur Enterprise TypeScript NestJS mencakup 31 domain referensi produksi:
+Panduan arsitektur Enterprise TypeScript NestJS mencakup 36 domain referensi produksi:
 * **Core Architecture:** Fastify engine adapter, Inversion of Control (IoC) container tuning, Hexagonal Ports & Adapters architecture.
 * **Data Layer:** Prisma & Drizzle ORM performance, Connection pool isolation, Distributed 2PC transactions.
 * **Distributed Services:** Apollo GraphQL Federation v2, Kafka & NATS message transports, BullMQ distributed background workers.
@@ -261,9 +268,22 @@ Repositori ini beroperasi sebagai **SSOT Multi-Platform**:
 
 ## 🛡️ Jaminan Integritas Sistem
 Seluruh komponen dalam ekosistem ini diaudit secara berkala dengan garansi:
-* ✅ **0 Broken Paths** pada seluruh referensi markdown dan link lokal.
-* ✅ **Zero Untyped Bypasses & Zero Hardcoded Secrets**.
-* ✅ **100% Conventional Commits Compliance** dengan Dual-Avatar Attribution.
+Klaim di bawah **terukur, bukan janji** — tiap baris menyebut perintah yang membuktikannya.
+Status terakhir diverifikasi **2026-08-07** (lihat `docs/rfc/20260807-audit-integritas-config.md`).
+
+| Properti | Status | Cara membuktikan |
+| :--- | :--- | :--- |
+| Nol domain referensi tak terjangkau dari `SKILL.md` | ✅ 4/4 bundle | §5.1 dokumen RFC |
+| Angka domain & berkas di `SKILL.md` cocok dengan disk | ✅ 4/4 bundle | `scripts/audit_references.ps1` |
+| Nol kredensial hardcode ter-commit | ✅ | `git log -S` + `scripts/quality_gate.ps1` |
+| Encoding berkas referensi UTF-8 tanpa BOM | ⚠️ **2 berkas melanggar** | `scripts/audit_references.ps1` (H17) |
+| Kepadatan referensi ≥130 baris | ⚠️ **88 berkas di bawah ambang** | `scripts/audit_references.ps1` (H18) |
+| Conventional Commits + Co-author trailer | ✅ | `git log --format=%s` |
+
+> **DILARANG menulis klaim "0 Broken Paths" atau sejenisnya tanpa perintah yang membuktikannya.**
+> Versi sebelumnya menjanjikan nol broken path sementara terdapat pointer menggantung ke
+> `scripts/` per-bundle dan ke berkas `master_decision_tree.md` yang tidak pernah ada.
+> Garansi yang tidak bisa dijalankan hanyalah dekorasi, dan lebih berbahaya daripada tidak ada.
 
 ---
 *Dikelola dan dirawat oleh AETHERIS Autonomous Engineering Team.*

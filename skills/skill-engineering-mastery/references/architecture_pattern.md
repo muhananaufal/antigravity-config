@@ -4,10 +4,17 @@ Dokumen ini adalah cetak biru absolut—sebuah mahakarya abadi—untuk merancang
 
 ## 1. Filosofi "Holy Trinity" dan Ekstrapolasi Universal
 
-Keberhasilan "Holy Trinity" membuktikan bahwa sebuah *Skill Bundle* tidak boleh diperlakukan sebagai sekadar kumpulan prompt teks biasa. Ini adalah mesin pendorong agen AI yang sangat terspesialisasi.
-- **Golang (28 Domain, 197 File, 2.48 MB):** Mendominasi ranah konkurensi, arsitektur distributed system, cloud-native K8s operators, dan high-frequency trading.
-- **Rust (31 Domain, 190 File, 1.19 MB):** Menguasai keamanan memori (borrow checker), eBPF, WebAssembly, komputasi presisi tinggi, CI/CD acceleration, dan Distroless multi-stage containers.
-- **Laravel (26 Domain, 130 File, 1.98 MB):** Merajai produktivitas pengembangan web enterprise, arsitektur event-driven (Horizon/Reverb), SaaS multi-tenancy, dan monolithic modular.
+Keberhasilan pola ini membuktikan bahwa sebuah *Skill Bundle* tidak boleh diperlakukan sebagai sekadar kumpulan prompt teks biasa. Ini adalah mesin pendorong agen AI yang sangat terspesialisasi.
+
+> **Catatan penamaan:** istilah "Holy Trinity" berasal dari masa ketika hanya ada tiga bundle
+> bahasa. Sejak `nestjs-mastery` bergabung, ekosistem ini **kuartet**. Angka di bawah diverifikasi
+> per 2026-08-07; jalankan `scripts/audit_references.ps1` untuk menghitung ulang — skrip itu
+> memblokir bila klaim di `SKILL.md` menyimpang dari disk.
+
+- **Golang (30 Domain, 221 File, 3.893 KB):** Mendominasi ranah konkurensi, arsitektur distributed system, cloud-native K8s operators, dan high-frequency trading.
+- **Rust (34 Domain, 195 File, 1.257 KB):** Menguasai keamanan memori (borrow checker), eBPF, WebAssembly, komputasi presisi tinggi, CI/CD acceleration, dan Distroless multi-stage containers.
+- **Laravel (27 Domain, 136 File, 2.075 KB):** Merajai produktivitas pengembangan web enterprise, arsitektur event-driven (Horizon/Reverb), SaaS multi-tenancy, dan monolithic modular.
+- **NestJS (36 Domain, 139 File, 1.633 KB):** Menguasai Enterprise TypeScript — DI/IoC internals, Hexagonal Ports & Adapters, Fastify engine, GraphQL Federation, dan multi-tenancy RLS.
 
 Pendekatan ini wajib dipetakan ulang untuk setiap bahasa/framework masa depan, seperti Python (AI/ML Pipeline, FastAPI Async, PyTorch internals), TypeScript (Strict Typing, Next.js App Router, NestJS Microservices, Bun/Deno runtimes), C++ (Low-Level Systems, Unreal Engine, HFT low-latency memory pools), hingga DevOps Kubernetes (Operator SDK, GitOps, Service Mesh, Terraform Infrastructure-as-Code).
 
