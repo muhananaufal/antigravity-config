@@ -19,6 +19,19 @@ Alasan: akun shared, kuota token dijaga ketat. Jejak `Read` juga bisa Anda audit
 
 Beda kemampuan dari Antigravity: maksimal **3** subagent paralel (batas harness), tipe `Explore` / `general-purpose` / `Plan`, dan **tidak ada** tier model `pro`/`flash`.
 
+### CC-1b. Bagian §7 yang TETAP BERLAKU PENUH
+
+"§7 DIABAIKAN" hanya mencabut **mekanisme subagent**-nya. Sisa §7 adalah metodologi rekayasa yang tidak bergantung tool apa pun, dan WAJIB tetap dipatuhi:
+
+| Aturan §7 | Status di Claude Code |
+| :--- | :--- |
+| **DAG Task Dependency** (`DependsOn: [Batch X]`) | BERLAKU. Batch di dokumen RFC wajib menyatakan dependensinya. |
+| **Contract-First & Schema Locking** | BERLAKU. Interface / DTO / struct / migration dikunci di Batch 1 sebelum business logic. |
+| **Batch Writing Protocol** | BERLAKU. Maksimal **3–4 berkas per giliran**; setiap batch: jalankan test terkait → atomic commit → baru lanjut. |
+| **Kanban maks 2 WIP** (dari §8) | BERLAKU. CC-3 mengganti §8 hanya pada bagian tooling, bukan aturan alur kerjanya. |
+
+Alasan Batch Writing paling sering dilanggar dan paling mahal: menulis >4 berkas dalam satu giliran memicu truncation, dan truncation melahirkan `// TODO` siluman — pelanggaran §0.3 yang lahir bukan dari niat, melainkan dari kehabisan ruang keluaran.
+
 ## CC-2. Penerjemah Istilah
 
 Berlaku untuk `AGENTS.md` §7–§8 maupun kelima `SKILL.md` mastery beserta `_protocol/`-nya.

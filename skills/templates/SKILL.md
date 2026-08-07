@@ -131,7 +131,11 @@ sequenceDiagram
 
 ---
 
-## 4. Rencana Eksekusi & Living Task Checklist (DAG & Batch Protocol §7)
+## 4. Rencana Eksekusi & Living Task Checklist (DAG & Batch Protocol)
+<!-- Sumber aturan: `AGENTS.md` §7 di Antigravity, `shared/tool-claude-code.md` CC-1b di Claude Code.
+     DILARANG menunjuk §7 sendirian - section itu dinyatakan DIABAIKAN di Claude Code, sehingga
+     penunjuk tunggal membuat DAG, Contract-First, dan Batch Writing tampak gugur di sana. -->
+
 <!-- ATURAN KANBAN: Maksimal 2 item berstatus [/] (WIP) bersamaan. Centang [x] setelah batch terverifikasi -->
 
 ### Batch 1: Schema Locking & Contract Initialization
