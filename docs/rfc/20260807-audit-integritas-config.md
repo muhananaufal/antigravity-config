@@ -186,12 +186,12 @@ Ironi: itu justru penyebab truncation & `// TODO` siluman yang §7 sendiri perin
 
 ### 🟢 RENDAH
 
-#### H10 — `master_decision_tree.md` menggantung di 4 lokasi · Status: `[ ]`
+#### H10 — `master_decision_tree.md` menggantung di 4 lokasi · Status: `[x]` TERTAMBAL 2026-08-07
 Nama berkas ini **tidak eksis** (aslinya `master-decision-tree/SKILL.md`). Muncul 9×;
 5 menyertakan path benar dalam kurung. Empat yang menggantung tanpa path:
 `shared/tool-claude-code.md:62` · `skill-engineering-mastery/SKILL.md:17`, `:18`, `:127`.
 
-#### H11 — Drift angka domain/berkas · Status: `[ ]`
+#### H11 — Drift angka domain/berkas · Status: `[x]` TERTAMBAL 2026-08-07 (+ detektor otomatis di audit_references.ps1)
 
 | Lokasi | Klaim | Kenyataan |
 | :--- | :--- | :--- |
@@ -202,7 +202,7 @@ Nama berkas ini **tidak eksis** (aslinya `master-decision-tree/SKILL.md`). Muncu
 | `architecture_pattern.md:8-10` | Go 28/197 · Rust 31/190 · Laravel 26/130 | 30/221 · 34/195 · 27/136 |
 | `golang-mastery/SKILL.md:8` | 30 Domain, 221 File | **AKURAT ✅** |
 
-#### H12 — Klaim "0 Broken Paths" di README batal · Status: `[ ]`
+#### H12 — Klaim "0 Broken Paths" di README batal · Status: `[x]` TERTAMBAL 2026-08-07 (diganti tabel berperintah)
 `README.md` §Jaminan Integritas mengklaim "✅ 0 Broken Paths pada seluruh referensi markdown
 dan link lokal". H8 dan H10 membatalkannya.
 
@@ -210,7 +210,7 @@ dan link lokal". H8 dan H10 membatalkannya.
 Aturan itu hidup **hanya** di `AGENTS.md §8`; CC-3 menggantikan §8 tapi tidak merestatenya.
 (Aturan web-search selamat lewat §3.8 — jangan ikut "diperbaiki".)
 
-#### H15 — `cli_tooling` golang tanpa rujukan path · Status: `[ ]`
+#### H15 — `cli_tooling` golang tanpa rujukan path · Status: `[x]` TERTAMBAL 2026-08-07
 Ditemukan saat verifikasi ulang Batch 1 (bukan bagian audit awal — 14 temuan pertama melewatkannya).
 `golang-mastery/SKILL.md` menyebut `cli_tooling/` **hanya** di tabel Auto-Detect dengan nama telanjang,
 tanpa bentuk `references/cli_tooling/`. Domain lain di tabel yang sama selamat karena juga muncul
@@ -219,7 +219,7 @@ Masih terjangkau (agent bisa menyimpulkan path-nya), jadi severity rendah — ta
 dengan 29 domain golang lainnya. **Sengaja TIDAK ditambal** bersama H1: di luar scope task "kritis",
 sesuai §4 Anti-Yes-Man & prinsip ratchet.
 
-#### H14 — Higiene dokumentasi & gitignore · Status: `[ ]`
+#### H14 — Higiene dokumentasi & gitignore · Status: `[x]` TERTAMBAL 2026-08-07
 `projects/` (22 JSON) tidak ada di tree `README.md`. `.gitignore` repo ini tidak memenuhi
 baseline `git-workflow/SKILL.md §8` sendiri (tanpa `.env`, `node_modules/`, `dist/`, IDE, OS).
 Bisa dibenarkan untuk repo config, tapi standarnya berbunyi "Setiap project WAJIB".
