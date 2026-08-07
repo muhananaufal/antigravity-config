@@ -15,12 +15,23 @@ Skill ini adalah **tahap 5** — dan ia berada **SETELAH** gerbang persetujuan, 
 | :-: | :--- | :--- |
 | 1 | Routing task | `AGENTS.md` §2 |
 | 2 | Pilih stack & arsitektur | `master-decision-tree/SKILL.md` |
-| 3 | Tulis `docs/rfc/YYYYMMDD-<fitur>.md` + katalog | `templates/SKILL.md` §1–§2 |
+| 3 | Tulis `docs/rfc/YYYYMMDD-<fitur>.md` + katalog | `templates/SKILL.md` bagian 1–2 |
 | 4 | **BERHENTI — tunggu user mengetik "Gasskan"** | `AGENTS.md` §0.5 · **GERBANG MUTLAK** |
 | 5 | **Branch, atomic commit, merge** | **`git-workflow/SKILL.md` — Anda di sini** |
-| 6 | Patch Receipt + centang Kanban di RFC | `templates/SKILL.md` §6 |
+| 6 | Patch Receipt + centang Kanban di RFC | `templates/SKILL.md` bagian 6 |
 
-**DILARANG membuat branch untuk pekerjaan berjalur RFC sebelum tahap 4 terlewati.** Pengecualiannya hanya jalur yang memang menggugurkan RFC: proyek kecil dan edit ≤3 berkas (§2 `AGENTS.md`).
+> Nomor **§** selalu merujuk `AGENTS.md`. Untuk seksi milik skill lain dipakai kata "bagian"; seksi dokumen ini sendiri ditulis §1–§10 tanpa nama berkas.
+
+**DILARANG membuat branch untuk pekerjaan berjalur RFC sebelum tahap 4 terlewati.**
+
+**Empat rute §2 `AGENTS.md` MENGGUGURKAN tahap 3–4 — di sana branch boleh langsung dibuat:**
+
+| Rute §2 | Yang berlaku |
+| :--- | :--- |
+| Proyek baru **kecil** (4 syarat §2) | RFC & Day-0 Quintet DILARANG dipaksakan → langsung ke §3 dokumen ini |
+| Edit **≤3 berkas**, bugfix, refactor minor, investigasi | DILARANG bikin RFC → langsung ke §4 dokumen ini. Bugfix tetap WAJIB Proof-of-Defect (§0.6) |
+| **In-Flight Fix** — >3 berkas tapi berasal dari RFC yang SUDAH disetujui | **DILARANG buat RFC kedua, dan DILARANG buat branch kedua.** Lanjutkan di branch RFC yang aktif |
+| **Emergency Pause** — blocker arsitektural kritis di tengah eksekusi | BERHENTI. Jangan commit setengah jadi; susun `docs/rca/YYYYMMDD-<insiden>.md` (`templates/SKILL.md` bagian 3) lebih dulu |
 
 **Tiga sambungan yang WAJIB dijaga konsisten:**
 - Nama branch WAJIB sama persis dengan field **Target Branch** di dokumen RFC (`templates` §1) dan di katalog `docs/rfc/README.md`.

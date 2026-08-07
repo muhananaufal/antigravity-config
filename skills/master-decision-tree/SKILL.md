@@ -718,10 +718,21 @@ Pohon ini adalah **tahap 2** dari enam. Keputusan yang Anda ambil di sini menjad
 | :-: | :--- | :--- |
 | 1 | Routing task | `AGENTS.md` §2 |
 | 2 | **Pilih stack & arsitektur** | **`master-decision-tree/SKILL.md` — Anda di sini** |
-| 3 | Tulis `docs/rfc/YYYYMMDD-<fitur>.md` + katalog | `templates/SKILL.md` §1–§2 |
+| 3 | Tulis `docs/rfc/YYYYMMDD-<fitur>.md` + katalog | `templates/SKILL.md` bagian 1–2 |
 | 4 | **BERHENTI — tunggu user mengetik "Gasskan"** | `AGENTS.md` §0.5 · **GERBANG MUTLAK** |
-| 5 | Branch, atomic commit, merge | `git-workflow/SKILL.md` §1–§5 |
-| 6 | Patch Receipt + centang Kanban di RFC | `templates/SKILL.md` §6 |
+| 5 | Branch, atomic commit, merge | `git-workflow/SKILL.md` bagian 1–5 |
+| 6 | Patch Receipt + centang Kanban di RFC | `templates/SKILL.md` bagian 6 |
+
+> Nomor **§** selalu merujuk `AGENTS.md`. Untuk seksi milik skill lain dipakai kata "bagian".
+
+**Empat rute §2 `AGENTS.md` MENGGUGURKAN tahap 3–4. DILARANG memaksakan RFC di sana:**
+
+| Rute §2 | Yang berlaku |
+| :--- | :--- |
+| Proyek baru **kecil** (4 syarat §2) | RFC & Day-0 Quintet DILARANG dipaksakan → langsung tahap 5 |
+| Edit **≤3 berkas**, bugfix, refactor minor, investigasi | DILARANG bikin RFC → langsung tahap 5. Bugfix tetap WAJIB Proof-of-Defect (§0.6) |
+| **In-Flight Fix** — >3 berkas tapi berasal dari RFC yang SUDAH disetujui | **DILARANG buat RFC kedua.** Catat perubahannya di seksi task RFC yang sedang aktif |
+| **Emergency Pause** — blocker arsitektural kritis di tengah eksekusi | BERHENTI. Susun `docs/rca/YYYYMMDD-<insiden>.md` (`templates/SKILL.md` bagian 3), lapor ke user, jangan putuskan sepihak |
 
 ---
 
@@ -729,7 +740,7 @@ Pohon ini adalah **tahap 2** dari enam. Keputusan yang Anda ambil di sini menjad
 
 **DILARANG melompat dari pohon ini langsung ke `git checkout -b`.** Urutannya:
 
-1. **Tuangkan keputusan ke dokumen RFC.** Buka `~/.gemini/config/skills/templates/SKILL.md` §1 dan isi kerangkanya. Opsi arsitektur yang Anda temukan di pohon ini masuk ke **§2 Eksplorasi Arsitektur & Trade-off Matrix** — WAJIB ≥3 opsi netral, tanpa label "(Recommended)" sepihak. Perbarui juga katalog `docs/rfc/README.md` (kerangkanya di `templates` §2).
+1. **Tuangkan keputusan ke dokumen RFC.** Buka `~/.gemini/config/skills/templates/SKILL.md` bagian 1 dan isi kerangkanya. Opsi arsitektur yang Anda temukan di pohon ini masuk ke **bab 2 dokumen RFC — "Eksplorasi Arsitektur & Trade-off Matrix"** — WAJIB ≥3 opsi netral, tanpa label "(Recommended)" sepihak. Perbarui juga katalog `docs/rfc/README.md` (kerangkanya di `templates` bagian 2).
 
 2. **BERHENTI. Tunggu "Gasskan".** Ini Gerbang Mutlak §0.5 `AGENTS.md`, bukan formalitas. Membuat branch dan menulis kode sebelum kata itu diucapkan adalah pelanggaran, sekalipun keputusan arsitekturnya sudah benar.
    *Pengecualian:* jalur **proyek kecil** (§2 `AGENTS.md`) dan **edit ≤3 berkas** memang menggugurkan RFC — di situ lanjut langsung ke langkah 3.

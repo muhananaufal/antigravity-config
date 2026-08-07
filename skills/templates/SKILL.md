@@ -15,13 +15,24 @@ Skill ini dipakai **dua kali**: di tahap 3 untuk menulis rencana, dan di tahap 6
 | :-: | :--- | :--- |
 | 1 | Routing task | `AGENTS.md` §2 |
 | 2 | Pilih stack & arsitektur | `master-decision-tree/SKILL.md` |
-| 3 | **Tulis `docs/rfc/YYYYMMDD-<fitur>.md` + katalog** | **`templates/SKILL.md` §1–§2 — Anda di sini** |
+| 3 | **Tulis `docs/rfc/YYYYMMDD-<fitur>.md` + katalog** | **`templates/SKILL.md` bagian 1–2 — Anda di sini** |
 | 4 | **BERHENTI — tunggu user mengetik "Gasskan"** | `AGENTS.md` §0.5 · **GERBANG MUTLAK** |
-| 5 | Branch, atomic commit, merge | `git-workflow/SKILL.md` §1–§5 |
-| 6 | **Patch Receipt + centang Kanban di RFC** | **`templates/SKILL.md` §6 — Anda di sini lagi** |
+| 5 | Branch, atomic commit, merge | `git-workflow/SKILL.md` bagian 1–5 |
+| 6 | **Patch Receipt + centang Kanban di RFC** | **`templates/SKILL.md` bagian 6 — Anda di sini lagi** |
+
+> Nomor **§** selalu merujuk `AGENTS.md`. Untuk seksi milik skill lain dipakai kata "bagian".
+
+**Empat rute §2 `AGENTS.md` MENGGUGURKAN tahap 3–4. DILARANG memaksakan RFC di sana:**
+
+| Rute §2 | Yang berlaku |
+| :--- | :--- |
+| Proyek baru **kecil** (4 syarat §2) | RFC & Day-0 Quintet DILARANG dipaksakan → langsung tahap 5 |
+| Edit **≤3 berkas**, bugfix, refactor minor, investigasi | DILARANG bikin RFC → langsung tahap 5. Bugfix tetap WAJIB Proof-of-Defect (§0.6) |
+| **In-Flight Fix** — >3 berkas tapi berasal dari RFC yang SUDAH disetujui | **DILARANG buat RFC kedua.** Catat perubahannya di seksi task RFC yang sedang aktif |
+| **Emergency Pause** — blocker arsitektural kritis di tengah eksekusi | BERHENTI. Susun `docs/rca/YYYYMMDD-<insiden>.md` (bagian 3 di bawah), lapor ke user, jangan putuskan sepihak |
 
 **Tiga sambungan yang WAJIB dijaga konsisten:**
-- Field **Target Branch** (§1) WAJIB memakai konvensi penamaan `git-workflow/SKILL.md` §1, dan WAJIB sama persis dengan branch yang benar-benar dibuat.
+- Field **Target Branch** (bagian 1 di bawah) WAJIB memakai konvensi penamaan `git-workflow/SKILL.md` bagian 1 (Git Flow), dan WAJIB sama persis dengan branch yang benar-benar dibuat.
 - Opsi di **§2 Eksplorasi Arsitektur** adalah keluaran `master-decision-tree/SKILL.md` — DILARANG mengarang opsi tanpa melewati pohon itu.
 - Tiap **Batch** di §4 memetakan ke satu atau lebih commit atomik (`git-workflow` §5); status `[x]` hanya boleh dicentang setelah batch itu lolos Quality Gate **dan** ter-commit.
 
