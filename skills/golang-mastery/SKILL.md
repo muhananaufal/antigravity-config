@@ -7,6 +7,16 @@ description: Gunakan skill ini ketika merancang arsitektur, konkurensi, DB/SQLC,
 
 SSOT arsitektur & rekayasa sistem Golang enterprise & high-throughput (30 Domain, 221 File Mahakarya).
 
+## 🏛️ Pilar Arsitektur Mutlak
+
+| Pilar | Hukumnya |
+| :--- | :--- |
+| **Konkurensi Berpemilik** | Setiap `go func()` WAJIB punya pemilik yang jelas: `context.Context` untuk pembatalan, `sync.WaitGroup` atau channel untuk penantian, dan `defer recover()`. Goroutine tanpa jalan keluar adalah kebocoran, bukan konkurensi. |
+| **Durabilitas Bukan Goroutine** | `go func()` memberi NOL durabilitas. Tugas yang tidak boleh hilang (email, invoice, mutasi saldo) WAJIB masuk queue durabel — Asynq atau River. |
+| **Batas Paket Tegas** | `DTO → Handler → Service → Repository`. Business logic DILARANG hidup di Handler, dan Repository DILARANG tahu soal HTTP. |
+| **Error Bertipe** | Sentinel error + `%w` wrapping + `errors.As`. `if err != nil { return err }` tanpa konteks adalah ritual kosong yang menghapus jejak. |
+| **Timeout di Setiap Batas** | Tidak ada panggilan DB, Redis, gRPC, atau HTTP tanpa `context.WithTimeout`. Satu dependensi lambat menghabiskan pool dan menjatuhkan seluruh layanan. |
+
 ## 🚦 Protokol Eksekusi (WAJIB dibaca sesuai situasi)
 
 > **SEBELUM membuka tabel di bawah:** Jika ini adalah proyek baru atau keputusan arsitektur besar, WAJIB lewati Master Decision Tree (`~/.gemini/config/skills/master-decision-tree/SKILL.md`) terlebih dahulu. DILARANG langsung memilih Go sebagai stack tanpa justifikasi dari Decision Tree.
@@ -65,7 +75,6 @@ Domain yang hampir selalu relevan untuk Go service manapun:
 | **Architecture** | `references/arch_patterns/` | semua |
 | **Docker & Deploy** | `references/devops_control_planes/` | `docker_container_go.md`, `kubernetes_deployment_go.md`, `modular_3tier_container_topology.md` |
 | **Resilience Patterns** | `references/distributed_patterns_resilience/` | `retry_backoff_jitter.md`, `idempotency_key_engine.md`, `bulkhead_isolation.md` |
-| **Caching** | `references/caching_strategy/` | `cache_aside_singleflight.md`, `multilevel_cache_l1l2.md` |
 
 ---
 
@@ -82,7 +91,6 @@ Domain yang hampir selalu relevan untuk Go service manapun:
 | Pagination, cursor vs offset, halaman dalam lambat, item terlewat/ganda | `references/microservices_grpc/pagination_patterns.md` |
 | Profiling berkelanjutan, membandingkan profil, label pprof, "baris kode mana" | `references/observability_resilience/continuous_profiling.md` |
 | Manifest K8s Go: `GOMEMLIMIT`, throttling CPU, probe, PDB, HPA, grace period | `references/devops_control_planes/kubernetes_deployment_go.md` |
-| IaC lanjutan: Crossplane, provider Terraform, CNI plugin, GitOps, Backstage | `references/devops_control_planes/` |
 | Login SSO, authorization code + PKCE, verifikasi ID token, refresh token | `references/security_owasp/oauth2_oidc_flow.md` |
 | CORS, preflight, CSRF, `SameSite`, CSP, HSTS, header keamanan respons | `references/security_owasp/web_security_headers.md` |
 | Query lambat, membaca `EXPLAIN ANALYZE`, memilih index komposit, `Seq Scan` | `references/db_sqlc/index_design_explain_analyze.md` |
@@ -93,7 +101,6 @@ Domain yang hampir selalu relevan untuk Go service manapun:
 | Perbaikan performa dari profil produksi tanpa mengubah kode | `references/runtime_internals/pgo_profile_guided_optimization.md` |
 | Menghapus berkas `utils`, interning string, cache yang tidak menahan memori | `references/runtime_internals/stdlib_modern_slices_maps_sync.md` |
 | Runtime internals, GC tuning, CGO, PGO, goroutine stack | `references/runtime_internals/` |
-| Distributed transactions, saga, outbox, CQRS, feature flags, multi-tenancy | `references/distributed_patterns_resilience/` |
 | Raft, etcd, LSM, WAL, gossip, vector clock, BadgerDB | `references/distributed_consensus_storage/` |
 | Payment, ledger, decimal, ISO 20022, PCI-DSS, reconciliation, ClickHouse | `references/fintech_reliability/` |
 | WebSocket, Kafka, NATS, eBPF, TCP, binary protocol | `references/realtime_networking/` |
@@ -109,8 +116,6 @@ Domain yang hampir selalu relevan untuk Go service manapun:
 | HNSW, LLM proxy, Apache Arrow, DataFusion, pgvector, ONNX | `references/ai_data_infra/` |
 | GitHub Actions, GitLab CI, GoReleaser, security scan CI, blue/green deploy, monorepo | `references/ci_cd_pipeline/` |
 | AWS SDK v2 (S3/SQS/DynamoDB), GCP client, Lambda, Secrets Manager, SNS fanout | `references/cloud_provider_sdk/` |
-| Background jobs, asynq, River (Postgres), cron distributed, worker pool, saga jobs | `references/background_jobs_worker/` |
-| Cache-aside, singleflight, L1/L2 multilevel, Redis patterns, cache invalidation, CDN headers | `references/caching_strategy/` |
 | Streaming Excel 1 Juta baris (`excelize`), govips JIT image resizing, FFmpeg video HLS, chromedp PDF | `references/media_asset_pipeline/` |
 | Katalog terjemahan `x/text`, format mata uang & bilangan ICU, propagasi zona waktu Context, multi-region routing | `references/i18n_localization/` |
 

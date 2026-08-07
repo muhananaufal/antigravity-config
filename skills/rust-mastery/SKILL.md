@@ -7,6 +7,16 @@ description: Gunakan skill ini ketika merancang arsitektur, Borrow Checker memor
 
 SSOT arsitektur & rekayasa sistem Rust enterprise, systems programming, dan ultra-low latency (34 Domain, 195 File Mahakarya).
 
+## 🏛️ Pilar Arsitektur Mutlak
+
+| Pilar | Hukumnya |
+| :--- | :--- |
+| **Kegagalan Bertipe** | `thiserror` di pustaka, `anyhow` di biner. `.unwrap()` DILARANG di jalur produksi — di dalam test ia justru idiomatik. Panic adalah keputusan, bukan kelalaian. |
+| **Async Tidak Boleh Diblokir** | `Mutex` guard DILARANG hidup melintasi `.await`. Komputasi berat dan blocking I/O WAJIB `spawn_blocking` — kalau tidak, satu worker thread runtime membeku bersama semua task di atasnya. |
+| **Cancel-Safety Disengaja** | Setiap cabang `tokio::select!` diperiksa: cabang yang kalah dibatalkan **di tengah jalan**. Future yang tidak cancel-safe kehilangan data yang sudah ditarik dari socket. |
+| **Kepemilikan Bukan Kebetulan** | Siklus `Arc<T>` diputus `Weak<T>`. Memori bisa bocor tanpa satu baris `unsafe` pun — borrow checker tidak menjaga Anda dari siklus. |
+| **`unsafe` Terkurung & Terbukti** | Setiap blok `unsafe` dibungkus antarmuka aman, diberi komentar invariant-nya, dan diverifikasi `cargo miri test`. Tanpa Miri, itu harapan, bukan jaminan. |
+
 ## 🚦 Protokol Eksekusi (WAJIB dibaca sesuai situasi)
 
 > **SEBELUM membuka tabel di bawah:** Jika ini adalah proyek baru atau keputusan arsitektur besar, WAJIB lewati Master Decision Tree (`~/.gemini/config/skills/master-decision-tree/SKILL.md`) terlebih dahulu. DILARANG langsung memilih Rust sebagai stack tanpa justifikasi dari Decision Tree.

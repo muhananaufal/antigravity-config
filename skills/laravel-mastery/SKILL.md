@@ -7,6 +7,16 @@ description: Gunakan skill ini ketika merancang arsitektur, API resources, Sanct
 
 SSOT arsitektur & rekayasa Laravel enterprise, SaaS high-throughput, dan resilient cloud-native PHP (27 Domain, 136 File Mahakarya).
 
+## 🏛️ Pilar Arsitektur Mutlak
+
+| Pilar | Hukumnya |
+| :--- | :--- |
+| **Tidak Ada Fire-and-Forget** | Proses PHP mati setelah response — tidak ada padanan `go func()`. Tugas asinkron sekecil apa pun WAJIB masuk Queue + Horizon. Menjalankannya "di belakang" bukan pilihan yang lambat, melainkan pilihan yang tidak ada. |
+| **Lapisan Tegas** | `FormRequest → Controller → Action/Service → Repository → Model`. Controller hanya menerjemahkan HTTP; business logic DILARANG tinggal di sana. |
+| **Query Selalu Berbatas** | `->with()` eager loading dan `->paginate()` di setiap listing. `->get()` telanjang berfungsi mulus sampai baris ke sejuta, lalu menghabiskan memori proses sekaligus. |
+| **Octane Tidak Memaafkan State** | Properti `static` mutable dan singleton stateful bocor **antar-request** — kelas bug yang tidak pernah ada di php-fpm. Data satu pengguna sampai ke pengguna berikutnya. |
+| **Transaksi Mendahului Job** | Job yang menyentuh data transaksi pemanggilnya WAJIB `$afterCommit`. Tanpa itu worker mengambil job sebelum commit dan gagal mencari baris yang belum ada. |
+
 ## 🚦 Protokol Eksekusi (WAJIB dibaca sesuai situasi)
 
 > **SEBELUM membuka tabel di bawah:** Jika ini adalah proyek baru atau keputusan arsitektur besar, WAJIB lewati Master Decision Tree (`~/.gemini/config/skills/master-decision-tree/SKILL.md`) terlebih dahulu. DILARANG langsung memilih Laravel sebagai stack tanpa justifikasi dari Decision Tree.
