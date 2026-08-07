@@ -76,6 +76,13 @@ query optimization, hexagonal, authentication, authorization, input validation.
 Agent mengarang dari hafalan (langgar §0.1) sambil merasa patuh.
 **Kambuhan** dari `LEARNED.md` butir "rust/laravel hanya punya tabel Niche — 129 berkas jadi mati".
 
+> ⚠️ **Yang pulih baru JANGKAUAN, bukan ISI.** Tabel Core References Laravel juga memuat
+> `api_versioning_openapi/`, dan **H17** membuktikan direktori itu hanya berisi satu stub
+> 5 baris ber-encoding UTF-16. Jadi tambalan H1 kini mengarahkan agent ke sebuah domain
+> wajib-baca yang materinya nyaris kosong. Bukan regresi dari H1 — kekosongan itu sudah
+> ada sebelumnya dan justru baru terlihat setelah rutenya dibuka. **DILARANG membaca H1
+> `[x]` sebagai "Laravel Core sehat"**; itu baru benar setelah H17 ikut tertutup.
+
 ### 🟠 TINGGI
 
 #### H2 — Gate `-Full` lebih lemah dari mandat tiap SKILL.md · Status: `[x]` TERTAMBAL 2026-08-07
