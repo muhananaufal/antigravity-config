@@ -22,3 +22,9 @@
 | Graceful shutdown | `signal.NotifyContext` tangkap SIGINT/SIGTERM · `Shutdown(ctx)` 5–15 detik · `db.Close()` · OTel `tp.Shutdown(ctx)` · logger sync |
 | Migrasi & seeder | `migrations/` (`golang-migrate`/`goose`) + `seed.sql` idempotent |
 | Task runner | `Makefile`: `dev` (air) · `infra-up`/`down` · `telemetry-up` · `migrate` · `seed` · `test` · `stress` |
+
+## 3. Fase implementasi
+
+Patuhi standar yang sudah diekstrak subagent. `view_file` ke referensi spesifik HANYA bila butuh contoh kode konkret — Day-0 Quintet sudah mengunci fondasinya, jadi membaca ulang seluruh domain di fase ini membakar token tanpa menambah keputusan.
+
+Urutan aman: `arch_patterns/` menentukan batas paket → `db_sqlc/` mengunci skema & query → `microservices_grpc/` membuka transport. DILARANG menulis handler sebelum skema terkunci (Contract-First, `AGENTS.md` §7).

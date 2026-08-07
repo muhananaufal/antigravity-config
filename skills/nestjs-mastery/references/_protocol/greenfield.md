@@ -21,3 +21,9 @@
 | Graceful shutdown | `app.enableShutdownHooks()` tangkap SIGINT/SIGTERM · drain koneksi Fastify · tutup pool Prisma/Drizzle · flush OTel Tracing SDK |
 | Migrasi & seeder | `prisma/migrations` / `drizzle` + `prisma/seed.ts` idempotent untuk akun admin awal |
 | Task runner | `Makefile`/`package.json` scripts: `dev` (Nest Fastify hot-reload) · `infra-up`/`down` · `telemetry-up` · `migrate` · `seed` · `test` (Jest) · `stress` (k6) |
+
+## 3. Fase implementasi
+
+Patuhi standar yang sudah diekstrak subagent. `view_file` ke referensi spesifik HANYA bila butuh contoh kode konkret — Day-0 Quintet sudah mengunci fondasinya.
+
+Urutan aman: `core_arch_patterns/` menetapkan Bounded Context & batas Ports/Adapters → `db_persistence_orm/` mengunci skema Prisma/Drizzle → `validation_serialization/` mengunci DTO di pintu masuk → baru controller. DILARANG menulis controller sebelum DTO bervalidasi runtime terkunci: tipe TypeScript MUSNAH saat compile, jadi controller tanpa Zod/class-validator adalah lubang terbuka, bukan sekadar utang gaya.
