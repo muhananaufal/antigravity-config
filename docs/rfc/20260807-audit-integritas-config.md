@@ -338,9 +338,9 @@ Select-String -Path "$c\shared\tool-claude-code.md","$c\skills\skill-engineering
 # peringatan struktur (diagram/anti-pattern/edge case) sebagai kegagalan.
 & "$env:USERPROFILE\.gemini\config\scripts\audit_references.ps1" -Skill rust-mastery
 ```
-**Angka acuan per 2026-08-07:** 701 berkas, rata-rata 12,77 KB, **90 FATAL**
-(2 ENCODING + 88 TIPIS), 1.051 peringatan struktur.
-**LULUS bila:** 0 ENCODING, dan jumlah TIPIS menurun dari 88.
+**Angka acuan per 2026-08-07:** 701 berkas, rata-rata 12,77 KB, **92 FATAL**
+(2 ENCODING + 90 TIPIS), 1.051 peringatan struktur.
+**LULUS bila:** 0 ENCODING, dan jumlah TIPIS menurun dari 90.
 
 ### 5.4 — H8: direktori scripts per bundle
 ```powershell
