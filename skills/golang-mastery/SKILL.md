@@ -16,6 +16,7 @@ SSOT arsitektur & rekayasa sistem Golang enterprise & high-throughput (30 Domain
 | Inisiasi project baru dari nol (empty folder / new repository) | `references/_protocol/greenfield.md` |
 | Tambah fitur / modifikasi / optimasi / audit di repo eksisting | `references/_protocol/brownfield.md` |
 | Keputusan arsitektur / menantang pilihan stack (Challenger Mode §4) | `references/_protocol/tradeoff.md` |
+| Proyek berada di dalam repo Git — branching, atomic commit, Conventional Commits | `~/.gemini/config/skills/git-workflow/SKILL.md` (§3.9 `AGENTS.md`) |
 
 DILARANG membuat dokumen RFC (`docs/rfc/`) atau menulis kode sebelum protokol yang relevan dibaca tuntas.
 

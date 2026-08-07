@@ -25,8 +25,8 @@ SSOT arsitektur backend TypeScript enterprise (36 Domain, 139 Berkas). Zero-Tole
 | :--- | :--- |
 | Inisiasi project baru dari nol | `references/_protocol/greenfield.md` |
 | Tambah fitur / refactor / optimasi / audit di repo eksisting | `references/_protocol/brownfield.md` |
-| Operasi menyentuh >3 berkas atau >3 domain | `references/_protocol/greenfield.md` bagian **Swarm Research Protocol** |
-| Keputusan arsitektur / menantang pilihan stack (Challenger Mode) | `references/_protocol/tradeoff.md` |
+| Keputusan arsitektur / menantang pilihan stack (Challenger Mode §4) | `references/_protocol/tradeoff.md` |
+| Proyek berada di dalam repo Git — branching, atomic commit, Conventional Commits | `~/.gemini/config/skills/git-workflow/SKILL.md` (§3.9 `AGENTS.md`) |
 
 DILARANG membuat dokumen RFC (`docs/rfc/`) atau menulis kode sebelum protokol yang relevan dibaca tuntas.
 
