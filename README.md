@@ -70,7 +70,8 @@
 │   ├── skill-engineering-mastery/ # Meta-Skill Pembuatan & Audit Skill Baru
 │   └── templates/              # Master Template RFC, RCA, System Map, & Patch Receipts
 │
-└── plugins/                    # Integrasi Plugin Eksternal
+└── plugins/                    # Plugin PIHAK KETIGA (Apache-2.0) - ter-gitignore, tidak ikut ter-clone.
+                                # Diaudit 2026-08-07: nol kredensial, bukan tulisan sendiri.
     ├── chrome-devtools-plugin/ # E2E Browser Testing & Lighthouse Audits
     ├── google-antigravity-sdk/ # SDK Internal & Slash Commands (/goal, /schedule, dll)
     └── modern-web-guidance-plugin/ # Standar Modern Web, CSS Vanilla, & Rich Aesthetics
