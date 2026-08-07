@@ -49,7 +49,7 @@ Uji reachability berbasis "nama muncul di teks" memberi **false negative** karen
 
 ---
 
-## 2. Inventori Temuan (16 lubang — H15 & H16 tersingkap saat mengerjakan tambalan)
+## 2. Inventori Temuan (18 lubang — H15-H18 tersingkap saat mengerjakan tambalan)
 
 Kolom **Status** adalah tracker Kanban: `[ ]` belum · `[/]` dikerjakan · `[x]` tertambal & terverifikasi.
 Maksimal 2 item `[/]` bersamaan.
@@ -98,34 +98,79 @@ karena dua sebab — ekstensi tak dipindai **dan** bentuk `AQ.Ab8...` absen dari
 **Kunci itu AMAN** — ter-`.gitignore`, tidak tracked, `git log -S` kosong, tidak pernah ter-commit.
 Yang cacat detektornya, bukan higiene-nya.
 
+#### H17 — Domain Core Laravel & Rust berisi stub UTF-16 · Status: `[ ]` **BELUM DITAMBAL**
+Tersingkap saat mengalibrasi `audit_references.ps1` (Batch C), bukan saat audit awal —
+dimensi encoding & kepadatan isi memang tercatat di §6 sebagai belum disentuh.
+
+| Berkas | Ukuran | Baris | Encoding |
+| :--- | ---: | ---: | :--- |
+| `laravel-mastery/references/api_versioning_openapi/1_api_versioning_openapi_docs.md` | 498 B | 5 | **UTF-16LE + BOM** |
+| `rust-mastery/references/api_versioning_openapi/1_api_versioning_openapi_docs.md` | 422 B | 5 | **UTF-16LE + BOM** |
+
+Tepat 2 berkas ini saja di seluruh korpus 701 berkas yang encoding-nya salah — sapuan
+byte-level mengonfirmasi sisanya UTF-8 tanpa BOM. Keduanya lahir dari commit `2ca4cdf`
+*"feat(mastery): populate api_versioning_openapi reference docs for Laravel and Rust"*,
+commit kedua terbaru di repositori. Ini **regresi baru**, bukan utang lama.
+
+Tiga pelanggaran menumpuk sekaligus:
+1. **Encoding** — `LEARNED.md` eksplisit: berkas `.md` WAJIB UTF-8 tanpa BOM; `Set-Content`/
+   `Out-File` bawaan PowerShell merusaknya. Ini persis mekanisme yang sudah tercatat.
+2. **Kepadatan** — 5 baris vs minimum 130 (`reference_file_standards.md`).
+3. **Jangkauan** — `api_versioning_openapi/` terdaftar di **Core References** Laravel
+   ("WAJIB Baca Setiap Project Laravel"), dan berkas ini satu-satunya isi direktori itu.
+   Jadi domain wajib-baca berisi satu stub 5 baris yang tidak terbaca alat berbasis teks.
+
+**Tidak ditambal hari ini:** memperbaikinya berarti menulis 2× ≥130 baris materi teknis
+API versioning + OpenAPI untuk Laravel dan Rust. Itu penulisan ilmu, dan §0.1 melarang
+mengarang dari hafalan sebelum referensi domainnya dibaca — yang belum saya lakukan.
+
+#### H18 — Kepadatan korpus timpang, 90 berkas di bawah ambang · Status: `[ ]` **BELUM DITAMBAL**
+Pengukuran pertama yang pernah ada atas kepadatan isi seluruh korpus (701 berkas):
+
+| Bundle | Berkas | Rata-rata | FATAL (< 130 baris) | Peringatan struktur |
+| :--- | ---: | ---: | ---: | ---: |
+| `golang-mastery` | 221 | 17,59 KB | 0 | 265 |
+| `laravel-mastery` | 136 | 15,22 KB | 3 | 256 |
+| `nestjs-mastery` | 139 | 11,70 KB | 0 | 169 |
+| `rust-mastery` | 195 | **6,42 KB** | **87** | 361 |
+| `skill-engineering-mastery` | 10 | 11,26 KB | 0 | 0 |
+
+`rust-mastery` menyimpang tajam: rata-rata **2,7× lebih tipis** dari golang, dan 87 dari 195
+berkas (45%) di bawah ambang 130 baris. Domain terdampak terberat: `advanced_procmacro_engineering`,
+`async_executor_internals`, `async_tokio_concurrency`, `blockchain_smart_contracts`.
+
+Peringatan struktur (diagram/anti-pattern/edge case kurang) sengaja tidak memblokir —
+1.051 peringatan menuntut kalibrasi lebih lanjut sebelum layak dijadikan gerbang.
+Jalankan `scripts/audit_references.ps1 -Strict` untuk melihatnya sebagai kegagalan.
+
 ### 🟡 SEDANG
 
-#### H4 — Deteksi empty-test Rust adalah dead code · Status: `[ ]`
+#### H4 — Deteksi empty-test Rust adalah dead code · Status: `[x]` TERTAMBAL 2026-08-07
 `quality_gate.ps1:170` mencocokkan `$f.Name` (nama berkas saja) dengan pola `tests/.*\.rs$`.
 Nama berkas tidak pernah memuat `/` di OS mana pun → cabang Rust tak pernah menyala.
 
-#### H5 — Gate 4 false-block: `composer test` absen · Status: `[ ]`
+#### H5 — Gate 4 false-block: `composer test` absen · Status: `[x]` TERTAMBAL 2026-08-07
 `quality_gate.ps1:203` `$TESTCMD` tidak memuat `composer test`, padahal `AGENTS.md §6`
 menyebutnya perintah sah. `cargo nextest` juga absen (dipakai `rust-mastery/ci_cd_pipeline_cargo/`).
 Agent patuh yang menjalankan `composer test` **diblokir** dengan tuduhan "test tidak pernah dijalankan".
 
-#### H6 — Gate 2b: false-block Rust + celah Go · Status: `[ ]`
+#### H6 — Gate 2b: false-block Rust + celah Go · Status: `[x]` TERTAMBAL 2026-08-07
 `quality_gate.ps1:147-148`. `UNTYPED_RS='\.unwrap\(\)'` tanpa pengecualian berkas test →
 menulis test Rust idiomatis memicu blokir. `UNTYPED_GO='interface\{\}'` memblokir bentuk lama
 tapi **membiarkan `any`** — alias identik dan idiom Go 1.18+. Bentuk lama diblokir, bentuk baru lolos.
 
-#### H7 — Dua rujukan `§` rusak · Status: `[ ]`
+#### H7 — Dua rujukan `§` rusak · Status: `[x]` TERTAMBAL 2026-08-07
 - `skills/brainstorm/SKILL.md:14` — menulis "§2 (bahasa & kepadatan)". §2 = ROUTING TASK. Seharusnya **§8**.
 - `AGENTS.md:178` — menulis "hanya setelah §3.7". §3.7 = lokasi referensi mastery.
   Prasyarat web search ada di **§3.8**. Off-by-one.
 
-#### H8 — `scripts/` wajib per bundle, nol dari 5 punya · Status: `[ ]`
+#### H8 — `scripts/` wajib per bundle, nol dari 5 punya · Status: `[x]` TERTAMBAL 2026-08-07 (opsi C: skrip terpusat)
 `skill-engineering-mastery/references/architecture_pattern.md:23` menandai `scripts/` **[WAJIB]**;
 `skill_md_template.md:54` mewajibkan `audit_quality_gate.ps1` + `quality_gate.sh`.
 Nol bundle memilikinya. Lebih parah: `nestjs-mastery/SKILL.md:107` merujuk
 "Skrip di `scripts/` bundle ini" — pointer ke direktori yang tidak eksis.
 
-#### H9 — Batch Writing Protocol hilang di Claude Code · Status: `[ ]`
+#### H9 — Batch Writing Protocol hilang di Claude Code · Status: `[x]` TERTAMBAL 2026-08-07 (CC-1b)
 `shared/tool-claude-code.md:6` menyatakan §7 DIABAIKAN, tapi CC-1 hanya menggantikan
 tabel routing subagent. DAG Task Dependency & Contract-First **selamat** lewat template RFC.
 Yang benar-benar jatuh: **"maks 3-4 file per turn + test + atomic commit tiap batch"** —
@@ -154,7 +199,7 @@ Nama berkas ini **tidak eksis** (aslinya `master-decision-tree/SKILL.md`). Muncu
 `README.md` §Jaminan Integritas mengklaim "✅ 0 Broken Paths pada seluruh referensi markdown
 dan link lokal". H8 dan H10 membatalkannya.
 
-#### H13 — Kanban maks 2 WIP jatuh di Claude Code · Status: `[ ]`
+#### H13 — Kanban maks 2 WIP jatuh di Claude Code · Status: `[x]` TERTAMBAL 2026-08-07 (ikut CC-1b)
 Aturan itu hidup **hanya** di `AGENTS.md §8`; CC-3 menggantikan §8 tapi tidak merestatenya.
 (Aturan web-search selamat lewat §3.8 — jangan ikut "diperbaiki".)
 
@@ -279,6 +324,16 @@ Select-String -Path "$c\AGENTS.md"                  -Pattern 'setelah §3\.7'
 Select-String -Path "$c\shared\tool-claude-code.md","$c\skills\skill-engineering-mastery\SKILL.md" -Pattern 'master_decision_tree\.md'
 ```
 **LULUS bila:** dua yang pertama nihil; yang ketiga hanya muncul berpasangan dengan path lengkap.
+
+### 5.6 — H17/H18: mutu & encoding berkas referensi
+```powershell
+# Satu bundle, atau kosongkan -Skill untuk seluruh korpus. -Strict menjadikan
+# peringatan struktur (diagram/anti-pattern/edge case) sebagai kegagalan.
+& "$env:USERPROFILE\.gemini\config\scripts\audit_references.ps1" -Skill rust-mastery
+```
+**Angka acuan per 2026-08-07:** 701 berkas, rata-rata 12,77 KB, **90 FATAL**
+(2 ENCODING + 88 TIPIS), 1.051 peringatan struktur.
+**LULUS bila:** 0 ENCODING, dan jumlah TIPIS menurun dari 88.
 
 ### 5.4 — H8: direktori scripts per bundle
 ```powershell
