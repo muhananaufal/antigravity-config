@@ -34,7 +34,17 @@ Subagent auditor wajib menyusun tabel forensik ini sebelum opsi arsitektur diaju
 
 ---
 
-## 3. Sajikan ≥3 Opsi Arsitektur — Zero-Steering Grilling
+## 3. Bahaya Khas Rust yang WAJIB Diperiksa
+
+1. **`Mutex` ditahan lintas `.await`:** guard yang hidup melewati titik await menahan lock selama task tersuspensi — starvation, dan pada `tokio::sync::Mutex` bisa berujung deadlock. Persempit scope guard, atau pakai `parking_lot::Mutex` non-async.
+2. **Blocking I/O di dalam async:** operasi berkas, kriptografi berat, atau panggilan sinkron tanpa `spawn_blocking` membekukan seluruh worker thread runtime, bukan hanya task itu.
+3. **Cancellation hazard pada `tokio::select!`:** cabang yang kalah dibatalkan **di tengah jalan**. Future yang tidak cancel-safe akan kehilangan data yang sudah diambil dari socket atau channel.
+4. **`unwrap()` di jalur produksi:** panic pada `None`/`Err` mematikan task, dan di banyak konfigurasi ikut mematikan proses. Gunakan `thiserror`/`anyhow` dengan propagasi eksplisit — kecuali di dalam test, di mana `unwrap()` justru idiomatik.
+5. **Siklus `Arc<T>`:** dua struktur yang saling memegang `Arc` tidak pernah mencapai count nol. Memori bocor tanpa satu pun `unsafe`. Pemutusnya `Weak<T>`.
+
+---
+
+## 4. Sajikan ≥3 Opsi Arsitektur — Zero-Steering Grilling
 
 | Opsi | Kapan Cocok | Konsekuensi & Guardrail |
 | :--- | :--- | :--- |

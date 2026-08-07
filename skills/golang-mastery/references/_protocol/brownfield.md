@@ -35,7 +35,17 @@ Subagent auditor wajib menyusun tabel forensik ini sebelum opsi arsitektur diaju
 
 ---
 
-## 3. Sajikan ≥3 Opsi Arsitektur — Zero-Steering Grilling
+## 3. Bahaya Khas Go yang WAJIB Diperiksa
+
+1. **Goroutine leak:** `go func()` tanpa `context.Context` atau tanpa jalur keluar — goroutine menumpuk diam-diam sampai OOM. Setiap goroutine baru WAJIB punya pembatalan **dan** `defer recover()`.
+2. **Panggilan eksternal tanpa timeout:** DB, Redis, gRPC, HTTP client tanpa `context.WithTimeout`. Satu dependensi lambat melumpuhkan seluruh layanan lewat pool yang habis.
+3. **Pool koneksi default tak terbatas:** `SetMaxOpenConns`/`SetMaxIdleConns`/`SetConnMaxLifetime` absen. Beban puncak membuka ribuan koneksi dan menjatuhkan database, bukan aplikasinya.
+4. **Untyped bypass:** `interface{}` atau `any` tanpa type assertion, dan error yang ditelan (`if err != nil` tanpa `%w` atau `errors.As`). Keduanya memindahkan kegagalan dari waktu kompilasi ke produksi.
+5. **`go func()` disangka background job:** ia memberi NOL durabilitas (`LEARNED.md`). Server mati = pekerjaan hilang tanpa jejak. Tugas yang tidak boleh hilang WAJIB masuk queue durabel (Asynq/River).
+
+---
+
+## 4. Sajikan ≥3 Opsi Arsitektur — Zero-Steering Grilling
 
 | Opsi | Kapan Cocok | Konsekuensi & Guardrail |
 | :--- | :--- | :--- |

@@ -34,7 +34,17 @@ Subagent auditor wajib menyusun tabel forensik ini sebelum opsi arsitektur diaju
 
 ---
 
-## 3. Sajikan ≥3 Opsi Arsitektur — Zero-Steering Grilling
+## 3. Bahaya Khas Laravel yang WAJIB Diperiksa
+
+1. **Octane state leak:** properti `static` dan singleton stateful di Service Provider bertahan **antar-request** — kelas bug yang tidak pernah ada di php-fpm. Data satu pengguna bocor ke pengguna berikutnya.
+2. **N+1 query:** relasi Eloquent diakses di dalam loop tanpa `->with()`. Satu halaman daftar berubah jadi ratusan query, dan baru terasa setelah data produksi tumbuh.
+3. **Job tanpa `$afterCommit`:** worker mengambil job sebelum transaksi pemanggilnya commit, lalu gagal mencari baris yang belum ada. Race yang lolos di lokal dan menyala di produksi.
+4. **Mass assignment & IDOR:** `$fillable`/`$guarded` longgar, atau route model binding tanpa policy — pengguna mengubah kolom atau membaca sumber daya milik orang lain.
+5. **Pagination hilang:** `->all()` atau `->get()` pada tabel yang tumbuh. Berfungsi mulus sampai baris ke sejuta, lalu menghabiskan memori proses PHP sekaligus.
+
+---
+
+## 4. Sajikan ≥3 Opsi Arsitektur — Zero-Steering Grilling
 
 | Opsi | Kapan Cocok | Konsekuensi & Guardrail |
 | :--- | :--- | :--- |

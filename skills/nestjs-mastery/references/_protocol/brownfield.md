@@ -40,6 +40,7 @@ Subagent auditor wajib menyusun tabel forensik ini sebelum opsi arsitektur diaju
 2. **Untyped `any` bypass:** DTO tanpa validasi runtime (`class-validator` / `zod`).
 3. **Kebocoran lifecycle:** `enableShutdownHooks()` absen $\rightarrow$ pool DB & broker tidak tertutup saat SIGTERM.
 4. **Circular dependency:** `forwardRef()` bertebaran $\rightarrow$ gejala domain boundary bocor.
+5. **`Scope.REQUEST` menular:** satu provider request-scoped memaksa SELURUH rantai injeksi di atasnya ikut dibuat ulang per request. Biaya instansiasi meledak diam-diam, dan bocornya baru terlihat sebagai memori naik di bawah beban.
 
 ---
 
