@@ -156,7 +156,11 @@ foreach ($f in $targets) {
 # --- Gate 2b: untyped bypasses (any in TS, raw unwrap in Rust, raw interface{} in Go) ---
 $UNTYPED_TS = ':\s*any\b|<any>|\bas\s+any\b'
 $UNTYPED_RS = '\.unwrap\(\)'
-$UNTYPED_GO = 'interface\{\}'
+# `any` adalah alias IDENTIK untuk interface{} sejak Go 1.18, dan justru bentuk yang
+# dipakai kode modern. Memblokir bentuk lama sambil meloloskan bentuk baru berarti gate
+# ini menghukum gaya penulisan, bukan bypass tipenya. Lookaround mencegah kata seperti
+# "company"/"anything" dan literal string "any" ikut tertangkap.
+$UNTYPED_GO = 'interface\{\}|(?<![\w"])any(?![\w"])'
 
 foreach ($f in $targets) {
     $pattern = $null
@@ -165,8 +169,19 @@ foreach ($f in $targets) {
     elseif ($f.Extension -eq '.go')      { $pattern = $UNTYPED_GO }
 
     if ($pattern) {
+        # `.unwrap()` di dalam test Rust adalah idiom resmi, bukan bypass tipe. Memblokirnya
+        # membuat menulis test jadi pelanggaran mutu - hukuman yang persis terbalik dari niat
+        # gate ini. Kecualikan berkas test integrasi, dan pada berkas sumber abaikan segala
+        # sesuatu setelah #[cfg(test)] (konvensi Rust menaruh modul test di bagian bawah).
+        $testFrom = [int]::MaxValue
+        if ($f.Extension -eq '.rs') {
+            if (($f.FullName -replace '\\','/') -match '/tests/' -or $f.Name -match '_tests?\.rs$') { continue }
+            $cfg = Select-String -LiteralPath $f.FullName -Pattern '^\s*#\[cfg\(test\)\]' -List -ErrorAction SilentlyContinue
+            if ($cfg) { $testFrom = $cfg.LineNumber }
+        }
         $hits = Select-String -LiteralPath $f.FullName -Pattern $pattern -AllMatches -ErrorAction SilentlyContinue
         foreach ($h in $hits) {
+            if ($h.LineNumber -ge $testFrom) { continue }
             $line = $h.Line
             # Lewati komentar
             if ($line -match '^\s*(//|/\*|\*)') { continue }
@@ -177,8 +192,11 @@ foreach ($f in $targets) {
 }
 
 # --- Gate 2c: empty / tautological test detection ---
+# Dicocokkan pada PATH yang sudah dinormalkan, BUKAN pada $f.Name. Nama berkas tidak
+# pernah memuat '/', sehingga pola 'tests/.*\.rs' pada versi sebelumnya adalah cabang
+# mati yang tidak akan pernah menyala di sistem operasi mana pun.
 foreach ($f in $targets) {
-    if ($f.Name -match '(_test\.go|\.test\.(ts|js|tsx|jsx)|Test\.php|tests/.*\.rs|test_.*\.py)$') {
+    if (($f.FullName -replace '\\','/') -match '(_test\.go|\.test\.(ts|js|tsx|jsx)|Test\.php|/tests/.*\.rs|_tests?\.rs|test_.*\.py)$') {
         $lines = Get-Content -LiteralPath $f.FullName -ErrorAction SilentlyContinue
         for ($i = 0; $i -lt $lines.Count; $i++) {
             $l = $lines[$i]
@@ -190,6 +208,13 @@ foreach ($f in $targets) {
             # Deteksi TS/JS empty test: it('...', () => {})
             if ($l -match '(it|test)\s*\([^,]+,\s*(async\s*)?\(\s*\)\s*=>\s*\{\s*\}\)') {
                 $msg = "EMPTY_TEST   $($f.FullName):$($i+1)  Empty test closure detected"
+                if (Test-IsNew $f.FullName ($i+1)) { $violations.Add($msg) } else { $preexisting.Add($msg) }
+            }
+            # Deteksi Rust empty test: fn xxx() {} di berkas test.
+            # Sebelumnya TIDAK ADA detektor Rust sama sekali di sini - memperbaiki pola
+            # pencocokan berkas saja tidak cukup, karena isinya pun tidak pernah menguji Rust.
+            if ($f.Extension -eq '.rs' -and $l -match 'fn\s+\w+\([^)]*\)\s*\{\s*\}') {
+                $msg = "EMPTY_TEST   $($f.FullName):$($i+1)  Empty rust test function detected"
                 if (Test-IsNew $f.FullName ($i+1)) { $violations.Add($msg) } else { $preexisting.Add($msg) }
             }
             # Deteksi Python pass test: def test_xxx(): pass
@@ -211,7 +236,10 @@ $SRC_EXT = @('.go','.rs','.php','.ts','.tsx','.js','.jsx','.mjs','.cjs','.py','.
 if ($Transcript -and (Test-Path -LiteralPath $Transcript)) {
     $srcChanged = @($targets | Where-Object { $SRC_EXT -contains $_.Extension })
     if ($srcChanged.Count -gt 0) {
-        $TESTCMD = 'go test|cargo test|npm (run )?test|pnpm (run )?test|yarn test|php artisan test|phpunit|bin.pest|pytest|jest|vitest|mvn [^|]*test|gradle [^|]*test|dotnet test'
+        # `composer test` disebut eksplisit di AGENTS.md section 6 sebagai perintah sah, dan
+        # `cargo nextest` dipakai domain ci_cd_pipeline_cargo. Tanpa keduanya, agent yang
+        # PATUH pada aturan justru diblokir dengan tuduhan tidak pernah menjalankan test.
+        $TESTCMD = 'go test|cargo test|cargo nextest|composer test|npm (run )?test|pnpm (run )?test|yarn test|php artisan test|phpunit|bin.pest|pytest|jest|vitest|mvn [^|]*test|gradle [^|]*test|dotnet test'
         $found = Select-String -LiteralPath $Transcript -Pattern $TESTCMD -List -ErrorAction SilentlyContinue
         if (-not $found) {
             $names = ($srcChanged | Select-Object -First 5 | ForEach-Object { $_.Name }) -join ', '
