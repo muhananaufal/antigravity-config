@@ -2,15 +2,19 @@
 
 > Dipicu dari `SKILL.md` saat inisiasi proyek baru, ATAU saat operasi menyentuh >3 berkas / >3 domain. **Gerbang Klarifikasi (§2 `AGENTS.md`) WAJIB tuntas lebih dulu.**
 
-## 1. Swarm Research Protocol
+## 1. Riset — sebar subagent tier `pro`
 
-**DILARANG mengarang dari hafalan LLM mentah.** Urutannya:
-
-| Langkah | Aksi |
+| Subagent | WAJIB baca SELURUH berkas di |
 | :--- | :--- |
-| Local-first | `list_dir` ke `references/<domain>/` yang relevan, lalu `view_file` / `grep_search` untuk menanamkan isinya ke penalaran |
-| Operasi >3 berkas atau >3 domain | WAJIB `invoke_subagent` dengan array armada spesialis — Workspace Mode `share`, Model Tier `pro` |
-| Hasil kerja agen maupun subagen | WAJIB 100% type-safe, kompilabel, lulus Jest/SWC/Fastify Inject |
+| Arsitektur, Data & Container | `core_arch_patterns/` `db_persistence_orm/` `configuration_env_management/` `docker_container_standards/` |
+| HTTP, Validasi, Jobs & Aset | `http_engine_fastify/` `validation_serialization/` `background_jobs_queues/` `caching_strategy_cdn/` `file_storage_object_cdn/` `omnichannel_notifications_mail/` `testing_quality_qa/` |
+| Keamanan, Observability & Runtime | `security_owasp_zerotrust/` `identity_iam_sso_mfa/` `observability_apm_metrics/` `structured_logging_telemetry/` `concurrency_runtime_internals/` |
+| +1 per domain niche | sesuai Tier II & Tier III pada matriks routing di `SKILL.md` |
+
+Ketiga kelompok di atas mencakup **seluruh 16 domain Tier I** — Fardu Ain, tanpa kecuali.
+3 core WAJIB, niche elastis — 3 niche terdeteksi berarti 6 subagent paralel. DILARANG menulis kode atau dokumen RFC (`docs/rfc/`) sebelum semua subagent melapor.
+
+**DILARANG mengarang dari hafalan LLM mentah.** Local-first: `list_dir` ke `references/<domain>/`, lalu baca isinya sampai tuntas sebelum menalar. Hasil kerja agen maupun subagen WAJIB 100% type-safe, kompilabel, dan lulus Jest/SWC/Fastify Inject.
 
 ## 2. Day-0 Quintet — WAJIB ada di root
 
