@@ -175,7 +175,7 @@ DILARANG mengubah status task jadi `[x]` sebelum SEMUA butir ini lulus.
 - **Panjang & Visualisasi Jawaban:** padat untuk tugas rutin. Mendalam HANYA saat *Mentor Mode* dan **DIBEKUKAN TUNTAS / All-Out** saat menyusun dokumen perancangan arsitektur/RFC (§5). Saat menjelaskan alur sistem atau arsitektur kompleks dalam *Mentor Mode* maupun RFC, WAJIB sertakan diagram visual interaktif (blok kode `mermaid`).
 - **Edit presisi:** `replace_file_content` / `multi_replace_file_content` + `grep_search`. DILARANG rewrite berkas utuh untuk perubahan kecil.
 - **Baca berkas:** `view_file`.
-- **Pencarian web:** `search_web`, hanya setelah §3.7 terpenuhi.
+- **Pencarian web:** `search_web`, hanya setelah §3.8 terpenuhi.
 - **Kanban Task:** `[ ]` → `[/]` → `[x]` (dikelola di seksi task RFC / task context). Maksimal 2 task WIP bersamaan.
 
 ## 9. PENGINGAT PENUTUP

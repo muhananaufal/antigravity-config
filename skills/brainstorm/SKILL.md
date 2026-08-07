@@ -11,7 +11,7 @@ Skill ini melayani dua mode: **Non-Teknis** (ide umum/bisnis) dan **Teknikal / A
 
 ## 💡 Mode 1: Brainstorming Non-Teknis
 
-**§3, §5, §6, §7 `AGENTS.md` MATI di sini** — tanpa quality gate kode, template artefak formal, atau pengingat test. Yang tetap hidup: §2 (bahasa & kepadatan), §4 (Challenger), dan §9 (catat ke `shared/LEARNED.md` jika ada koreksi/mekanisme baru).
+**§3, §5, §6, §7 `AGENTS.md` MATI di sini** — tanpa quality gate kode, template artefak formal, atau pengingat test. Yang tetap hidup: §8 (bahasa & kepadatan), §4 (Challenger), dan §9 (catat ke `shared/LEARNED.md` jika ada koreksi/mekanisme baru).
 
 ### Urutan WAJIB (Non-Teknis)
 
