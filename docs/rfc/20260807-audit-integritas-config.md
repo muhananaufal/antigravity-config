@@ -49,7 +49,7 @@ Uji reachability berbasis "nama muncul di teks" memberi **false negative** karen
 
 ---
 
-## 2. Inventori Temuan (15 lubang — H15 ditemukan saat verifikasi Batch 1)
+## 2. Inventori Temuan (16 lubang — H15 & H16 tersingkap saat mengerjakan tambalan)
 
 Kolom **Status** adalah tracker Kanban: `[ ]` belum · `[/]` dikerjakan · `[x]` tertambal & terverifikasi.
 Maksimal 2 item `[/]` bersamaan.
@@ -78,7 +78,7 @@ Agent mengarang dari hafalan (langgar §0.1) sambil merasa patuh.
 
 ### 🟠 TINGGI
 
-#### H2 — Gate `-Full` lebih lemah dari mandat tiap SKILL.md · Status: `[ ]`
+#### H2 — Gate `-Full` lebih lemah dari mandat tiap SKILL.md · Status: `[x]` TERTAMBAL 2026-08-07
 
 | Stack | `quality_gate.ps1:239-244` menjalankan | `SKILL.md` mewajibkan | Hilang |
 | :--- | :--- | :--- | :--- |
@@ -90,7 +90,7 @@ Agent mengarang dari hafalan (langgar §0.1) sambil merasa patuh.
 Diperparah `nestjs-mastery/SKILL.md:103` yang menyebut `quality_gate.ps1` sebagai
 "gerbang **primer**" dan tabel bahasa sebagai "**pelengkap**" — terbalik dari kenyataan.
 
-#### H3 — Gate tidak pernah memindai `.json` · Status: `[ ]`
+#### H3 — Gate tidak pernah memindai `.json` · Status: `[x]` TERTAMBAL 2026-08-07
 `quality_gate.ps1:22` `$CODE_EXT` memuat 17 ekstensi, **`.json` tidak termasuk**.
 Terbukti: API key Google di `mcp_config.json:9` (`X-Goog-Api-Key: AQ.Ab8RN6...`) tak terdeteksi
 karena dua sebab — ekstensi tak dipindai **dan** bentuk `AQ.Ab8...` absen dari `$SECRET_VALUE`
@@ -216,12 +216,26 @@ Bisa dibenarkan untuk repo config, tapi standarnya berbunyi "Setiap project WAJI
 - [ ] `[MODIFY]` 4 lokasi `master_decision_tree.md` menggantung → path lengkap (H10)
 - [ ] Verifikasi dengan perintah §5.3
 
-### Batch 4: Penguatan Gate (MENGUBAH PERILAKU — butuh persetujuan terpisah)
-* **DependsOn:** `[Batch 2]`
+### Batch 4: Penguatan Gate — ✅ SELESAI 2026-08-07
+* **DependsOn:** ~~`[Batch 2]`~~ — dependensi ini terbukti **terlalu konservatif**.
+  H2 hanya menyentuh Gate 3 (mode `-Full`), sedangkan H4-H6 ada di Gate 2b/2c/4.
+  Tidak ada irisan, jadi Batch 4 dijalankan lebih dulu tanpa menunggu Batch 2.
 * **Goal:** selaraskan gate dengan mandat SKILL.md.
-- [ ] `[MODIFY]` `scripts/quality_gate.ps1` — H2 (selaraskan `$cmds` dengan tiap SKILL.md)
-- [ ] `[MODIFY]` `scripts/quality_gate.ps1` — H3 (tambah `.json` ke `$CODE_EXT` + pola `AQ\.[A-Za-z0-9_-]{20,}`)
-- [ ] Uji regresi: jalankan `-Full` pada repo contoh tiap stack, pastikan tidak meledak false-positive
+- [x] `[MODIFY]` `scripts/quality_gate.ps1` — H2 (`$cmds` statis → `Get-StackCommands`, selaras tiap SKILL.md)
+- [x] `[MODIFY]` `scripts/quality_gate.ps1` — H3 (`.json` masuk `$CODE_EXT` + pola `AQ\.[A-Za-z0-9_-]{20,}` + lockfile dilewati)
+- [x] `[MODIFY]` `scripts/quality_gate.ps1` — H16 (pengecualian diri sendiri, lihat di bawah)
+- [x] Proof-of-Defect: gate lama `berkas_dipindai=0 / LULUS / exit 0` (kredensial lolos) → gate baru `GAGAL` di `service_config.json:3`
+- [x] Kontrol negatif: `package-lock.json` berisi pola identik TETAP dilewati
+- [x] Regresi: gate pada repo config sendiri `LULUS / exit 0`; repo uji tetap menyala
+- [x] `Test-ToolAvailable` mencegah false-block saat `cargo-audit`/`golangci-lint`/`phpstan` tidak terpasang
+
+#### H16 — Gate berteriak pada dirinya sendiri · Status: `[x]` TERTAMBAL 2026-08-07
+Tersingkap saat mengerjakan H3. Menyunting baris `$SECRET_VALUE` membuat ratchet
+menganggapnya baris baru, lalu polanya sendiri (`-----BEGIN [A-Z ]*PRIVATE KEY-----`)
+cocok dengan dirinya sendiri → gate memblokir atas temuan palsu di kodenya sendiri.
+Diperbaiki dengan pengecualian `$PSCommandPath` di `Test-Skipped`.
+Persis peringatan `LEARNED.md`: *"Berteriak pada kode sendiri di run pertama membuat
+pengguna mengabaikan seluruh laporan."*
 
 ### Batch 5: Dokumentasi & Konsistensi Standar
 * **DependsOn:** `[Batch 3]`
