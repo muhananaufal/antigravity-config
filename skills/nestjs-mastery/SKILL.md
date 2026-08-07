@@ -19,7 +19,7 @@ SSOT arsitektur backend TypeScript enterprise (36 Domain, 139 Berkas). Zero-Tole
 
 ## 🚦 Protokol Eksekusi (WAJIB dibaca sesuai situasi)
 
-> **SEBELUM membuka tabel di bawah:** Jika ini adalah proyek baru atau keputusan arsitektur besar, WAJIB lewati `master_decision_tree.md` (`~/.gemini/config/skills/master-decision-tree/SKILL.md`) terlebih dahulu. DILARANG langsung memilih NestJS sebagai stack tanpa justifikasi dari Decision Tree.
+> **SEBELUM membuka tabel di bawah:** Jika ini adalah proyek baru atau keputusan arsitektur besar, WAJIB lewati Master Decision Tree (`~/.gemini/config/skills/master-decision-tree/SKILL.md`) terlebih dahulu. DILARANG langsung memilih NestJS sebagai stack tanpa justifikasi dari Decision Tree.
 
 | Situasi | WAJIB baca dulu sebelum menulis apa pun |
 | :--- | :--- |

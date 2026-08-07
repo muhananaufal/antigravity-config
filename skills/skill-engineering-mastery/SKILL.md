@@ -121,7 +121,7 @@ Setiap kali skill bahasa baru (misal: Python, Java, Swift) selesai dibuat, WAJIB
 
 | Langkah | Aksi | File yang Diubah |
 | :--- | :--- | :--- |
-| **1. Decision Tree** | Tambahkan bahasa baru ke Bagian 1 (NODE 1.1) `master_decision_tree.md` dengan constraint dan use case yang tepat | `~/.gemini/config/skills/master-decision-tree/SKILL.md` |
+| **1. Decision Tree** | Tambahkan bahasa baru ke Bagian 1 (NODE 1.1) Master Decision Tree dengan constraint dan use case yang tepat | `~/.gemini/config/skills/master-decision-tree/SKILL.md` |
 | **2. AGENTS.md** | Tambahkan nama bahasa ke daftar domain bermastery di §3.5 (contoh: "Go / Rust / Laravel / NestJS / **Python**") | `~/.gemini/config/AGENTS.md` §3.5 |
 | **3. Claude Code Adaptor** | Tambahkan bahasa ke tabel penerjemah istilah di `shared/tool-claude-code.md` jika ada padanan tool yang berbeda | `~/.gemini/config/shared/tool-claude-code.md` |
 | **4. Skill SKILL.md** | Pastikan SKILL.md bahasa baru memuat: pointer ke `master-decision-tree/SKILL.md`, pointer ke `git-workflow/SKILL.md`, Protokol Eksekusi Greenfield/Brownfield, Quality Gate commands | `skills/<bahasa>-mastery/SKILL.md` |

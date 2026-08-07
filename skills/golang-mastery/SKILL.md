@@ -9,7 +9,7 @@ SSOT arsitektur & rekayasa sistem Golang enterprise & high-throughput (30 Domain
 
 ## 🚦 Protokol Eksekusi (WAJIB dibaca sesuai situasi)
 
-> **SEBELUM membuka tabel di bawah:** Jika ini adalah proyek baru atau keputusan arsitektur besar, WAJIB lewati `master_decision_tree.md` (`~/.gemini/config/skills/master-decision-tree/SKILL.md`) terlebih dahulu. DILARANG langsung memilih Go sebagai stack tanpa justifikasi dari Decision Tree.
+> **SEBELUM membuka tabel di bawah:** Jika ini adalah proyek baru atau keputusan arsitektur besar, WAJIB lewati Master Decision Tree (`~/.gemini/config/skills/master-decision-tree/SKILL.md`) terlebih dahulu. DILARANG langsung memilih Go sebagai stack tanpa justifikasi dari Decision Tree.
 
 | Situasi | WAJIB baca dulu sebelum menulis apa pun |
 | :--- | :--- |
@@ -101,6 +101,7 @@ Domain yang hampir selalu relevan untuk Go service manapun:
 | QUIC, WireGuard, MQTT, ConnectRPC, DNS, SOCKS5 | `references/advanced_networking_protocols/` |
 | SPIFFE, OPA, cosign, SBOM, Vault rotation, fuzzing | `references/cybersecurity_zerotrust/` |
 | AST, custom linter, code gen, WASM plugin, protoc plugin | `references/ast_metaprogramming/` |
+| CLI, subcommand, flag parsing, TUI, distribusi biner, `--version` | `references/cli_tooling/` |
 | TinyGo, GPIO, I2C/SPI, edge MQTT, WASM browser | `references/embedded_tinygo/` |
 | Game server, tick loop, spatial hash, dead reckoning, leaderboard | `references/game_backend/` |
 | HNSW, LLM proxy, Apache Arrow, DataFusion, pgvector, ONNX | `references/ai_data_infra/` |
