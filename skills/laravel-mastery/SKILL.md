@@ -66,20 +66,43 @@ Agent WAJIB mencocokkan nature of task ke domain berikut **secara proaktif**:
 | Streaming Excel 1 Juta baris tanpa OOM (OpenSpout), libvips JIT Image resizing, FFmpeg video HLS transcoding | `references/media_asset_pipeline/` |
 | Dynamic Redis translation bundles, ICU Intl timezone & currency formatting, Multi-Region SEO Hreflang routing | `references/i18n_localization/` |
 
-## 🛠️ Automated Quality Gate & Verification Commands
+## ✅ Quality Gate (Checklist Sebelum Selesai)
 
-Sebelum melaporkan tugas selesai, WAJIB jalankan perintah verifikasi ketat berikut di terminal:
+**PHP & Code Quality:**
+- `./vendor/bin/pint --test` — nol pelanggaran gaya
+- `./vendor/bin/phpstan analyse --level=9 app/` — nol error di level 9
+- `php artisan test` — termasuk arch test; nol kegagalan
+- `composer audit` — nol CVE diketahui
+- Lapisan: `FormRequest → Controller → Action/Service → Repository → Model` — no business logic di Controller
+- Eager loading `->with()` di setiap listing — audit N+1 sebelum merge
+- Job yang menyentuh data transaksi pemanggilnya WAJIB `$afterCommit`
 
-```bash
-# 1. Code Style Formatting & Linting (Laravel Pint)
-./vendor/bin/pint --test
+**API & System:**
+- `Route::prefix('api/v1')` + `->paginate()` pada SEMUA listing — no `->get()` telanjang
+- API Resource wrapping — no model mentah di response
+- Idempotency key pada webhook dan POST yang memutasi saldo
+- `throttle` pada endpoint publik
+- Zero-downtime migration — kolom baru `nullable`, no rename/drop langsung
+- `/health` endpoint untuk load balancer
 
-# 2. Maximum Static Analysis Level 9 (PHPStan)
-./vendor/bin/phpstan analyse --level=9 app/
+**Observability & Security:**
+- Monolog JSON terstruktur — no PII/token di log
+- `$fillable`/`$guarded` eksplisit — cegah Mass Assignment
+- Policy/Gate pada route model binding — cegah IDOR
+- Validasi `FormRequest` di semua input eksternal
+- Rahasia lewat `.env` + validasi saat boot — no hardcode
+- OWASP: parameter binding (SQLi), escape Blade (XSS), CSRF token
 
-# 3. Unit, Functional & Architectural Testing (Pest v3)
-php artisan test --arch
+**Octane & Container:**
+- Nol properti `static` mutable dan singleton stateful — state leak antar-request adalah bug khas Octane yang tidak ada di php-fpm
+- Service stateful terdaftar di `flush` pada `config/octane.php`
+- Multi-stage build → runtime FrankenPHP/Octane **non-root**
+- `.dockerignore` eksplisit — no `.env*`, `.git/`, `tests/`
+- Graceful shutdown worker queue saat SIGTERM
+- Resource limits + `depends_on.condition: service_healthy` untuk DB/Redis
 
-# 4. Dependency Security Vulnerability Audit
-composer audit
+**Gerbang global (WAJIB, mendahului semua di atas):**
 ```
+powershell -NoProfile -ExecutionPolicy Bypass -File ~/.gemini/config/scripts/quality_gate.ps1 -Full
+```
+Nol placeholder · nol credential hardcode · nol untyped bypass · linter & test lulus (§6 `AGENTS.md`).

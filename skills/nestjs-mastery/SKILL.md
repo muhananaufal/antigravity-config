@@ -95,16 +95,44 @@ Agent WAJIB mencocokkan nature of task ke domain berikut **secara proaktif**.
 
 DILARANG mengubah status task jadi `[x]` sebelum SEMUA gerbang ini lulus.
 
-| Gerbang | Perintah | Kriteria lulus |
-| :--- | :--- | :--- |
-| **Global Quality Gate** | `powershell -NoProfile -ExecutionPolicy Bypass -File ~/.gemini/config/scripts/quality_gate.ps1 -Full` | nol placeholder, nol credential hardcode, test lulus |
-| TypeScript | `tsc --noEmit` | nol error |
-| Linter | `eslint .` | nol warning |
-| Test | `jest` / SWC | nol kegagalan |
+**TypeScript & Code Quality:**
+- `tsc --noEmit` — nol error kompilasi
+- `eslint .` — nol warning
+- `jest` / SWC — nol kegagalan
+- `npm audit` / `osv-scanner` — nol CVE tinggi; permukaan npm luas, ini bukan opsional
+- Nol `any` / `unknown` tanpa validasi runtime — **tipe TypeScript MUSNAH saat compile**
+- Hexagonal: business logic di core, buta terhadap DB dan protokol HTTP/gRPC
+- Nol `forwardRef()` baru — ia gejala batas domain bocor, bukan solusi
 
-> **PENTING:** Global Quality Gate (`quality_gate.ps1`) adalah gerbang primer yang WAJIB dijalankan. Tabel bahasa di atas adalah pelengkap spesifik NestJS — tidak menggantikan global gate.
+**API & System:**
+- Prefix versi (`/api/v1/`) + pagination pada SEMUA listing
+- DTO tervalidasi runtime (Zod/TypeBox/class-validator `whitelist: true`) di SETIAP pintu masuk
+- Idempotency key pada webhook dan POST yang memutasi state
+- ORM: `include`/`relations` eksplisit — audit N+1 sebelum merge
+- Connection pool berbatas (Prisma/PgBouncer) — no default tak terbatas
+- Zero-downtime migration — kolom baru `nullable`, no rename/drop langsung
 
-Ditolak bila ditemukan: warning kompilasi TypeScript · kegagalan ESLint · unit test Jest/SWC gagal · placeholder malas (`// TODO`, `// FIXME`) · kredensial statis yang tidak diambil dari `.env`.
+**Observability & Security:**
+- Pino JSON zero-allocation + OTel tracing — no PII/token di log
+- `app.enableShutdownHooks()` — tanpa ini pool DB & broker tidak tertutup saat SIGTERM
+- Throttler Redis pada endpoint publik
+- JWKS/OIDC di HTTP-Only Secure Cookie · RBAC/ABAC lewat `Reflector`
+- Rahasia lewat `ConfigModule` ber-`validationSchema`, crash saat boot bila invalid
+- Nol provider `Scope.REQUEST` baru tanpa alasan tertulis — ia menular ke seluruh rantai injeksi
+
+**Event Loop & Container:**
+- Komputasi CPU-bound WAJIB keluar dari main thread → Piscina Worker Threads atau `napi-rs`. Event loop terblokir mematikan SEMUA client, bukan satu request
+- Multi-stage build + corepack/pnpm layer caching
+- Distroless atau alpine **non-root** — no `root` di container produksi
+- `.dockerignore` eksplisit — no `node_modules`, `.env*`, `.git/`
+- Probe Terminus selaras dengan `/health` + `/ready`
+- Resource limits + `depends_on.condition: service_healthy` untuk DB/Redis
+
+**Gerbang global (WAJIB, mendahului semua di atas):**
+```
+powershell -NoProfile -ExecutionPolicy Bypass -File ~/.gemini/config/scripts/quality_gate.ps1 -Full
+```
+Nol placeholder · nol credential hardcode · nol untyped bypass · linter & test lulus.
 
 > Audit mutu **berkas referensi mastery** dijalankan terpusat lewat `scripts/audit_references.ps1 -Skill nestjs-mastery`, bukan dari direktori `scripts/` di dalam bundle ini (tidak ada). Sasarannya berbeda dari `quality_gate.ps1` yang mengadili kode proyek user — DILARANG saling menggantikan.
 

@@ -73,23 +73,43 @@ Agent WAJIB mencocokkan nature of task ke domain berikut **secara proaktif**:
 | CI/CD acceleration via cargo-nextest, sccache AWS S3 cloud cache, cargo-zigbuild cross compile, cargo-deny SBOM | `references/ci_cd_pipeline_cargo/` |
 | Unicode ICU4X zero-alloc engine, Mozilla Project Fluent localization, Axum locale routing, zero-copy formatting | `references/i18n_localization_icu/` |
 
-## 🛠️ Automated Quality Gate & Verification Commands
+## ✅ Quality Gate (Checklist Sebelum Selesai)
 
-Sebelum melaporkan tugas selesai, WAJIB jalankan perintah verifikasi ketat berikut di terminal:
+**Rust & Code Quality:**
+- `cargo fmt -- --check` — nol selisih format
+- `cargo clippy --all-targets --all-features -- -D warnings` — nol warning
+- `cargo test --all-targets --all-features` — nol kegagalan
+- `cargo miri test` — WAJIB bila menyentuh blok `unsafe`; nol Undefined Behavior
+- `cargo audit` — nol CVE diketahui
+- Nol `.unwrap()` di jalur produksi — pakai `thiserror`/`anyhow` dengan propagasi eksplisit. Di dalam test, `unwrap()` justru idiomatik
+- Siklus `Arc<T>` diputus `Weak<T>` — bocor memori tanpa satu pun `unsafe`
 
-```bash
-# 1. Code Formatting Check
-cargo fmt -- --check
+**Async & System:**
+- `Mutex` guard DILARANG hidup melintasi `.await` — starvation, dan deadlock pada `tokio::sync::Mutex`
+- Blocking I/O dan komputasi berat WAJIB `spawn_blocking` — kalau tidak, satu worker thread runtime membeku
+- Setiap cabang `tokio::select!` diperiksa cancel-safe — cabang yang kalah dibatalkan di tengah jalan
+- Timeout eksplisit pada SEMUA panggilan DB, Redis, gRPC, HTTP
+- `PgPool` dengan `max_connections` + `acquire_timeout` — no default tak terbatas
+- Zero-downtime migration — kolom baru `nullable`, no rename/drop langsung
 
-# 2. Strict Linter Zero-Tolerance Warning
-cargo clippy --all-targets --all-features -- -D warnings
+**Observability & Security:**
+- `tracing` JSON terstruktur + OpenTelemetry OTLP — no PII/token di log
+- Axum `with_graceful_shutdown()` + tutup pool `sqlx` saat SIGTERM
+- Rate limiting (Governor GCRA) pada endpoint publik
+- Validasi tipe di batas sistem — `serde` deny_unknown_fields untuk payload eksternal
+- Rahasia lewat env ter-deserialisasi strongly-typed, panic saat boot bila invalid
+- `/health` + `/ready` endpoint pada setiap service
 
-# 3. Comprehensive Test Suite Execution
-cargo test --all-targets --all-features
+**Docker & Container:**
+- `cargo-chef` untuk layer caching — tanpanya build ulang 10–15 menit tiap push
+- **`FROM scratch` BUKAN default** — TLS butuh `ca-certificates`, glibc butuh distroless, zona waktu butuh `tzdata`
+- Target musl untuk biner statis, atau distroless untuk glibc
+- Non-root user — no `root` di container produksi
+- `.dockerignore` eksplisit — no `target/`, `.env*`, `.git/`
+- Resource limits + `depends_on.condition: service_healthy` untuk DB/Redis
 
-# 4. Undefined Behavior (UB) & Memory Safety Audit (Khusus jika menyentuh blok `unsafe`)
-cargo miri test
-
-# 5. Dependency Vulnerability Audit
-cargo audit
+**Gerbang global (WAJIB, mendahului semua di atas):**
 ```
+powershell -NoProfile -ExecutionPolicy Bypass -File ~/.gemini/config/scripts/quality_gate.ps1 -Full
+```
+Nol placeholder · nol credential hardcode · nol untyped bypass · linter & test lulus (§6 `AGENTS.md`).

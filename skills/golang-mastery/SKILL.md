@@ -150,6 +150,11 @@ Domain yang hampir selalu relevan untuk Go service manapun:
 - `.dockerignore` eksplisit — no `.env*`, `.git/`, `*_test.go` ikut ter-COPY
 - `ENTRYPOINT ["/app"]` exec form — no shell form (SIGTERM tidak sampai ke app)
 - `HEALTHCHECK` di Dockerfile selaras dengan `/health` endpoint
-- No hardcode credentials — gunakan `ENV` + secret manager
 - Resource limits di `docker-compose.yml` / K8s manifest
 - `depends_on.condition: service_healthy` untuk DB/Redis dependency
+
+**Gerbang global (WAJIB, mendahului semua di atas):**
+```
+powershell -NoProfile -ExecutionPolicy Bypass -File ~/.gemini/config/scripts/quality_gate.ps1 -Full
+```
+Nol placeholder · nol credential hardcode · nol untyped bypass · linter & test lulus (§6 `AGENTS.md`).
