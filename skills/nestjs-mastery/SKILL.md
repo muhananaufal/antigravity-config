@@ -104,7 +104,7 @@ DILARANG mengubah status task jadi `[x]` sebelum SEMUA gerbang ini lulus.
 
 Ditolak bila ditemukan: warning kompilasi TypeScript · kegagalan ESLint · unit test Jest/SWC gagal · placeholder malas (`// TODO`, `// FIXME`) · kredensial statis yang tidak diambil dari `.env`.
 
-> Skrip di `scripts/` bundle ini mengaudit mutu **berkas referensi mastery**, bukan kode proyek user — itu wilayah `skill-engineering-mastery`. DILARANG memakainya sebagai gerbang mutu proyek.
+> Audit mutu **berkas referensi mastery** dijalankan terpusat lewat `scripts/audit_references.ps1 -Skill nestjs-mastery`, bukan dari direktori `scripts/` di dalam bundle ini (tidak ada). Sasarannya berbeda dari `quality_gate.ps1` yang mengadili kode proyek user — DILARANG saling menggantikan.
 
 ---
 *Manifes `nestjs-mastery` ini adalah Single Source of Truth (SSOT). Jadikan hukum kepatuhannya sebagai jembatan melompati kemegahan arsitektur dunia nyata!*

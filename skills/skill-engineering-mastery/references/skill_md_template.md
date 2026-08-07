@@ -51,11 +51,20 @@ Agen wajib melakukan *parsing* manifes proyek untuk menentukan file Niche mana d
 
 ## 5. Automated Quality Gates (Cross-Platform Terminal Scripts)
 
-Dalam direktori `scripts/`, file otomatisasi penegakan hukum wajib disediakan dalam format cross-platform (`audit_quality_gate.ps1` untuk Windows PowerShell dan `quality_gate.sh` untuk Linux/macOS). Ini adalah contoh skrip mutlak yang harus dipanggil agen setelah setiap fase pengerjaan kritis. DILARANG KERAS menggunakan `grep` UNIX mentah pada skrip PowerShell Windows.
+Penegakan mutu dijalankan **terpusat dari repositori config**, bukan disalin ke `scripts/` tiap bundle:
 
-### A. Windows PowerShell Quality Gate (`scripts/audit_quality_gate.ps1`)
+| Sasaran audit | Perintah |
+| :--- | :--- |
+| Mutu berkas referensi bundle (kepadatan, placeholder, encoding, struktur) | `scripts/audit_references.ps1 -Skill <nama-bundle>` |
+| Mutu kode proyek user (placeholder, secret, untyped bypass, linter, test) | `scripts/quality_gate.ps1 -Full` |
+
+Keduanya berbeda sasaran dan DILARANG saling menggantikan. Contoh skrip di bawah tetap
+disertakan sebagai rujukan pola bagi ekosistem lain; DILARANG KERAS menggunakan `grep`
+UNIX mentah pada skrip PowerShell Windows.
+
+### A. Pola Windows PowerShell — contoh generik, BUKAN berkas di repositori ini
 ```powershell
-# scripts/audit_quality_gate.ps1
+# Pola rujukan untuk ekosistem lain. Repo ini memakai scripts/quality_gate.ps1 terpusat.
 # DILARANG MENGABAIKAN ERROR DARI SCRIPT INI!
 $ErrorActionPreference = "Stop"
 Write-Host "🚀 Memulai Antigravity Quality Gate (Strict Mode - PowerShell)..." -ForegroundColor Cyan

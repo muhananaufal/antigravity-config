@@ -20,9 +20,11 @@ Sebuah direktori Skill Bundle enterprise wajib memisahkan ranah **Core** (inti y
 ```ascii
 <nama-skill-bundle>-mastery/
 ├── SKILL.md                          [WAJIB] Gerbang utama, manifesto, aturan inti, dan tabel rute Swarm.
-├── scripts/                          [WAJIB] Otomatisasi (Quality Gates, Scaffolders, linters).
-│   ├── audit_quality_gate.ps1        # Skrip audit Zero-Tolerance file tipis & kata terlarang
-│   └── scaffold_bundle_skeleton.sh   # Generator struktur direktori modular
+│                                     # CATATAN: bundle TIDAK punya scripts/ sendiri. Audit mutu
+│                                     # referensi dijalankan terpusat dari repositori config:
+│                                     #   scripts/audit_references.ps1 -Skill <nama-bundle>
+│                                     # Lima salinan logika audit yang sama adalah utang
+│                                     # pemeliharaan dan melanggar KISS (AGENTS.md section 6).
 ├── examples/                         [OPSIONAL] Referensi implementasi tingkat dewa (bukan hello world!).
 │   ├── enterprise_hexagonal_arch/
 │   └── domain_driven_design_saga/
