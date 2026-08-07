@@ -7,6 +7,26 @@ description: Protokol Git untuk AI agent — branching (Git Flow), Conventional 
 
 Dokumen ini adalah SSOT perilaku AI agent terhadap Git. Setiap operasi yang menyentuh repositori Git — dari `git init` hingga `git push` — WAJIB mengikuti protokol ini tanpa pengecualian.
 
+## 🔗 Posisi dalam Rantai Kerja
+
+Skill ini adalah **tahap 5** — dan ia berada **SETELAH** gerbang persetujuan, bukan sebelumnya.
+
+| # | Tahap | Dokumen |
+| :-: | :--- | :--- |
+| 1 | Routing task | `AGENTS.md` §2 |
+| 2 | Pilih stack & arsitektur | `master-decision-tree/SKILL.md` |
+| 3 | Tulis `docs/rfc/YYYYMMDD-<fitur>.md` + katalog | `templates/SKILL.md` §1–§2 |
+| 4 | **BERHENTI — tunggu user mengetik "Gasskan"** | `AGENTS.md` §0.5 · **GERBANG MUTLAK** |
+| 5 | **Branch, atomic commit, merge** | **`git-workflow/SKILL.md` — Anda di sini** |
+| 6 | Patch Receipt + centang Kanban di RFC | `templates/SKILL.md` §6 |
+
+**DILARANG membuat branch untuk pekerjaan berjalur RFC sebelum tahap 4 terlewati.** Pengecualiannya hanya jalur yang memang menggugurkan RFC: proyek kecil dan edit ≤3 berkas (§2 `AGENTS.md`).
+
+**Tiga sambungan yang WAJIB dijaga konsisten:**
+- Nama branch WAJIB sama persis dengan field **Target Branch** di dokumen RFC (`templates` §1) dan di katalog `docs/rfc/README.md`.
+- Satu **Batch** RFC memetakan ke satu atau lebih commit atomik (§5 di bawah); setelah batch lolos Quality Gate dan ter-commit, centang `[x]`-nya di RFC.
+- Kerangka RFC, RCA, `system_map.md`, dan Patch Receipt seluruhnya didefinisikan di `templates/SKILL.md` — DILARANG mengarang formatnya sendiri.
+
 ---
 
 ## §0. HUKUM BESI
@@ -147,9 +167,16 @@ Urutan langkah yang WAJIB diikuti saat membuat proyek dari nol:
 
 ```
 [Langkah 0: WAJIB SEBELUM APA PUN — Buat .gitignore]
-  DILARANG membuat file kode, .env, config, atau direktori apa pun
-  sebelum .gitignore ada dan ter-commit. Secret yang ter-stage sekali
-  pun sulit dihapus permanen dari Git History.
+  DILARANG membuat file kode, .env, config, dependensi, atau artefak
+  build sebelum .gitignore ada dan ter-commit. Secret yang ter-stage
+  sekali pun sulit dihapus permanen dari Git History.
+
+  DIKECUALIKAN: dokumen perencanaan (docs/rfc/, docs/rca/, system_map.md).
+  Rantai kerja menempatkannya di tahap 3, yaitu SEBELUM "Gasskan" dan
+  karenanya sebelum git init di tahap 5 - jadi urutannya memang wajib
+  mendahului .gitignore. Larangan di atas melindungi dari kebocoran
+  kredensial dan artefak biner; berkas Markdown perencanaan tidak
+  memuat keduanya.
 
   Salin baseline .gitignore dari §8 dokumen ini ke root project:
   $ git init

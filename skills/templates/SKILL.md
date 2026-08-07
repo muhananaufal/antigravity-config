@@ -7,6 +7,24 @@ description: Gunakan skill ini ketika menulis atau memperbarui artefak baku proy
 
 Kerangka di bawah WAJIB diikuti persis. §5 `AGENTS.md` menunjuk ke sini. Dokumen arsitektur dan perencanaan bukan sekadar formalitas, melainkan instrumen pertahanan sistem (*defense-in-depth*) untuk menjamin nol *downtime*, nol *data corruption*, dan kepastian *failure modes*.
 
+## 🔗 Posisi dalam Rantai Kerja
+
+Skill ini dipakai **dua kali**: di tahap 3 untuk menulis rencana, dan di tahap 6 untuk membuktikan hasilnya.
+
+| # | Tahap | Dokumen |
+| :-: | :--- | :--- |
+| 1 | Routing task | `AGENTS.md` §2 |
+| 2 | Pilih stack & arsitektur | `master-decision-tree/SKILL.md` |
+| 3 | **Tulis `docs/rfc/YYYYMMDD-<fitur>.md` + katalog** | **`templates/SKILL.md` §1–§2 — Anda di sini** |
+| 4 | **BERHENTI — tunggu user mengetik "Gasskan"** | `AGENTS.md` §0.5 · **GERBANG MUTLAK** |
+| 5 | Branch, atomic commit, merge | `git-workflow/SKILL.md` §1–§5 |
+| 6 | **Patch Receipt + centang Kanban di RFC** | **`templates/SKILL.md` §6 — Anda di sini lagi** |
+
+**Tiga sambungan yang WAJIB dijaga konsisten:**
+- Field **Target Branch** (§1) WAJIB memakai konvensi penamaan `git-workflow/SKILL.md` §1, dan WAJIB sama persis dengan branch yang benar-benar dibuat.
+- Opsi di **§2 Eksplorasi Arsitektur** adalah keluaran `master-decision-tree/SKILL.md` — DILARANG mengarang opsi tanpa melewati pohon itu.
+- Tiap **Batch** di §4 memetakan ke satu atau lebih commit atomik (`git-workflow` §5); status `[x]` hanya boleh dicentang setelah batch itu lolos Quality Gate **dan** ter-commit.
+
 ---
 
 ## 0. All-Out Principal Planning Protocol (The AETHERIS Master Key Formula)

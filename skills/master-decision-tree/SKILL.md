@@ -710,15 +710,35 @@ NODE 10.1: Bagaimana strategi pengujian yang tepat?
 
 > **Ingat:** Pohon ini adalah KOMPAS, bukan PETA. Ia memberi arah, bukan langkah-langkah kode spesifik. Setelah Anda menemukan arah yang tepat dari pohon ini, baru buka referensi domain spesifik di `SKILL.md` masing-masing bahasa untuk mendapatkan kode dan arsitektur detail.
 
+## 🔗 Posisi dalam Rantai Kerja
+
+Pohon ini adalah **tahap 2** dari enam. Keputusan yang Anda ambil di sini menjadi masukan untuk dokumen RFC, bukan izin untuk mulai menulis kode.
+
+| # | Tahap | Dokumen |
+| :-: | :--- | :--- |
+| 1 | Routing task | `AGENTS.md` §2 |
+| 2 | **Pilih stack & arsitektur** | **`master-decision-tree/SKILL.md` — Anda di sini** |
+| 3 | Tulis `docs/rfc/YYYYMMDD-<fitur>.md` + katalog | `templates/SKILL.md` §1–§2 |
+| 4 | **BERHENTI — tunggu user mengetik "Gasskan"** | `AGENTS.md` §0.5 · **GERBANG MUTLAK** |
+| 5 | Branch, atomic commit, merge | `git-workflow/SKILL.md` §1–§5 |
+| 6 | Patch Receipt + centang Kanban di RFC | `templates/SKILL.md` §6 |
+
+---
+
 ## LANGKAH WAJIB BERIKUTNYA SETELAH KEPUTUSAN ARSITEKTUR
 
-**Sebelum menulis satu baris kode pun**, lakukan dua langkah ini secara berurutan:
+**DILARANG melompat dari pohon ini langsung ke `git checkout -b`.** Urutannya:
 
-1. **Buka skill `git-workflow`** (`~/.gemini/config/skills/git-workflow/SKILL.md`) dan ikuti:
-   - Greenfield → protokol §3 (mulai dari Langkah 0: buat `.gitignore` dulu)
-   - Brownfield → protokol §4 (mulai dari `git pull --rebase`)
+1. **Tuangkan keputusan ke dokumen RFC.** Buka `~/.gemini/config/skills/templates/SKILL.md` §1 dan isi kerangkanya. Opsi arsitektur yang Anda temukan di pohon ini masuk ke **§2 Eksplorasi Arsitektur & Trade-off Matrix** — WAJIB ≥3 opsi netral, tanpa label "(Recommended)" sepihak. Perbarui juga katalog `docs/rfc/README.md` (kerangkanya di `templates` §2).
 
-2. **Buat branch kerja** sesuai Git Flow §1:
+2. **BERHENTI. Tunggu "Gasskan".** Ini Gerbang Mutlak §0.5 `AGENTS.md`, bukan formalitas. Membuat branch dan menulis kode sebelum kata itu diucapkan adalah pelanggaran, sekalipun keputusan arsitekturnya sudah benar.
+   *Pengecualian:* jalur **proyek kecil** (§2 `AGENTS.md`) dan **edit ≤3 berkas** memang menggugurkan RFC — di situ lanjut langsung ke langkah 3.
+
+3. **Baru buka skill `git-workflow`** (`~/.gemini/config/skills/git-workflow/SKILL.md`):
+   - Greenfield → protokol §3 (mulai Langkah 0: buat `.gitignore` **sebelum berkas apa pun**)
+   - Brownfield → protokol §4 (mulai `git pull --rebase`)
+
+4. **Buat branch kerja** sesuai Git Flow §1 — namanya WAJIB sama dengan field **Target Branch** di dokumen RFC:
    ```
    git checkout -b feature/<nama-fitur>   # untuk fitur baru
    git checkout -b fix/<nama-bug>         # untuk perbaikan bug
