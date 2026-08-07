@@ -23,5 +23,5 @@
 ## Garis Merah — JANGAN pakai Rust bila
 
 1. **Time-to-market < 4 minggu dengan tim yang belum pernah menjalankan Rust di produksi.** Ini pembunuh proyek paling sering, bukan masalah teknis.
-2. Deliverable utamanya **admin panel / CMS / CRUD berat scaffolding** → Laravel + Filament.
-3. Beban sistem **murni I/O-bound biasa** tanpa target latensi ketat — Go memberi 90% hasilnya dengan sepertiga ongkos onboarding. Lihat `master-decision-tree` NODE 1.1 cabang B.
+2. **Deliverable utamanya admin panel / CMS / CRUD berat scaffolding** → Laravel + Filament.
+3. **Beban sistem murni I/O-bound biasa** tanpa target latensi ketat — Go memberi 90% hasilnya dengan sepertiga ongkos onboarding. Lihat `master-decision-tree` NODE 1.1 cabang B.

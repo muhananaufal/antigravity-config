@@ -16,6 +16,7 @@ Pindai struktur direktori + `Cargo.toml` (termasuk workspace crates) **dulu**, b
 | `tokio` async intensif | **Tokio Concurrency Auditor** | Cancellation safety pada `tokio::select!`, blocking I/O tanpa `spawn_blocking`, deadlock `Mutex` melintasi `.await` |
 | `sqlx` / `sea-orm` terdeteksi | **DB & N+1 Hunter** | Loop query tanpa join, koneksi tanpa pool limit, migrasi tanpa fallback |
 | Blok `unsafe` / FFI terdeteksi | **Unsafe Provenance Auditor** | Pointer aliasing, transmute hazard, kepatuhan Stacked Borrows / Miri |
+| Broker terdeteksi (`rdkafka`, `async-nats`, `lapin`) | **Broker & DLQ Auditor** | Ack hilang saat task dibatalkan, Transactional Outbox absen, DLQ tanpa jalur replay |
 | **Selalu, tepat 1** | **Mastery Standard Matcher** | Konsolidasi seluruh temuan auditor, baca `references/` yang relevan, lalu susun Matriks Blast Radius |
 
 ---

@@ -18,9 +18,10 @@
 | Bottleneck single-thread | ≥80% beban adalah komputasi CPU-bound: matematika berat, encode video, kriptografi jutaan loop | **TANTANG risiko bottleneck.** Event loop terblokir mematikan SEMUA client, bukan hanya request itu. Sarankan pindah ke Rust/Go, atau jembatani lewat `napi-rs` / Piscina Worker Threads. |
 | Overhead heap & cold start | Target deploy FaaS / AWS Lambda dengan frekuensi panggil jarang | Cold start ~300–800 ms (`master-decision-tree` BAGIAN 7). Tanpa bundling SWC/esbuild dan provisioned concurrency warm-up, latensinya menyiksa. **TANTANG**: pertimbangkan runtime lain, atau jangan serverless. |
 | Type erasure di runtime | Payload eksternal masuk tanpa validasi skema | **Tipe TypeScript MUSNAH saat compile** (`LEARNED.md`). `reflect-metadata` hanya menyimpan metadata terbatas — generic dan union tidak terbaca. Tanpa Zod/TypeBox di pintu masuk, JSON jahat tembus ke database. |
+| Permukaan supply chain npm | Domain berregulasi, audit SBOM, atau lingkungan yang membatasi dependensi pihak ketiga | Satu `nest new` menarik ratusan paket transitif. **TANTANG**: wajibkan `npm audit`/`osv-scanner` + SBOM di CI sejak Day-0, dan siapkan kebijakan pinning. Bandingkan dengan Go/Rust yang ekosistemnya jauh lebih ramping untuk fungsi setara. |
 
 ## Garis Merah — JANGAN pakai NestJS bila
 
-1. Beban intinya **CPU-bound berkelanjutan** dan Worker Thread bukan pilihan yang bisa diterima secara arsitektur → Go atau Rust.
-2. Target **p99 < 1 ms atau hard real-time deterministik** — event loop + GC V8 tidak memberi jaminan itu.
-3. Deliverable-nya **CLI terdistribusi atau tooling infrastruktur** yang harus jalan tanpa runtime Node terpasang → Go (biner statis).
+1. **Beban intinya CPU-bound berkelanjutan** dan Worker Thread bukan pilihan yang bisa diterima secara arsitektur → Go atau Rust.
+2. **Target p99 < 1 ms atau hard real-time deterministik** — event loop + GC V8 tidak memberi jaminan itu.
+3. **Deliverable-nya CLI terdistribusi atau tooling infrastruktur** yang harus jalan tanpa runtime Node terpasang → Go (biner statis).

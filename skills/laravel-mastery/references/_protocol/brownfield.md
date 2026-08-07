@@ -16,6 +16,7 @@ Pindai struktur direktori + `composer.json` + config framework **dulu**, baru se
 | `laravel/octane` terdeteksi | **Octane State Leak Auditor** | Properti `static`, stateful singleton di Service Provider |
 | Eloquent intensif / Queue | **Eloquent N+1 & Queue Hunter** | Query tanpa `->with()`, pagination hilang, job tanpa `$afterCommit` |
 | Endpoint API/Web | **Security & OWASP Auditor** | IDOR, Mass Assignment `$fillable`, raw query SQLi, missing rate-limiting |
+| Multi-tenant / routing subdomain terdeteksi | **Tenant Isolation Auditor** | Global scope tenant bocor, query lintas-tenant tanpa `tenant_id`, cache key tanpa prefiks tenant |
 | **Selalu, tepat 1** | **Mastery Standard Matcher** | Konsolidasi seluruh temuan auditor, baca `references/` yang relevan, lalu susun Matriks Blast Radius |
 
 ---
