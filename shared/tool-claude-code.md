@@ -72,7 +72,7 @@ Berlaku sama dengan `AGENTS.md §3.6` dan `§3.9`, dengan terjemahan tool:
 
 | Aturan | Di Antigravity | Di Claude Code |
 | :--- | :--- | :--- |
-| Baca `master_decision_tree.md` sebelum pilih stack | `view_file` | `Read` |
+| Baca `master-decision-tree/SKILL.md` sebelum pilih stack | `view_file` | `Read` |
 | Baca `git-workflow/SKILL.md` sebelum menyentuh repo | `view_file` | `Read` |
 | Buat `.gitignore` sebagai Langkah 0 Greenfield | `write_to_file` | `Write` |
 | Buat branch `feature/*` sebelum menulis kode | `run_command git checkout -b` | `Bash` |
