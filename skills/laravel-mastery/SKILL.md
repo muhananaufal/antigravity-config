@@ -27,6 +27,7 @@ Domain fondasi yang hampir selalu relevan, apa pun bentuk tasknya:
 | **Code Quality & Governance** | `references/code_quality_governance/` | Pint, PHPStan level 9, arsitektur berlapis, konvensi tim |
 | **Testing Otomatis** | `references/testing_automated/` | Pest v3, feature/unit/arch test, factory & seeder, mocking |
 | **DevOps & Deployment** | `references/devops_deployment/` | Docker Octane/FrankenPHP, CI/CD, zero-downtime deploy, health probe |
+| **API Versioning & OpenAPI** | `references/api_versioning_openapi/` | `Route::prefix('api/v1')`, L5-Swagger/Scribe docs, backward compatibility |
 
 ## 🎯 Context References (Baca Sesuai Kebutuhan)
 

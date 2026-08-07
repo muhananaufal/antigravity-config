@@ -36,6 +36,7 @@ Domain fondasi yang hampir selalu relevan, apa pun bentuk tasknya:
 | :--- | :--- |
 | `async`/`await`, Tokio runtime, `select!`, cancellation safety, `spawn_blocking` | `references/async_tokio_concurrency/` |
 | Axum/Actix handler, middleware, extractor, REST API, state sharing | `references/web_microservices/` |
+| API Versioning, utoipa OpenAPI spec, Swagger UI, route namespacing (`/api/v1`) | `references/api_versioning_openapi/` |
 | Database Postgres, SQLx compile-time queries, connection pool, SeaORM | `references/db_persistence_sqlx/` |
 | Tracing, OpenTelemetry, OTLP, Datadog, Prometheus, structured JSON logs | `references/observability_telemetry_tracing/` |
 | Apalis background queue workers, Transactional Outbox pattern, Distributed Saga compensating rollback, DLQ | `references/background_jobs_saga/` |
