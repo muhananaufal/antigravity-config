@@ -145,6 +145,26 @@ foreach ($b in $bundles) {
         if ($edge -lt 3) { $warned.Add("EDGE_CASE    $rel  hanya $edge (minimum 3)") }
     }
 
+    # REGRESSION BANKING (AGENTS.md section 6): angka "N Domain, M Berkas" di kepala
+    # SKILL.md pernah melenceng di 3 dari 4 bundle sekaligus dan hanya ketahuan lewat
+    # audit manual. Dicocokkan otomatis sekarang supaya drift yang sama tidak bisa
+    # kembali diam-diam. Hanya kemunculan PERTAMA yang diuji - label per-Tier di bawahnya
+    # memang menghitung sebagian, bukan keseluruhan.
+    $skillMd = Join-Path $b.FullName 'SKILL.md'
+    if (Test-Path -LiteralPath $skillMd) {
+        $head = [IO.File]::ReadAllText($skillMd)
+        $domDirs = @(Get-ChildItem (Join-Path $b.FullName 'references') -Directory -ErrorAction SilentlyContinue |
+                     Where-Object { $_.Name -ne '_protocol' })
+        $mD = [regex]::Match($head, '(\d+)\s+Domain')
+        $mF = [regex]::Match($head, '(\d+)\s+(?:File|Berkas)')
+        if ($mD.Success -and [int]$mD.Groups[1].Value -ne $domDirs.Count) {
+            $flagged.Add("KLAIM_DOMAIN SKILL.md  mengklaim $($mD.Groups[1].Value) domain, disk punya $($domDirs.Count)")
+        }
+        if ($mF.Success -and [int]$mF.Groups[1].Value -ne $files.Count) {
+            $flagged.Add("KLAIM_BERKAS SKILL.md  mengklaim $($mF.Groups[1].Value) berkas, disk punya $($files.Count)")
+        }
+    }
+
     $avg = if ($files.Count -gt 0) { [math]::Round($sizeKB / $files.Count, 2) } else { 0 }
     $grandFiles += $files.Count; $grandKB += $sizeKB
 

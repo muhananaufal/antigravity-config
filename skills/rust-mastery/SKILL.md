@@ -5,7 +5,7 @@ description: Gunakan skill ini ketika merancang arsitektur, Borrow Checker memor
 
 # Rust Mastery
 
-SSOT arsitektur & rekayasa sistem Rust enterprise, systems programming, dan ultra-low latency (31 Domain, 191 File Mahakarya).
+SSOT arsitektur & rekayasa sistem Rust enterprise, systems programming, dan ultra-low latency (34 Domain, 195 File Mahakarya).
 
 ## 🚦 Protokol Eksekusi (WAJIB dibaca sesuai situasi)
 

@@ -5,7 +5,7 @@ description: Gunakan skill ini ketika merancang arsitektur, API resources, Sanct
 
 # Laravel Mastery
 
-SSOT arsitektur & rekayasa Laravel enterprise, SaaS high-throughput, dan resilient cloud-native PHP (26 Domain, 131 File Mahakarya).
+SSOT arsitektur & rekayasa Laravel enterprise, SaaS high-throughput, dan resilient cloud-native PHP (27 Domain, 136 File Mahakarya).
 
 ## 🚦 Protokol Eksekusi (WAJIB dibaca sesuai situasi)
 

@@ -5,7 +5,7 @@ description: Gunakan skill ini ketika merancang arsitektur Enterprise TypeScript
 
 # NestJS Enterprise Mastery
 
-SSOT arsitektur backend TypeScript enterprise (36 Domain, 138 Berkas). Zero-Tolerance: DILARANG `// TODO`, secret statis di kode, dan `any` bypass.
+SSOT arsitektur backend TypeScript enterprise (36 Domain, 139 Berkas). Zero-Tolerance: DILARANG `// TODO`, secret statis di kode, dan `any` bypass.
 
 ## 🏛️ Pilar Arsitektur Mutlak
 
@@ -32,11 +32,11 @@ DILARANG membuat dokumen RFC (`docs/rfc/`) atau menulis kode sebelum protokol ya
 
 ---
 
-## 🗺️ Matriks Routing Rujukan Ilmu Kasta Tertinggi (36 Domain Silos - 138 Berkas)
+## 🗺️ Matriks Routing Rujukan Ilmu Kasta Tertinggi (36 Domain Silos - 139 Berkas)
 
 Cocokkan tugas ke domain di bawah, lalu baca rujukannya. Taksonomi 3-Tier, akses acak — DILARANG dibaca berurutan.
 
-### Tier I: Core Foundation & Application Infrastructure (15 Domain)
+### Tier I: Core Foundation & Application Infrastructure (16 Domain)
 *(Ilmu fondasi WAJIB yang bergelar Fardu Ain untuk diimplementasikan pada 100% produksi aplikasi NestJS Enterprise)*
 | Nama Domain | Direktori Referensi | Rujukan Utama yang Tersedia (SSOT) |
 | :--- | :--- | :--- |
@@ -57,7 +57,7 @@ Cocokkan tugas ke domain di bawah, lalu baca rujukannya. Taksonomi 3-Tier, akses
 | **Background Jobs Queues** | `references/background_jobs_queues/` | BullMQ Advanced Queue Workers, Distributed Lock Cron Scheduling, Exponential Backoff Retry DLQ Strategy, Queue Job Observability Arena |
 | **Docker Container Standards** | `references/docker_container_standards/`| modular_3tier_container_topology.md, Multi-Stage Distroless Alpine, Non-Root User SIGTERM Hooks, Corepack Pnpm Docker Caching, K8s Terminus Health Probes |
 
-### Tier II: Distributed Systems, Async & Cloud Scale (13 Domain)
+### Tier II: Distributed Systems, Async & Cloud Scale (12 Domain)
 *(Ilmu arsitektur skala besar yang dipanggil saat aplikasi berkembang ke Mikroservice, Event-Driven Monorepo, & High-Concurrency)*
 | Nama Domain | Direktori Referensi | Rujukan Utama yang Tersedia (SSOT) |
 | :--- | :--- | :--- |
