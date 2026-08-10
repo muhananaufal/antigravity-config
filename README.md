@@ -10,7 +10,7 @@
 2. [Konstitusi & Aturan Inti (`AGENTS.md`)](#-konstitusi--aturan-inti-agentsmd)
    - [0. Gerbang Mutlak](#0-gerbang-mutlak)
    - [1. Glosarium & Terminologi Baku](#1-glosarium--terminologi-baku)
-   - [2. Taksonomi 10 Jalur Routing Task](#2-taksonomi-10-jalur-routing-task)
+   - [2. Taksonomi 11 Jalur Routing Task](#2-taksonomi-11-jalur-routing-task)
    - [3. Protokol Pra-Koding & Forensic Baseline](#3-protokol-pra-koding--forensic-baseline)
    - [4. Prosedur Challenger (Anti-Yes-Man)](#4-prosedur-challenger-anti-yes-man)
    - [5. Standar Artefak & Dokumentasi Teknis](#5-standar-artefak--dokumentasi-teknis)
@@ -102,7 +102,7 @@ Enam larangan mutlak yang tidak boleh dilanggar dalam situasi apa pun:
 * **Self-Healing Circuit Breaker:** Batas maksimal 3 kali percobaan perbaikan otomatis saat compile/test gagal sebelum wajib berhenti dan investigasi fundamental.
 * **Side Note:** Catatan 1–2 baris di akhir respon mengenai bad practice di luar scope yang tidak boleh disentuh sepihak.
 
-### 2. Taksonomi 10 Jalur Routing Task
+### 2. Taksonomi 11 Jalur Routing Task
 Setiap perintah user dicocokkan secara deterministik dari atas ke bawah:
 1. **Proyek Baru Kecil (<10 files, SQLite/JSON, CLI/Script):** Eksekusi langsung tanpa RFC & Day-0 Quintet, namun Quality Gate tetap aktif.
 2. **Proyek Baru Greenfield (Penuh):** Gerbang Klarifikasi $\rightarrow$ Master Decision Tree $\rightarrow$ Day-0 Quintet $\rightarrow$ All-in-One RFC $\rightarrow$ Tunggu "Gasskan".
@@ -111,9 +111,10 @@ Setiap perintah user dicocokkan secara deterministik dari atas ke bawah:
 5. **Edit $>3$ Berkas / DB Migration / Breaking API:** Gerbang Klarifikasi $\rightarrow$ All-in-One RFC $\rightarrow$ Update Master Catalog $\rightarrow$ Tunggu "Gasskan".
 6. **In-Flight Fix:** Perbaikan bug pada plan yang sudah disetujui dilanjutkan sebagai bagian batch RFC aktif tanpa membuat RFC baru.
 7. **Emergency Pause:** Blocker kritis di tengah jalan memicu pause seketika $\rightarrow$ Susun RCA 5-Whys $\rightarrow$ Sinkronisasi ke `LEARNED.md`.
-8. **Technical Q&A:** Diskusi teknis tanpa permintaan kode dijawab dingin & faktual tanpa mengubah filesystem.
-9. **Brainstorming Arsitektur / Tech-Stack:** Picu skill `brainstorm` $\rightarrow$ Catat keputusan di `LEARNED.md` $\rightarrow$ Dilarang tulis kode sebelum "Gasskan".
-10. **Obrolan Santai / Non-Teknis:** Jawab langsung tanpa memaksakan gerbang pengujian mutu.
+8. **Brainstorming Arsitektur / Tech-Stack:** Picu skill `brainstorm` (Mode 2) $\rightarrow$ Gerbang Bukti $\rightarrow$ Catat keputusan di `LEARNED.md` $\rightarrow$ Dilarang tulis kode sebelum "Gasskan".
+9. **Brainstorming Umum / Non-Teknis** (bisnis, karir, keuangan, pendidikan, hukum, rencana hidup)**:** Picu skill `brainstorm` (Mode 1) $\rightarrow$ Gerbang Bukti $\rightarrow$ Evidence Ledger sebelum opsi disajikan.
+10. **Technical Q&A:** Pertanyaan berjawab tunggal dijawab dingin & faktual tanpa mengubah filesystem. Begitu user minta ide/opsi/strategi, jalur naik ke butir 8–9.
+11. **Obrolan Santai:** Sapaan & pertanyaan singkat dijawab langsung tanpa memaksakan gerbang pengujian mutu.
 
 ### 3. Protokol Pra-Koding & Forensic Baseline
 * Wajib membaca `shared/LEARNED.md` sebelum interaksi koding.
