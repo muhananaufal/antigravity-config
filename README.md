@@ -60,7 +60,7 @@
 │   └── tool-claude-code.md     # Jembatan Protokol Sinkronisasi Claude Code (~/.claude/CLAUDE.md)
 │
 ├── skills/                     # 9 Skill Bundles Berisi Ratusan Referensi Produksi
-│   ├── brainstorm/             # Protokol Brainstorming Teknikal & Non-Teknikal
+│   ├── brainstorm/             # Brainstorming Umum & Teknikal + Gerbang Bukti anti-sitasi fiktif
 │   ├── git-workflow/           # Git Flow, Conventional Commits, Dual-Avatar Attribution
 │   ├── golang-mastery/         # Go High-Perf, Concurrency, SQLC, gRPC (30 domain, 221 berkas)
 │   ├── laravel-mastery/        # Laravel Octane, Reverb, Horizon, Multi-tenant (27 domain, 136 berkas)
@@ -202,7 +202,12 @@ Koleksi template baku L7/L8:
   ```
 
 ### 8. `brainstorm`
-Protokol eksplorasi ide terstruktur memisahkan ranah Non-Teknis (Produk, Bisnis, Strategi) dan Teknikal/Arsitektural (Stack Selection, Distributed Trade-offs) dengan pencatatan otomatis ke `shared/LEARNED.md`.
+Protokol eksplorasi ide terstruktur untuk ranah **umum** (bisnis, karir, keuangan, hukum, pendidikan, kehidupan) maupun **Teknikal/Arsitektural** (Stack Selection, Distributed Trade-offs), dengan pencatatan otomatis ke `shared/LEARNED.md`.
+
+* **Gerbang Bukti (Evidence Gate):** 7 hukum anti-fabrikasi — DILARANG menyebut sumber yang tidak dibuka di sesi berjalan, angka tanpa sumber WAJIB diturunkan jadi kualitatif, dan atribusi ke tokoh/pasal/harga WAJIB berdokumen.
+* **Fase 0 — Riset Dulu, Bicara Kemudian:** ekstrak klaim penentu → sumber terdekat (data milik user / referensi lokal) → WebSearch untuk *menemukan* → WebFetch untuk *membaca* → **pencarian pembantah wajib** → Evidence Ledger, semuanya sebelum opsi pertama disajikan.
+* **Evidence Ledger + 4 label epistemik:** `[fakta:E#]` · `[inferensi]` · `[spekulasi]` · `[memori-model]`, lengkap dengan status `TERVERIFIKASI / BANTAHAN / SEBAGIAN / GAGAL / TIDAK DICARI` dan penanda `[BASI]`.
+* **`references/evidence-protocol.md`:** tangga 5 tier sumber (umum & teknis), kerajinan query pembantah, protokol angka, penanganan fetch gagal, dan checklist deteksi halusinasi diri.
 
 ### 9. `skill-engineering-mastery`
 Meta-skill untuk merancang, mengaudit struktur, dan memastikan kualitas skill bundles baru di ekosistem Antigravity.
