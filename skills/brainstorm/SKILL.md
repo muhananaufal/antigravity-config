@@ -110,7 +110,7 @@ Tabel ini WAJIB hadir sebelum bagian opsi, dan setiap klaim di prosa dirujuk den
 
 Dipakai untuk ranah apa pun di luar desain sistem: strategi bisnis, ide produk, keputusan karir, keuangan pribadi, pendidikan, konten, negosiasi, rencana hidup, penelitian, sampai memilih antara dua tawaran kerja.
 
-**§3, §5, §6, §7 `AGENTS.md` MATI di sini** — tanpa quality gate kode, template artefak formal, atau pengingat test. Yang tetap hidup: §8 (bahasa & kepadatan), §4 (Challenger), §9 (catat ke `shared/LEARNED.md`), dan **§0 + Fase 0 skill ini** (aturan lokal-dulu di Fase 0 berdiri sendiri, tidak bergantung pada §3.8 yang mati).
+**§3, §5, §6, §7 `AGENTS.md` MATI di sini** — tanpa quality gate kode, template artefak formal, atau pengingat test. Yang tetap hidup: §8 (bahasa & kepadatan), §4 (Challenger — **gaya komunikasi WAJIB blak-blakan, tajam, dan evaluasi dingin; DILARANG flattery atau pujian pasif**), §9 (catat ke `shared/LEARNED.md`), dan **§0 + Fase 0 skill ini** (aturan lokal-dulu di Fase 0 berdiri sendiri, tidak bergantung pada §3.8 yang mati).
 
 ### Urutan WAJIB (Non-Teknis)
 
