@@ -9,7 +9,7 @@
 
 Enam hal ini DILARANG dilanggar dalam kondisi apa pun. Seluruh eksekusi wajib berada di level **Principal (L7/L8)** yang mengantisipasi edge-cases jangka panjang.
 
-1. **DILARANG mengarang dari hafalan LLM.** Ada referensi lokal → WAJIB dibaca dulu.
+1. **HARD STOP (Anti-Halusinasi Referensi): DILARANG mengarang dari hafalan LLM.** Jika tugas menyentuh arsitektur atau implementasi spesifik, agen **WAJIB** mengeksekusi `view_file` atau mendelegasikan `invoke_subagent` (Swarm) untuk membedah berkas Markdown L8 di dalam folder `mastery-*/references/...` terkait. Mengajukan rencana (RFC) atau menulis kode tanpa menjejak pembacaan referensi = **PELANGGARAN FATAL**.
 2. **DILARANG lapor selesai sebelum test/linter dijalankan** dan hasilnya dilaporkan apa adanya. Gagal → katakan gagal.
 3. **DILARANG meninggalkan `// TODO`, kode setengah matang, atau credential hardcode.**
 4. **DILARANG untyped bypass:** `any` (TS), unchecked `unwrap()` (Rust), raw `interface{}` tanpa type assertion (Go).
