@@ -3,9 +3,21 @@ name: mastery-nestjs
 description: Gunakan skill ini ketika merancang arsitektur Enterprise TypeScript, Dependency Injection IoC internals, Hexagonal Ports & Adapters, Fastify Engine tuning, Prisma/Drizzle ORM performance, Microservices gRPC/Kafka/NATS, Apollo GraphQL Federation v2, Multi-Tenancy RLS, AI Scout/pgvector/LangChain, Fintech ACID 2PC, atau Zero-Trust security di NestJS.
 ---
 
-# NestJS Enterprise Mastery
+# NestJS Enterprise Mastery (L8 Neutral Encyclopedia)
 
-SSOT arsitektur backend TypeScript enterprise (36 Domain, 139 Berkas). Zero-Tolerance: DILARANG `// TODO`, secret statis di kode, dan `any` bypass.
+SSOT arsitektur backend TypeScript enterprise (36 Domain, 139 Berkas). Dokumen ini BUKAN sekadar tutorial SWE; ini adalah **Fakta Objektif Netral** yang memfasilitasi 5 POV Principal Roles (Architect, SWE, QA, DevOps, DBA). Zero-Tolerance: DILARANG `// TODO`, secret statis di kode, dan `any` bypass.
+
+## 👓 Matriks Lensa Principal (Multi-POV)
+
+Gunakan *lensa* spesifik saat membaca file referensi di direktori ini, sesuai dengan peran Anda saat ini:
+
+| Role Aktif | Lensa Fokus Utama di Ekosistem NestJS |
+| :--- | :--- |
+| **Architect** | Arsitektur *Hexagonal Ports & Adapters*, *CQRS/Event Sourcing*, Topologi *GraphQL Apollo Federation v2*, dan *gRPC Microservices*. |
+| **SWE** | Injeksi Dependensi (IoC), siklus hidup *Event Loop Node.js*, pemindahan beban CPU ke *Piscina Worker Threads*, dan *Decorator* abstraksi. |
+| **DevOps** | Orkestrasi K8s untuk *Fastify*, metrik *Prometheus RED*, *Multi-stage distroless* image, pencegahan OOM via *Terminus Health Checks*, dan *Graceful Shutdown*. |
+| **DBA** | Optimasi *Prisma Connection Pooling* via *PgBouncer*, *Drizzle zero-overhead*, strategi *Multi-Tenancy RLS*, dan *Zero-Downtime Migrations*. |
+| **QA (Red Team)** | Eksploitasi *Prototype Pollution*, serangan *ReDoS* (Regular Expression Denial of Service), mutasi API via *Jest/SWC*, dan *Chaos Testing* pada antrean *BullMQ*. |
 
 ## 🏛️ Pilar Arsitektur Mutlak
 
@@ -83,48 +95,41 @@ Agent WAJIB mencocokkan nature of task ke domain berikut **secara proaktif**.
 
 ---
 
-## 🛡️ Penegakan Mutu & Quality Gates (Zero-Tolerance)
+## ✅ Terdesentralisasi Quality Gate (Per-Role)
 
-**TypeScript & Code Quality:**
-- `tsc --noEmit` — nol error kompilasi
-- `eslint .` — nol warning
-- `jest` / SWC — nol kegagalan
-- `npm audit` / `osv-scanner` — nol CVE tinggi; permukaan npm luas, ini bukan opsional
-- Nol `any` / `unknown` tanpa validasi runtime — **tipe TypeScript MUSNAH saat compile**
-- Hexagonal: business logic di core, buta terhadap DB dan protokol HTTP/gRPC
-- Nol `forwardRef()` baru — ia gejala batas domain bocor, bukan solusi
-
-**API & System:**
-- Prefix versi (`/api/v1/`) + pagination pada SEMUA listing
-- DTO tervalidasi runtime (Zod/TypeBox/class-validator `whitelist: true`) di SETIAP pintu masuk
-- Idempotency key pada webhook dan POST yang memutasi state
-- ORM: `include`/`relations` eksplisit — audit N+1 sebelum merge
-- Connection pool berbatas (Prisma/PgBouncer) — no default tak terbatas
-- Zero-downtime migration — kolom baru `nullable`, no rename/drop langsung
-
-**Observability & Security:**
-- Pino JSON zero-allocation + OTel tracing — no PII/token di log
-- `app.enableShutdownHooks()` — tanpa ini pool DB & broker tidak tertutup saat SIGTERM
-- Throttler Redis pada endpoint publik
-- JWKS/OIDC di HTTP-Only Secure Cookie · RBAC/ABAC lewat `Reflector`
-- Rahasia lewat `ConfigModule` ber-`validationSchema`, crash saat boot bila invalid
-- Nol provider `Scope.REQUEST` baru tanpa alasan tertulis — ia menular ke seluruh rantai injeksi
-
-**Event Loop & Container:**
-- Komputasi CPU-bound WAJIB keluar dari main thread → Piscina Worker Threads atau `napi-rs`. Event loop terblokir mematikan SEMUA client, bukan satu request
-- Multi-stage build + corepack/pnpm layer caching
-- Distroless atau alpine **non-root** — no `root` di container produksi
-- `.dockerignore` eksplisit — no `node_modules`, `.env*`, `.git/`
-- Probe Terminus selaras dengan `/health` + `/ready`
-- Resource limits + `depends_on.condition: service_healthy` untuk DB/Redis
-
-**Gerbang global (WAJIB, mendahului semua di atas):**
+**Gerbang Global (WAJIB bagi semua role yang mengubah kode/infrastruktur):**
 ```
 powershell -NoProfile -ExecutionPolicy Bypass -File ~/.gemini/config/scripts/quality_gate.ps1 -Full
 ```
-Nol placeholder · nol credential hardcode · nol untyped bypass · linter & test lulus.
 
-> Audit mutu **berkas referensi mastery** dijalankan terpusat lewat `scripts/audit_references.ps1 -Skill mastery-nestjs`, bukan dari direktori `scripts/` di dalam bundle ini (tidak ada). Sasarannya berbeda dari `quality_gate.ps1` yang mengadili kode proyek user — DILARANG saling menggantikan.
+Sebagai agen otonom, WAJIB periksa bagian di bawah ini sesuai dengan peran aktif Anda. DILARANG mencentang tugas `[x]` bila gerbang *role* Anda belum terpenuhi secara spesifik.
+
+### 🏛️ `[ ]` Gerbang Architect (PM)
+- **Modularity:** Tidak ada `forwardRef()`. Logika bisnis (Hexagonal) murni buta terhadap HTTP (Fastify) dan DB (Prisma).
+- **Topology:** Operasi berat asinkron masuk ke antrean eksternal (BullMQ/RabbitMQ).
+- **Security Blueprint:** Validasi rahasia (*secret*) tersentralisasi via `ConfigModule` (`validationSchema`), sistem gagal *boot* jika invalid.
+
+### ⚙️ `[ ]` Gerbang SWE
+- **Type-Safety:** Nol `any`/`unknown` tanpa validasi. *Tipe TypeScript musnah saat compile*, DTO wajib bervalidasi *runtime* (Zod/class-validator `whitelist: true`).
+- **Event Loop:** Komputasi CPU-bound (*hashing*, Excel) DILARANG berada di *main thread*. Pindahkan ke *Piscina Worker Threads* atau *napi-rs*.
+- **Lint & Test:** `tsc --noEmit` & `eslint .` (Nol Error). Lulus `jest` dengan SWC.
+
+### 🛡️ `[ ]` Gerbang QA (Red Team)
+- **CVE Free:** Hasil `npm audit` / `osv-scanner` bebas dari kerentanan *Critical* atau *High*.
+- **ReDoS Protected:** *Endpoint* yang menerima Regex (atau memproses string panjang) lolos dari jebakan *Event Loop Blocking*.
+- **Authorization:** IDOR / BAC diuji. RBAC/ABAC terpasang via NestJS `Guard` dan *Reflector*.
+
+### 🌩️ `[ ]` Gerbang DevOps
+- **Distroless & Container:** *Multi-stage build* menggunakan pnpm caching layer, berjalan di atas *alpine* / *distroless* secara **non-root**.
+- **Graceful Shutdown:** `app.enableShutdownHooks()` terpasang agar pool DB terputus bersih saat menerima `SIGTERM`.
+- **Health Checks:** Terminus Terintegrasi di `/health` + `/ready`.
+
+### 🗄️ `[ ]` Gerbang DBA
+- **Pool Tuning:** *Connection Pool* Prisma / TypeORM tidak dibiarkan tak terbatas. Gunakan *PgBouncer* jika *deployment* serverless/lambda.
+- **N+1 Eradication:** Kueri ORM memanfaatkan `include`/`relations` secara eksplisit, terbebas dari siklus *N+1 Query*.
+- **Zero-Downtime:** Migrasi skema berjalan inkremental tanpa memicu *table lock* absolut di DB produksi.
+
+> Audit mutu **berkas referensi mastery** dijalankan terpusat lewat `scripts/audit_references.ps1 -Skill mastery-nestjs`.
 
 ---
 *Manifes `mastery-nestjs` ini adalah Single Source of Truth (SSOT). Jadikan hukum kepatuhannya sebagai jembatan melompati kemegahan arsitektur dunia nyata!*

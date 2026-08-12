@@ -3,9 +3,21 @@ name: mastery-laravel
 description: Gunakan skill ini ketika merancang arsitektur, API resources, Sanctum/Passport auth, Eloquent DB, Horizon, Reverb, Octane, Livewire/Inertia, Fintech/Cashier, AI Scout, Multi-Tenancy, microservices gRPC, AWS Vapor/Lambda cloud native, Caching L1/L2 CDN, Distributed Saga jobs, Zero-Trust security, atau testing di Laravel.
 ---
 
-# Laravel Mastery
+# Laravel Mastery (L8 Neutral Encyclopedia)
 
-SSOT arsitektur & rekayasa Laravel enterprise, SaaS high-throughput, dan resilient cloud-native PHP (27 Domain, 136 File Mahakarya).
+SSOT arsitektur & rekayasa Laravel enterprise, SaaS high-throughput, dan resilient cloud-native PHP (27 Domain, 136 File Mahakarya). Dokumen ini BUKAN sekadar tutorial SWE; ini adalah **Fakta Objektif Netral** yang memfasilitasi 5 POV Principal Roles (Architect, SWE, QA, DevOps, DBA).
+
+## 👓 Matriks Lensa Principal (Multi-POV)
+
+Gunakan *lensa* spesifik saat membaca file referensi di direktori ini, sesuai dengan peran Anda saat ini:
+
+| Role Aktif | Lensa Fokus Utama di Ekosistem Laravel |
+| :--- | :--- |
+| **Architect** | Topologi Queue (Horizon/SQS), pola Modular Monolith/Hexagonal, *Event-Driven Pub/Sub*, dan isolasi *Microservices* via gRPC/Swoole. |
+| **SWE** | Pola *FormRequest → Action → Model*, pencegahan *State Leak* di Octane, manajemen *Job $afterCommit*, dan arsitektur *Pest Arch Test*. |
+| **DevOps** | *Serverless* AWS Vapor, orkestrasi FrankenPHP/Octane *non-root*, `opcache` JIT tuning, Prometheus *scraping*, dan *Zero-Downtime Deploy*. |
+| **DBA** | Optimasi N+1 Eloquent (`->with()`), *Multi-Tenancy RLS* (Row-Level Security) per skema, migrasi basis data *zero-lock*, dan replikasi DB. |
+| **QA (Red Team)** | *Pest Mutation Testing*, *Race Condition* di *Job Workers*, serangan *Mass Assignment* (`$fillable`), dan IDOR *bypassing* via *Model Binding*. |
 
 ## 🏛️ Pilar Arsitektur Mutlak
 
@@ -68,43 +80,37 @@ Agent WAJIB mencocokkan nature of task ke domain berikut **secara proaktif**:
 | Streaming Excel 1 Juta baris tanpa OOM (OpenSpout), libvips JIT Image resizing, FFmpeg video HLS transcoding | `references/media_asset_pipeline/` |
 | Dynamic Redis translation bundles, ICU Intl timezone & currency formatting, Multi-Region SEO Hreflang routing | `references/i18n_localization/` |
 
-## ✅ Quality Gate (Checklist Sebelum Selesai)
+## ✅ Terdesentralisasi Quality Gate (Per-Role)
 
-**PHP & Code Quality:**
-- `./vendor/bin/pint --test` — nol pelanggaran gaya
-- `./vendor/bin/phpstan analyse --level=9 app/` — nol error di level 9
-- `php artisan test` — termasuk arch test; nol kegagalan
-- `composer audit` — nol CVE diketahui
-- Lapisan: `FormRequest → Controller → Action/Service → Repository → Model` — no business logic di Controller
-- Eager loading `->with()` di setiap listing — audit N+1 sebelum merge
-- Job yang menyentuh data transaksi pemanggilnya WAJIB `$afterCommit`
-
-**API & System:**
-- `Route::prefix('api/v1')` + `->paginate()` pada SEMUA listing — no `->get()` telanjang
-- API Resource wrapping — no model mentah di response
-- Idempotency key pada webhook dan POST yang memutasi saldo
-- `throttle` pada endpoint publik
-- Zero-downtime migration — kolom baru `nullable`, no rename/drop langsung
-- `/health` endpoint untuk load balancer
-
-**Observability & Security:**
-- Monolog JSON terstruktur — no PII/token di log
-- `$fillable`/`$guarded` eksplisit — cegah Mass Assignment
-- Policy/Gate pada route model binding — cegah IDOR
-- Validasi `FormRequest` di semua input eksternal
-- Rahasia lewat `.env` + validasi saat boot — no hardcode
-- OWASP: parameter binding (SQLi), escape Blade (XSS), CSRF token
-
-**Octane & Container:**
-- Nol properti `static` mutable dan singleton stateful — state leak antar-request adalah bug khas Octane yang tidak ada di php-fpm
-- Service stateful terdaftar di `flush` pada `config/octane.php`
-- Multi-stage build → runtime FrankenPHP/Octane **non-root**
-- `.dockerignore` eksplisit — no `.env*`, `.git/`, `tests/`
-- Graceful shutdown worker queue saat SIGTERM
-- Resource limits + `depends_on.condition: service_healthy` untuk DB/Redis
-
-**Gerbang global (WAJIB, mendahului semua di atas):**
+**Gerbang Global (WAJIB bagi semua role yang mengubah kode/infrastruktur):**
 ```
 powershell -NoProfile -ExecutionPolicy Bypass -File ~/.gemini/config/scripts/quality_gate.ps1 -Full
 ```
-Nol placeholder · nol credential hardcode · nol untyped bypass · linter & test lulus (`role-swe/SKILL.md` §3).
+
+Sebagai agen otonom, WAJIB periksa bagian di bawah ini sesuai dengan peran aktif Anda. DILARANG mencentang tugas `[x]` bila gerbang *role* Anda belum terpenuhi secara spesifik.
+
+### 🏛️ `[ ]` Gerbang Architect (PM)
+- **Modularity:** Tidak ada *circular dependency* antar modul. Logika bisnis terisolasi dari Framework (Hexagonal/Action pattern).
+- **Topology:** Semua *side-effect* asinkron wajib dideklarasikan ke dalam arsitektur antrean (Horizon/SQS), tidak ada *Fire-and-Forget*.
+- **Observability:** Format log adalah Monolog JSON terstruktur dan metrik terekspos.
+
+### ⚙️ `[ ]` Gerbang SWE
+- **Lint & Types:** `./vendor/bin/phpstan analyse --level=9` (Nol Error) & `pint --test` (Lulus).
+- **Test Suite:** `php artisan test` (Pest) lulus 100%, termasuk pengujian arsitektur (*Arch Test*).
+- **State Leak:** Nol properti `static` mutable. Aplikasi kebal dari bug *State Leak* khas Octane/Swoole.
+- **Job Integrity:** *Job* yang menyentuh data transaksi wajib mengimplementasikan `$afterCommit`.
+
+### 🛡️ `[ ]` Gerbang QA (Red Team)
+- **Mass Assignment:** Model dilindungi `$fillable`/`$guarded` ketat, tidak bisa diinjeksi via parameter liar.
+- **IDOR Proof:** *Route model binding* divalidasi oleh *Policy/Gate* atau dibatasi lingkup relasinya.
+- **Race Condition:** Antrean *Job* (*Workers*) tidak menabrak *database lock* secara *deadlock* di bawah tekanan tinggi.
+
+### 🌩️ `[ ]` Gerbang DevOps
+- **Distroless & Security:** Kontainer FrankenPHP/Octane berjalan murni sebagai `nonroot`. File konfigurasi seperti `.env` dan `tests/` masuk ke `.dockerignore`.
+- **Graceful Shutdown:** *Worker Queue* merespons `SIGTERM` secara anggun tanpa memotong *job* di tengah jalan.
+- **Health Checks:** *Endpoint* `/health` (Spatie Health) beroperasi akurat sebelum *Load Balancer* mengalirkan trafik.
+
+### 🗄️ `[ ]` Gerbang DBA
+- **N+1 Eradication:** Eager loading (`->with()`) dipastikan eksis pada setiap rute *listing*/koleksi.
+- **Zero-Downtime Migration:** Migrasi DDL (*Data Definition Language*) dilakukan tanpa *table lock* berkepanjangan (misal: kolom baru `nullable`).
+- **Memory Constraint:** `->paginate()` wajib dipakai untuk operasi data masif, dilarang menggunakan `->get()` telanjang yang berisiko OOM.

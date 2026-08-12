@@ -3,9 +3,21 @@ name: mastery-rust
 description: Gunakan skill ini ketika merancang arsitektur, Borrow Checker memory safety, Tokio async, Traits & Generics, Unsafe Rust & FFI, Axum microservices, HFT zero-cost abstractions, WebAssembly/eBPF, Tauri/Bevy/Blockchain, LLVM internals, Lock-free structures, atau Custom Allocators di Rust.
 ---
 
-# Rust Mastery
+# Rust Mastery (L8 Neutral Encyclopedia)
 
-SSOT arsitektur & rekayasa sistem Rust enterprise, systems programming, dan ultra-low latency (34 Domain, 195 File Mahakarya).
+SSOT arsitektur & rekayasa sistem Rust enterprise, systems programming, dan ultra-low latency (34 Domain, 195 File Mahakarya). Dokumen ini BUKAN sekadar tutorial SWE; ini adalah **Fakta Objektif Netral** yang memfasilitasi 5 POV Principal Roles (Architect, SWE, QA, DevOps, DBA).
+
+## 👓 Matriks Lensa Principal (Multi-POV)
+
+Gunakan *lensa* spesifik saat membaca file referensi di direktori ini, sesuai dengan peran Anda saat ini:
+
+| Role Aktif | Lensa Fokus Utama di Ekosistem Rust |
+| :--- | :--- |
+| **Architect** | Desain *Trait* & *Generics*, abstraksi lapisan batas (*Traits* sebagai kontrak), gRPC/Tonic *Microservices*, dan topologi *Message Broker*. |
+| **SWE** | *Borrow Checker* / Lifetimes, pencegahan blokade *Event Loop* (Tokio `spawn_blocking`), *Cancel-Safety* dalam `select!`, dan pemutusan siklus `Arc`/`Rc` dengan `Weak`. |
+| **DevOps** | *Cargo release profiles*, *musl static builds*, *distroless* container dengan `cargo-chef`, `RUST_LOG` OpenTelemetry, dan *Graceful Shutdown*. |
+| **DBA** | Optimasi koneksi `sqlx::PgPool`, makro *compile-time queries*, *Prepared Statements*, dan pencegahan *connection starvation*. |
+| **QA (Red Team)** | Pengujian *Undefined Behavior* di blok `unsafe` menggunakan `Miri`, eksekusi *Fuzzing* (`cargo fuzz`), dan pendeteksian *deadlock* pada `tokio::sync::Mutex`. |
 
 ## 🏛️ Pilar Arsitektur Mutlak
 
@@ -75,43 +87,37 @@ Agent WAJIB mencocokkan nature of task ke domain berikut **secara proaktif**:
 | CI/CD acceleration via cargo-nextest, sccache AWS S3 cloud cache, cargo-zigbuild cross compile, cargo-deny SBOM | `references/ci_cd_pipeline_cargo/` |
 | Unicode ICU4X zero-alloc engine, Mozilla Project Fluent localization, Axum locale routing, zero-copy formatting | `references/i18n_localization_icu/` |
 
-## ✅ Quality Gate (Checklist Sebelum Selesai)
+## ✅ Terdesentralisasi Quality Gate (Per-Role)
 
-**Rust & Code Quality:**
-- `cargo fmt -- --check` — nol selisih format
-- `cargo clippy --all-targets --all-features -- -D warnings` — nol warning
-- `cargo test --all-targets --all-features` — nol kegagalan
-- `cargo miri test` — WAJIB bila menyentuh blok `unsafe`; nol Undefined Behavior
-- `cargo audit` — nol CVE diketahui
-- Nol `.unwrap()` di jalur produksi — pakai `thiserror`/`anyhow` dengan propagasi eksplisit. Di dalam test, `unwrap()` justru idiomatik
-- Siklus `Arc<T>` diputus `Weak<T>` — bocor memori tanpa satu pun `unsafe`
-
-**Async & System:**
-- `Mutex` guard DILARANG hidup melintasi `.await` — starvation, dan deadlock pada `tokio::sync::Mutex`
-- Blocking I/O dan komputasi berat WAJIB `spawn_blocking` — kalau tidak, satu worker thread runtime membeku
-- Setiap cabang `tokio::select!` diperiksa cancel-safe — cabang yang kalah dibatalkan di tengah jalan
-- Timeout eksplisit pada SEMUA panggilan DB, Redis, gRPC, HTTP
-- `PgPool` dengan `max_connections` + `acquire_timeout` — no default tak terbatas
-- Zero-downtime migration — kolom baru `nullable`, no rename/drop langsung
-
-**Observability & Security:**
-- `tracing` JSON terstruktur + OpenTelemetry OTLP — no PII/token di log
-- Axum `with_graceful_shutdown()` + tutup pool `sqlx` saat SIGTERM
-- Rate limiting (Governor GCRA) pada endpoint publik
-- Validasi tipe di batas sistem — `serde` deny_unknown_fields untuk payload eksternal
-- Rahasia lewat env ter-deserialisasi strongly-typed, panic saat boot bila invalid
-- `/health` + `/ready` endpoint pada setiap service
-
-**Docker & Container:**
-- `cargo-chef` untuk layer caching — tanpanya build ulang 10–15 menit tiap push
-- **`FROM scratch` BUKAN default** — TLS butuh `ca-certificates`, glibc butuh distroless, zona waktu butuh `tzdata`
-- Target musl untuk biner statis, atau distroless untuk glibc
-- Non-root user — no `root` di container produksi
-- `.dockerignore` eksplisit — no `target/`, `.env*`, `.git/`
-- Resource limits + `depends_on.condition: service_healthy` untuk DB/Redis
-
-**Gerbang global (WAJIB, mendahului semua di atas):**
+**Gerbang Global (WAJIB bagi semua role yang mengubah kode/infrastruktur):**
 ```
 powershell -NoProfile -ExecutionPolicy Bypass -File ~/.gemini/config/scripts/quality_gate.ps1 -Full
 ```
-Nol placeholder · nol credential hardcode · nol untyped bypass · linter & test lulus (`role-swe/SKILL.md` §3).
+
+Sebagai agen otonom, WAJIB periksa bagian di bawah ini sesuai dengan peran aktif Anda. DILARANG mencentang tugas `[x]` bila gerbang *role* Anda belum terpenuhi secara spesifik.
+
+### 🏛️ `[ ]` Gerbang Architect (PM)
+- **Trait Contracts:** Antarmuka komponen abstrak (Ports & Adapters) harus bergantung pada *Traits* (misal: `Repository` trait), bukan implementasi konkrit.
+- **Observability:** `tracing` JSON terstruktur + OpenTelemetry OTLP terintegrasi murni (tidak membocorkan PII/token).
+- **Security Blueprint:** Validasi konfigurasi *(secrets)* terdeserialisasi aman dan akan memicu *panic* di awal (*fail-fast*) jika tidak valid.
+
+### ⚙️ `[ ]` Gerbang SWE
+- **Lint & Test:** `cargo fmt -- --check`, `cargo clippy -D warnings`, dan `cargo test` lulus 100%.
+- **Safety:** Nol `.unwrap()` di jalur produksi (`thiserror`/`anyhow` diwajibkan). Siklus referensi `Arc<T>` diputus dengan `Weak<T>`.
+- **Async Hygiene:** Tidak ada `Mutex` yang terkunci melintasi batas `.await`. Operasi berat/lambat dipindah via `tokio::task::spawn_blocking`.
+- **Cancel-Safety:** Semua operasi di dalam `tokio::select!` telah dipastikan aman dari *cancellation*.
+
+### 🛡️ `[ ]` Gerbang QA (Red Team)
+- **UB Miri:** `cargo miri test` WAJIB lulus 100% jika ada modifikasi kode yang menyentuh blok `unsafe`.
+- **Fuzzing & Chaos:** Validasi input *Fuzzing* (via `cargo fuzz` / `proptest`) tidak memicu `panic!` atau korupsi memori.
+- **CVE Free:** Hasil `cargo audit` bersih dari kerentanan kritis.
+
+### 🌩️ `[ ]` Gerbang DevOps
+- **Build Efficiency:** Memakai `cargo-chef` untuk abstraksi *layer caching* (tanpanya *build* Rust memakan waktu belasan menit).
+- **Distroless & Container:** *Build* memakai target `musl` untuk biner statis (`FROM scratch` / `alpine`), atau glibc *distroless*. Wajib dijalankan sebagai **nonroot**.
+- **Graceful Shutdown:** *Axum/Actix* memakai metode `with_graceful_shutdown()` yang menyadap `SIGTERM` secara akurat.
+
+### 🗄️ `[ ]` Gerbang DBA
+- **Pool Tuning:** `sqlx::PgPool` memiliki nilai spesifik pada `max_connections` dan `acquire_timeout` (mencegah *connection storm*).
+- **Type-Safe Queries:** `sqlx::query!` atau makro *compile-time* memvalidasi kueri sejak proses kompilasi.
+- **Zero-Downtime Migration:** Migrasi DDL (Data Definition Language) tidak menimbulkan *lock* berkepanjangan pada tabel PostgreSQL produksi.
