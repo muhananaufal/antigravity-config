@@ -291,15 +291,16 @@ Repositori ini beroperasi sebagai **SSOT Multi-Platform**:
 ## 🛡️ Jaminan Integritas Sistem
 Seluruh komponen dalam ekosistem ini diaudit secara berkala dengan garansi:
 Klaim di bawah **terukur, bukan janji** — tiap baris menyebut perintah yang membuktikannya.
-Status terakhir diverifikasi **2026-08-07** (lihat `docs/rfc/20260807-audit-integritas-config.md`).
+Status terakhir diverifikasi **2026-08-12** (berdasarkan eksekusi langsung `scripts/audit_references.ps1`).
 
 | Properti | Status | Cara membuktikan |
 | :--- | :--- | :--- |
-| Nol domain referensi tak terjangkau dari `SKILL.md` | ✅ 4/4 bundle | §5.1 dokumen RFC |
+| Nol domain referensi tak terjangkau dari `SKILL.md` | ✅ 4/4 bundle | `scripts/audit_references.ps1` |
 | Angka domain & berkas di `SKILL.md` cocok dengan disk | ✅ 4/4 bundle | `scripts/audit_references.ps1` |
 | Nol kredensial hardcode ter-commit | ✅ | `git log -S` + `scripts/quality_gate.ps1` |
 | Encoding berkas referensi UTF-8 tanpa BOM | ⚠️ **2 berkas melanggar** | `scripts/audit_references.ps1` (H17) |
-| Kepadatan referensi ≥130 baris | ⚠️ **88 berkas di bawah ambang** | `scripts/audit_references.ps1` (H18) |
+| Kepadatan referensi ≥130 baris | ⚠️ **90 berkas di bawah ambang** | `scripts/audit_references.ps1` (H18) |
+| Sinkronisasi Rantai Kerja (Templates/Decision/Git) | ⚠️ **13 temuan diskrepansi** | `scripts/audit_references.ps1` |
 | Conventional Commits + Co-author trailer | ✅ | `git log --format=%s` |
 
 > **DILARANG menulis klaim "0 Broken Paths" atau sejenisnya tanpa perintah yang membuktikannya.**
