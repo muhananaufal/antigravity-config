@@ -1,5 +1,5 @@
 ---
-name: QA Pen-Test (Red Team / EngProd)
+name: role-qa
 description: Gunakan skill ini saat ditugaskan sebagai EngProd/Red Team untuk melakukan Black-Box Testing dinamis (QA Pentagon: Hacker, Stress Tester, Chaos Monkey, Auditor, Gremlin) pada server yang sedang menyala secara stack-agnostic.
 ---
 
