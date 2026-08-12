@@ -59,16 +59,20 @@
 │   ├── LEARNED.md              # Living Brain SSOT (Pelajaran, Bug Triggers, Runtime Truths)
 │   └── tool-claude-code.md     # Jembatan Protokol Sinkronisasi Claude Code (~/.claude/CLAUDE.md)
 │
-├── skills/                     # 9 Skill Bundles Berisi Ratusan Referensi Produksi
-│   ├── meta-brainstorm/             # Brainstorming Umum & Teknikal + Gerbang Bukti anti-sitasi fiktif
-│   ├── meta-git/           # Git Flow, Conventional Commits, Dual-Avatar Attribution
+├── skills/                     # Skill Bundles Berisi SOP & Ratusan Referensi Produksi
 │   ├── mastery-golang/         # Go High-Perf, Concurrency, SQLC, gRPC (30 domain, 221 berkas)
 │   ├── mastery-laravel/        # Laravel Octane, Reverb, Horizon, Multi-tenant (27 domain, 136 berkas)
-│   ├── meta-decision/   # Matriks Pemilihan Bahasa & Arsitektur Sistem
 │   ├── mastery-nestjs/         # NestJS Hexagonal, Fastify, Microservices (36 domain, 139 berkas)
 │   ├── mastery-rust/           # Rust Async Tokio, Axum, Zero-Cost, Lock-free (34 domain, 195 berkas)
-│   ├── mastery-skills/ # Meta-Skill Pembuatan & Audit Skill Baru
-│   └── meta-templates/              # Master Template RFC, RCA, System Map, & Patch Receipts
+│   ├── mastery-skills/         # Meta-Skill Pembuatan & Audit Skill Baru
+│   ├── meta-brainstorm/        # Brainstorming Umum & Teknikal + Gerbang Bukti anti-sitasi fiktif
+│   ├── meta-decision/          # Matriks Pemilihan Bahasa & Arsitektur Sistem
+│   ├── meta-git/               # Git Flow, Conventional Commits, Dual-Avatar Attribution
+│   ├── meta-templates/         # Master Template RFC, RCA, System Map, & Patch Receipts
+│   ├── role-architect/         # Mode L8 Principal PM/Architect (SOP Pra-Eksekusi / RFC)
+│   ├── role-dba/               # Mode L8 Principal DBA (Skema DB, Optimasi, Migrasi)
+│   ├── role-devops/            # Mode L8 Principal DevOps (Infrastruktur, Cloud, CI/CD)
+│   └── role-swe/               # Mode L8 Principal SWE (SOP Pasca-Eksekusi / Batch Writing)
 │
 └── plugins/                    # Plugin PIHAK KETIGA (Apache-2.0) - ter-gitignore, tidak ikut ter-clone.
                                 # Diaudit 2026-08-07: nol kredensial, bukan tulisan sendiri.
@@ -131,7 +135,7 @@ Setiap perintah user dicocokkan secara deterministik dari atas ke bawah:
 * **Emotional/Tone Gate:** DILARANG keras memuji/berbasa-basi ("You're right!") atau melakukan selebrasi prematur ("Selesai!", "Berhasil!") tanpa bukti eksekusi langsung. Respon harus dingin, faktual, dan murni teknis.
 
 ### 5. Standar Artefak & Dokumentasi Teknis
-Seluruh dokumen teknis wajib mengikuti standar arsitektur L7/L8 yang didefinisikan di `skills/meta-meta-templates/SKILL.md`.
+Seluruh dokumen teknis wajib mengikuti standar arsitektur L7/L8 yang didefinisikan di `skills/meta-templates/SKILL.md`.
 
 ### 6. Quality Gate Ratchet & Patch Receipt
 * **Ratchet Mechanism:** Hanya memblokir baris baru yang diubah agen; baris legacy dilaporkan sebagai `~ PRAADA` (Side Note).
