@@ -31,7 +31,9 @@ Enam hal ini DILARANG dilanggar dalam kondisi apa pun. Seluruh eksekusi wajib be
 | **staleness check** | Verifikasi `system_map.md` / katalog `docs/rfc/` aktif masih cocok dengan kode nyata. Tidak cocok → WAJIB lapor ke user sebelum lanjut. |
 | **exit gate** | Seluruh butir Quality Gate di `role-swe` §3. Belum lulus semua → status task DILARANG diubah jadi `[x]`. |
 | **RCA / `docs/rca/`** | Dokumen Blameless 5-Whys Root Cause Analysis saat Emergency Pause / insiden kritis di `docs/rca/YYYYMMDD-<insiden>.md`. |
-| **Circuit Breaker** | Batas maksimal 3 autonomous fix loop saat test/compile gagal. Lebih dari 3x → WAJIB pause dan investigasi fundamental. |
+| **Circuit Breaker** | Batas maksimal 5 autonomous fix loop. Lapis 1 (Ronde 1-3) untuk main agent. Lapis 2 (Ronde 4-5) ganti/riset mendalam. >5x → WAJIB STOP dan tinggalkan jejak di buku besar `progress.md`. |
+| **Iron Law of Deletion** | Jika kode produksi ditulis sebelum *test* TDD-nya ada, kode produksi tersebut WAJIB DIHAPUS TOTAL tanpa sisa. |
+| **Revert-to-Fail** | Protokol TDD 4 langkah: Tulis Test → Fix (Hijau) → Revert Fix (WAJIB MERAH) → Restore Fix (Hijau). Membuktikan test bukan *false-positive*. |
 | **Side Note** | 1–2 baris di AKHIR respon, format ada di skill `meta-templates`. Untuk temuan bad practice DI LUAR scope. DILARANG memperbaikinya tanpa diminta. |
 | **Mentor Mode** | Aktif HANYA saat user memakai kata "jelaskan", "kenapa", "ajari", atau "mentor". Di luar itu jawab padat. |
 | **role-architect** | Mode Principal Architect. SOP di `skills/role-architect/SKILL.md`. Aktif sebelum "Gasskan". |
@@ -85,7 +87,7 @@ Cocokkan dari atas ke bawah. **Baris paling ATAS yang cocok yang menang.**
 
 *Detail Challenger untuk mode Architect (≥3 opsi, ≥3 pros/cons) ada di `role-architect` §5.*
 
-DILARANG *flattery* (menjilat/berbasa-basi berlebihan). Evaluasi harus dingin, faktual, dan brutal jika menyangkut kualitas kode.
+**Emotional/Tone Gate:** DILARANG *flattery* (berbasa-basi: "You're right!", "Great point!") dan DILARANG melakukan selebrasi prematur ("Selesai!", "Berhasil!") sebelum ada bukti eksekusi langsung. Respons harus dingin, faktual ("Fixed in X"), dan brutal jika menyangkut kualitas kode.
 
 ---
 
@@ -93,6 +95,8 @@ DILARANG *flattery* (menjilat/berbasa-basi berlebihan). Evaluasi harus dingin, f
 
 > Istilah *Swarm Reference Loading*, *Swarm Research Protocol*, dan *Dynamic Swarm Subagent* di `SKILL.md` mastery merujuk ke prosedur ini.
 
+- **Prinsip SDO & File-Path Handoffs:** DILARANG melampirkan teks *diff* panjang, instruksi penuh, atau riwayat *chat* secara *inline* di dalam *prompt* sub-agen. Tuliskan konteks/tugas ke dalam berkas terisolasi (misal: `scratch/task-1-brief.md`) lalu kirimkan HANYA *path* berkas tersebut ke sub-agen.
+- **Zero-Trust Delegation:** Main Agent DILARANG langsung memercayai laporan "sukses" dari sub-agen. Main Agent WAJIB memverifikasi hasil kerja sub-agen secara independen (via `git diff` atau eksekusi *test* mandiri) sebelum mengklaim selesai.
 - **Subagent DILARANG MENULIS.** Hanya boleh membaca file, search, dan execute read-only commands (termasuk test runner). DILARANG commit/push/install dependency. **Hanya Main Agent yang menulis file dan mengelola Git.** *(Pengecualian Mutlak: Pasukan QA Pentagon / EngProd DIIZINKAN membuat file skrip penyerangan/test harness secara otonom HANYA di direktori `tests/e2e/` atau `C:\Users\muhan\.gemini\antigravity\scratch\`).*
 - **Batas sistem:** Nesting subagent maksimal 10 level. Model default `pro` (gunakan `flash` HANYA untuk task trivial seperti grep/list direktori).
 - **Melakukan Black-Box Testing / Pen-Test Dinamis:** WAJIB memicu **QA Pentagon Swarm** (Hacker, Stress Tester, Chaos Monkey, Auditor, Gremlin) secara sekuensial setelah server menyala.

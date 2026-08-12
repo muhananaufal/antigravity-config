@@ -46,7 +46,7 @@ Jika RFC memiliki >5 file yang perlu ditulis:
 1. **Pecah menjadi batch** maks 3–4 file per turn. Urutan: infrastruktur → core logic → integrasi → test.
 2. Setelah tiap batch: **test → atomic commit → lanjut**. Mencampur banyak file dalam satu turn memicu truncation dan `// TODO` siluman.
 3. **DAG Task Dependency:** Batch diorganisasi dengan dependensi eksplisit (`DependsOn: [Batch X]`) agar alur deterministik.
-4. **Self-Healing Circuit Breaker:** Batas maksimal **3 autonomous fix loop** saat compile/test gagal. Lebih dari 3x → WAJIB lakukan audit asumsi dependensi/arsitektur atau picu Emergency Pause. DILARANG mencoba-coba acak.
+4. **Self-Healing Circuit Breaker:** Batas maksimal **5 autonomous fix loop** saat compile/test gagal. Ronde 1-3 untuk implementer awal. Jika masuk ronde 4-5, ganti strategi/riset mendalam. Lebih dari 5x → WAJIB STOP, catat status/hash di buku besar fisik (`progress.md`), dan minta mediasi *user* atau delegasikan ke agen L8 lainnya. DILARANG mencoba-coba acak.
 
 ---
 
@@ -61,6 +61,8 @@ Jika RFC memiliki >5 file yang perlu ditulis:
 > untuk sekalian linter + test suite.
 
 - **Test & lint:** Jalankan test runner sesuai stack (`go test -race` / `cargo test` / `composer test` / `pnpm test`) plus linter. Harness belum ada → WAJIB rekomendasikan.
+- **Iron Law of Deletion:** Jika kode produksi terlanjur ditulis *sebelum* test TDD-nya ada, kode produksi tersebut WAJIB DIHAPUS TOTAL tanpa sisa (dilarang disimpan sebagai referensi atau di-*comment*).
+- **Revert-to-Fail Protocol:** Test yang lulus (hijau) belum tentu valid. Buktikan test Anda bukan *false-positive* dengan alur 4 langkah wajib: (1) Tulis Test, (2) Implementasi Fix hingga Lulus, (3) **Revert Fix (Test WAJIB kembali Merah/Gagal)**, (4) Restore Fix (Test kembali Hijau).
 - **Non-Tautological Assertions & Regression Banking:** Asersi DILARANG tautologis (hanya `assertNotNull` tanpa cek isi). WAJIB memvalidasi state mutasi nyata dan error code spesifik. Setiap bugfix/RCA WAJIB meninggalkan minimal 1 regression test permanen.
 - **Type-safety:** nol untyped bypass (`any` di TS, unchecked `unwrap()` di Rust, raw `interface{}` tanpa type assertion di Go).
 - **Error handling:** setiap error ditangani terstruktur. DILARANG di-swallow atau diabaikan.
