@@ -20,7 +20,7 @@ SSOT arsitektur & rekayasa sistem Golang enterprise & high-throughput (30 Domain
 ## 🚦 Protokol Eksekusi
 
 Patuhi mutlak **Tabel Routing Task di `AGENTS.md` §2** untuk menentukan kapan harus membaca `references/_protocol/greenfield.md`, `brownfield.md`, atau `tradeoff.md`.
-> **Pengecualian Mutlak:** Jika ini adalah proyek baru atau keputusan arsitektur besar, WAJIB lewati Master Decision Tree (`~/.gemini/config/skills/meta-decision/SKILL.md`) terlebih dahulu sesuai `role-architect/SKILL.md` §1.5.
+> **Pengecualian Mutlak:** Jika ini adalah proyek baru atau keputusan arsitektur besar, WAJIB lewati meta-decision (`~/.gemini/config/skills/meta-decision/SKILL.md`) terlebih dahulu sesuai `role-architect/SKILL.md` §1.5.
 
 ## 🔍 Auto-Detect Context Domain (Scan dari Task)
 

@@ -26,7 +26,7 @@ Sebelum menyusun RFC, WAJIB lakukan langkah-langkah ini secara berurutan:
 2. WAJIB cek `system_map.md`, `docs/rfc/README.md`, dan `CHANGELOG.md` di root proyek.
 3. Ada `system_map.md` / katalog RFC → WAJIB **staleness check** (cocokkan dengan kode nyata, laporkan jika tidak cocok).
 4. Task menyentuh domain bermastery (Go / Rust / Laravel / NestJS / Skill-Engineering) → WAJIB baca `SKILL.md` mastery terkait + protokol `_protocol/` di dalamnya.
-5. **Master Decision Tree:** Jika perancangan menyangkut pilihan tech-stack, arsitektur baru, atau pemecahan monolit → WAJIB baca `~/.gemini/config/skills/meta-decision/SKILL.md` *sebelum* mendraf RFC.
+5. **meta-decision:** Jika perancangan menyangkut pilihan tech-stack, arsitektur baru, atau pemecahan monolit → WAJIB baca `~/.gemini/config/skills/meta-decision/SKILL.md` *sebelum* mendraf RFC.
 6. Pencarian web (`search_web`) **DILARANG** sebelum seluruh referensi lokal habis dibedah.
 
 ---

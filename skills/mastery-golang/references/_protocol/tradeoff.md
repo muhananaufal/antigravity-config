@@ -28,4 +28,4 @@
 
 1. **Hard real-time deterministik dibutuhkan** — jeda GC tidak bisa dinegosiasikan → Rust.
 2. **Deliverable utamanya admin panel / CMS / CRUD internal** dengan tenggat pendek → Laravel + Filament.
-3. **Tidak ada satu pun anggota tim yang pernah menjalankan Go di produksi** dan tenggat < 4 minggu → time-to-market jadi constraint dominan; lihat `master-decision-tree` NODE 1.1 cabang A.
+3. **Tidak ada satu pun anggota tim yang pernah menjalankan Go di produksi** dan tenggat < 4 minggu → time-to-market jadi constraint dominan; lihat `meta-decision` NODE 1.1 cabang A.

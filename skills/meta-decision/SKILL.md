@@ -3,7 +3,7 @@ name: meta-decision
 description: Gunakan skill ini ketika merancang arsitektur sistem baru, memilih tech-stack, membuat proyek dari nol, atau menambahkan komponen arsitektur besar (message broker, caching strategy, pecah monolit). WAJIB dilewati sebelum memilih bahasa/framework apa pun.
 ---
 
-# 🌳 Master Decision Tree — Principal Engineering Architectural Guide
+# 🌳 meta-decision — Principal Engineering Architectural Guide
 
 > **Filosofi:** Dokumen ini adalah peta keputusan arsitektural yang bersifat **language-agnostic** (bebas bahasa pemrograman). Ia tidak bertanya "Pakai Go atau Laravel?", melainkan bertanya "Apa masalah bisnisnya?" — lalu mengarahkan Anda ke solusi yang tepat beserta referensi spesifik di perpustakaan keempat bahasa kita (Golang, Rust, Laravel, NestJS).
 >

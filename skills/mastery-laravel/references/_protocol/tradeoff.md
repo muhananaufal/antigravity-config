@@ -22,6 +22,6 @@
 
 ## Garis Merah — JANGAN pakai Laravel bila
 
-1. **p99 < 10 ms atau > 50k req/s adalah kebutuhan keras**, bukan aspirasi → Go atau Rust (`master-decision-tree` NODE 1.1 cabang B).
+1. **p99 < 10 ms atau > 50k req/s adalah kebutuhan keras**, bukan aspirasi → Go atau Rust (`meta-decision` NODE 1.1 cabang B).
 2. **Beban intinya CPU-bound berkelanjutan**, bukan I/O-bound — tidak ada jumlah worker yang memperbaiki ketiadaan paralelisme dalam proses.
 3. **Deliverable-nya CLI terdistribusi atau tooling infrastruktur** — distribusi biner PHP adalah kerugian permanen di sini → Go.

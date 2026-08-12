@@ -11,7 +11,7 @@ Wajib ada di baris pertama `SKILL.md`. Tidak boleh diubah strukturnya, hanya nil
 
 ```yaml
 ---
-name: "nama-teknologi-mastery"
+name: "mastery-nama-teknologi"
 description: "Gunakan skill ini ketika merancang arsitektur, optimasi, deployment, atau penyelesaian masalah tingkat lanjut pada [Sebutkan Teknologi]. Mewajibkan standar Top 1%."
 version: "2.0.0"
 author: "Antigravity Meta-Architecture Team"

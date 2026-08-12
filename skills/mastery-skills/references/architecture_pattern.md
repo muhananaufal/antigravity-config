@@ -53,7 +53,7 @@ Sebuah direktori Skill Bundle enterprise wajib memisahkan ranah **Core** (inti y
 ## 3. Aturan Tata Rasa Penamaan Ekosistem
 
 Konsistensi adalah nyawa dari sebuah ekosistem. Aturan penamaan wajib mengikuti kaidah abadi berikut:
-- **Nama Skill Bundle:** Menggunakan format `<teknologi>-mastery` atau `<domain>-engineering-mastery` (kebab-case). Contoh: `python-mastery`, `kubernetes-ops-mastery`, `devops-cloud-mastery`.
+- **Nama Skill Bundle:** Menggunakan format `mastery-<teknologi>` atau `<domain>-engineering-mastery` (kebab-case). Contoh: `mastery-python`, `kubernetes-ops-mastery`, `devops-cloud-mastery`.
 - **File Referensi Markdown:** Menggunakan `snake_case.md`, sangat deskriptif, lugas, dan bebas singkatan membingungkan. Jika menunjukkan struktur hierarki pengetahuan, disajikan dalam sub-folder penamaan jelas (misal: `references/<domain>/topic_name.md`).
 - **Skrip Eksekusi:** Gunakan kata kerja imperatif + objek + ekstensi native shell (`.ps1` untuk PowerShell Windows, `.sh` untuk Bash Linux/macOS). Contoh: `audit_rust_supreme.ps1`, `verify_200_files.sh`.
 
@@ -65,7 +65,7 @@ Kegagalan terbesar dalam merancang agen AI adalah *Context Window Pollution* (me
 
 ## 5. Pemetaan Detail 31 Domain Standar Dunia (Template Universal)
 
-Untuk memastikan kesejatian ekosistem Antigravity saat membangun skill baru (misalnya `python-mastery` atau `typescript-mastery`), berikut adalah tabel matriks pemetaan universal 31 domain yang siap diadaptasi:
+Untuk memastikan kesejatian ekosistem Antigravity saat membangun skill baru (misalnya `mastery-python` atau `typescript-mastery`), berikut adalah tabel matriks pemetaan universal 31 domain yang siap diadaptasi:
 
 | Rumpun Domain | Kode Domain | Deskripsi Pembahasan Mutlak di Dalam Referensi |
 | :--- | :--- | :--- |
@@ -93,7 +93,7 @@ Berikut adalah contoh skrip otomatisasi riil yang wajib disertakan di dalam seti
 
 ```powershell
 # generate_bundle_domains.ps1 — Generator Kerangka Domain Kasta Sultan
-param([string]$SkillName = "python-mastery", [string]$Destination = "C:\Users\muhan\.gemini\config\skills")
+param([string]$SkillName = "mastery-python", [string]$Destination = "C:\Users\muhan\.gemini\config\skills")
 
 $bundlePath = Join-Path -Path $Destination -ChildPath $SkillName
 $refPath = Join-Path -Path $bundlePath -ChildPath "references"

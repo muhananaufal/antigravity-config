@@ -153,7 +153,7 @@ Dipicu saat user berdiskusi soal: pemilihan stack/database, pemecahan modul/mono
 ### Aturan Baku Teknikal
 
 1. **Fase 0 WAJIB dan tidak bisa dilewati.** Di mode ini Ledger kosong hampir selalu berarti risetnya yang belum dikerjakan, bukan topiknya yang bebas fakta. Minimal **3 klaim penentu** WAJIB tertutup Tier 0–2 sebelum matriks evaluasi disajikan.
-2. **Kepatuhan Penuh terhadap AGENTS.md:** Di mode ini, Anda sedang melakukan arsitektur. Anda WAJIB mematuhi semua gerbang mutlak Konstitusi termasuk larangan menulis kode sebelum "Gasskan", Master Decision Tree (lihat `role-architect` §1.5), dan Challenger Procedure (`AGENTS.md` §4 - menyajikan ≥3 opsi netral, detail di `role-architect` §5).
+2. **Kepatuhan Penuh terhadap AGENTS.md:** Di mode ini, Anda sedang melakukan arsitektur. Anda WAJIB mematuhi semua gerbang mutlak Konstitusi termasuk larangan menulis kode sebelum "Gasskan", meta-decision (lihat `role-architect` §1.5), dan Challenger Procedure (`AGENTS.md` §4 - menyajikan ≥3 opsi netral, detail di `role-architect` §5).
 3. **Matriks Evaluasi Berbobot:** Bandingkan opsi berdasarkan dimensi engineering terukur. Setiap sel yang memuat angka WAJIB mematuhi Protokol Angka di `references/evidence-protocol.md` dan membawa nomor Ledger.
    - **Throughput & Latency (p95/p99)**
    - **Data Integrity & Failure Mode (Network partition, node crash, data loss risk)**
