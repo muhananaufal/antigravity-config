@@ -25,7 +25,7 @@ Sebelum menyusun RFC, WAJIB lakukan langkah-langkah ini secara berurutan:
 1. **WAJIB baca `~/.gemini/config/shared/LEARNED.md`** — hindari jalan yang sudah terbukti buntu.
 2. WAJIB cek `system_map.md`, `docs/rfc/README.md`, dan `CHANGELOG.md` di root proyek.
 3. Ada `system_map.md` / katalog RFC → WAJIB **staleness check** (cocokkan dengan kode nyata, laporkan jika tidak cocok).
-4. Task menyentuh domain bermastery (Go / Rust / Laravel / NestJS / Skill-Engineering) → WAJIB baca `SKILL.md` mastery terkait + protokol `_protocol/` di dalamnya.
+4. Task menyentuh domain bermastery (Go / Rust / Laravel / NestJS / Skill-Engineering) → WAJIB baca `SKILL.md` mastery terkait + protokol `_protocol/` di dalamnya, **DAN wajib membedah berkas Markdown spesifik di dalam folder `references/` sebelum mendraf RFC**.
 5. **meta-decision:** Jika perancangan menyangkut pilihan tech-stack, arsitektur baru, atau pemecahan monolit → WAJIB baca `~/.gemini/config/skills/meta-decision/SKILL.md` *sebelum* mendraf RFC.
 6. Pencarian web (`search_web`) **DILARANG** sebelum seluruh referensi lokal habis dibedah.
 
@@ -65,11 +65,13 @@ Ragu → **tanya user satu kalimat**, jangan menebak.
 
 ---
 
-## §4. Swarm Riset (PM Mode)
+## §4. Swarm Riset (PM Mode) & HARD STOP Referensi
+
+> **🚨 HARD STOP (ANTI-HALUSINASI):** DILARANG KERAS merakit atau menulis RFC hanya bermodalkan membaca file indeks utama `SKILL.md` lalu menebak isinya dari hafalan LLM. Anda **WAJIB** mengeksekusi `view_file` atau mendelegasikan `invoke_subagent` untuk membaca berkas Markdown teknis yang mendalam secara riil di dalam direktori `mastery-*/references/...` terkait domain fitur tersebut. Merakit rencana arsitektur tanpa menjejak pembacaan referensi spesifik = **PELANGGARAN FATAL**.
 
 | Kondisi | Aksi |
 | :--- | :--- |
-| Perlu membaca referensi >3 domain | `invoke_subagent` paralel — 1 subagent per domain (read-only) |
+| Perlu membaca referensi >3 domain | `invoke_subagent` paralel — 1 subagent per domain (read-only) untuk menggali folder `references/` |
 | Merancang fitur besar / arsitektur kompleks | 1. **Blast Radius Matrix**: petakan dampak hulu-hilir<br>2. **Adversarial QA Swarm**: picu subagent antagonis untuk stress-test desain<br>3. Catat keputusan ke `system_map.md` & `LEARNED.md` |
 
 > Subagent riset DILARANG menulis. Hanya boleh membaca dan melaporkan ke Main Agent.
