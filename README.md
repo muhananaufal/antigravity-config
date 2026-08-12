@@ -99,7 +99,9 @@ Enam larangan mutlak yang tidak boleh dilanggar dalam situasi apa pun:
 * **system_map.md:** Peta topologi arsitektur hidup di root proyek.
 * **Forensic Blast Radius Matrix:** Matriks audit dampak risiko downstream sebelum menyentuh kode warisan (*Brownfield*).
 * **RCA 5-Whys (`docs/rca/YYYYMMDD-<insiden>.md`):** Dokumen post-mortem tanpa menyalahkan (*Blameless*) saat terjadi insiden kritis.
-* **Self-Healing Circuit Breaker:** Batas maksimal 3 kali percobaan perbaikan otomatis saat compile/test gagal sebelum wajib berhenti dan investigasi fundamental.
+* **Self-Healing Circuit Breaker:** Sistem eskalasi putus arus berjenjang (Maks 5 ronde). Ronde 1-3 untuk main agent. Ronde 4-5 wajib riset mendalam. Lebih dari 5x gagal memicu STOP mutlak dan mewajibkan penulisan rekam jejak di `docs/rfc/progress.md`.
+* **Iron Law of Deletion:** Jika kode produksi ditulis sebelum *test* TDD-nya ada, kode tersebut WAJIB DIHAPUS TOTAL tanpa sisa.
+* **Revert-to-Fail Protocol:** Verifikasi TDD 4 langkah untuk mencegah false-positive: Tulis Test $\rightarrow$ Fix (Hijau) $\rightarrow$ Revert Fix (Wajib Merah) $\rightarrow$ Restore Fix (Hijau).
 * **Side Note:** Catatan 1–2 baris di akhir respon mengenai bad practice di luar scope yang tidak boleh disentuh sepihak.
 
 ### 2. Taksonomi 11 Jalur Routing Task
@@ -126,6 +128,7 @@ Setiap perintah user dicocokkan secara deterministik dari atas ke bawah:
 * Menolak bersikap "yes-man" terhadap usulan user yang berisiko (OWASP, security, performance bottleneck).
 * Setiap pengusulan arsitektur wajib menyertakan **$\ge 3$ Kelebihan DAN $\ge 3$ Kekurangan**.
 * Pada RFC-Path wajib menyajikan **$\ge 3$ Opsi Netral** tanpa memaksakan label `(Recommended)`.
+* **Emotional/Tone Gate:** DILARANG keras memuji/berbasa-basi ("You're right!") atau melakukan selebrasi prematur ("Selesai!", "Berhasil!") tanpa bukti eksekusi langsung. Respon harus dingin, faktual, dan murni teknis.
 
 ### 5. Standar Artefak & Dokumentasi Teknis
 Seluruh dokumen teknis wajib mengikuti standar arsitektur L7/L8 yang didefinisikan di `skills/meta-meta-templates/SKILL.md`.
@@ -142,6 +145,8 @@ Seluruh dokumen teknis wajib mengikuti standar arsitektur L7/L8 yang didefinisik
   ```
 
 ### 7. Swarm Subagent & DAG Batch Writing
+* **Zero-Trust Delegation:** Main Agent DILARANG memercayai laporan klaim "sukses" sub-agen begitu saja. Ia WAJIB melakukan audit independen (via `git diff` atau eksekusi test).
+* **SDO & File-Path Handoffs:** DILARANG melampirkan teks *diff* panjang atau instruksi utuh langsung di dalam *prompt* sub-agen. Tuliskan konteks pada berkas terisolasi (mis. `task-brief.md`), lalu kirimkan HANYA *path* berkasnya ke sub-agen.
 * Subagent berjalan paralel untuk riset $>3$ domain (Tier Model: `pro`).
 * **Subagent Read-Only Constraint:** Subagent DILARANG menulis file atau memanipulasi Git history.
 * **DAG Task Dependencies:** Batch tugas di RFC diorganisasi dengan dependensi eksplisit (`DependsOn: [Batch 1]`).
