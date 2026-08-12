@@ -15,7 +15,7 @@ SSOT perancangan & evolusi Skill Bundle: standar penulisan, protokol swarm, dan 
 | **Zero-Steering Grilling** | Saat menyajikan opsi arsitektur atau pembagian domain: WAJIB ≥3 opsi netral, tiap opsi ≥3 kelebihan & ≥3 kekurangan. DILARANG label "(Recommended)" sepihak — biarkan fakta teknis dan diskusi user yang memutuskan ("Gasskan"). |
 | **Pembedahan Referensi Lokal** | Proses rekayasa skill wajib membedah seluruh korpus lokal sebelum mengajukan desain. Pembacaan referensi dan pencarian web tunduk pada `AGENTS.md` §0.1 dan §3.8. |
 | **Sinkronisasi Sistem Wajib** | Setiap skill bahasa baru yang dibuat WAJIB terintegrasi ke: (1) `skills/meta-decision/SKILL.md` Bagian 1, (2) `AGENTS.md` §3.5, (3) `shared/tool-claude-code.md`. Tanpa integrasi ini, skill baru menjadi pulau terisolasi yang tidak pernah dipicu oleh sistem. |
-| **Git Workflow Non-Negotiable** | Semua skill bahasa WAJIB menyertakan pointer ke `meta-meta-git-workflow/SKILL.md` dan `meta-decision/SKILL.md` di bagian Protokol Eksekusi. Subagent yang dihasilkan dari skill ini DILARANG menulis file — hanya Main Agent yang boleh. |
+| **Git Workflow Non-Negotiable** | Semua skill bahasa WAJIB menyertakan pointer ke `meta-meta-git/SKILL.md` dan `meta-decision/SKILL.md` di bagian Protokol Eksekusi. Subagent yang dihasilkan dari skill ini DILARANG menulis file — hanya Main Agent yang boleh. |
 
 ---
 
@@ -119,7 +119,7 @@ Setiap kali skill bahasa baru (misal: Python, Java, Swift) selesai dibuat, WAJIB
 | **1. Decision Tree** | Tambahkan bahasa baru ke Bagian 1 (NODE 1.1) Master Decision Tree dengan constraint dan use case yang tepat | `~/.gemini/config/skills/meta-decision/SKILL.md` |
 | **2. AGENTS.md** | Tambahkan nama bahasa ke daftar domain bermastery di `role-swe/SKILL.md` §1.7 (contoh: \"Go / Rust / Laravel / NestJS / **Python**\") | `~/.gemini/config/skills/role-swe/SKILL.md` |
 | **3. Claude Code Adaptor** | Tambahkan bahasa ke tabel penerjemah istilah di `shared/tool-claude-code.md` jika ada padanan tool yang berbeda | `~/.gemini/config/shared/tool-claude-code.md` |
-| **4. Skill SKILL.md** | Pastikan SKILL.md bahasa baru memuat: pointer ke `meta-decision/SKILL.md`, pointer ke `meta-meta-git-workflow/SKILL.md`, Protokol Eksekusi Greenfield/Brownfield, Quality Gate commands | `skills/<bahasa>-mastery/SKILL.md` |
+| **4. Skill SKILL.md** | Pastikan SKILL.md bahasa baru memuat: pointer ke `meta-decision/SKILL.md`, pointer ke `meta-meta-git/SKILL.md`, Protokol Eksekusi Greenfield/Brownfield, Quality Gate commands | `skills/<bahasa>-mastery/SKILL.md` |
 | **5. Verifikasi** | Trace alur: User input → AGENTS.md routing → master_decision_tree → SKILL.md baru → greenfield/brownfield protocol. Semua link harus terhubung. | Manual cross-check |
 
 > **DILARANG** merilis skill bahasa baru sebelum kelima langkah ini selesai. Skill yang tidak terintegrasi ke routing global tidak akan pernah dipicu secara otomatis oleh sistem.

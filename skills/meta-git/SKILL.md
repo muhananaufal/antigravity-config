@@ -1,5 +1,5 @@
 ---
-name: meta-git-workflow
+name: meta-git
 description: Protokol Git untuk AI agent — branching (Git Flow), Conventional Commits, atomic commit, subagent constraints, dan setup commitlint/semantic-release. Dipicu saat proyek baru (Greenfield), fitur besar (Brownfield), atau operasi Git apa pun.
 ---
 
@@ -18,7 +18,7 @@ Skill ini adalah **tahap 5** — dan ia berada **SETELAH** gerbang persetujuan, 
 | 3 | Tulis `docs/rfc/YYYYMMDD-<fitur>.md` + katalog | `meta-meta-templates/SKILL.md` bagian 1–2 |
 | 4 | **BERHENTI — tunggu user mengetik "Gasskan"** | `AGENTS.md` §0.5 · **GERBANG MUTLAK** |
 | 5 | **Aktifkan `role-swe` → Pre-Code Checklist** | `role-swe/SKILL.md` §1 |
-| 6 | **Branch, atomic commit, merge** | **`meta-meta-git-workflow/SKILL.md` — Anda di sini** |
+| 6 | **Branch, atomic commit, merge** | **`meta-meta-git/SKILL.md` — Anda di sini** |
 | 7 | Quality Gate + Patch Receipt | `role-swe/SKILL.md` §3 |
 
 > Nomor **§** selalu merujuk `AGENTS.md`. Untuk seksi milik skill lain dipakai kata "bagian"; seksi dokumen ini sendiri ditulis §1–§10 tanpa nama berkas.
