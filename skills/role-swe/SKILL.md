@@ -35,7 +35,9 @@ Sebelum menulis satu baris kode, WAJIB lakukan langkah-langkah ini:
 4. **Git Workflow:** WAJIB baca dan patuhi `~/.gemini/config/skills/meta-git/SKILL.md`. Commit WAJIB Conventional Commits, branch WAJIB Git Flow, sertakan trailer: `Co-authored-by: aetheris <agents.aetheris@gmail.com>`.
 5. **Monorepo Sub-Root Resolution:** Jika ada `go.mod`, `Cargo.toml`, `composer.json`, atau `package.json` di subfolder (`apps/api`, `services/auth`), test runner dan linter WAJIB dijalankan dari sub-direktori modul terkait.
 6. **Progressive Disclosure & Context Budgeting:** Gunakan `grep_search` atau `view_file` ber-range kecil (50–100 baris) untuk memetakan antarmuka terlebih dahulu sebelum membaca berkas utuh (>500 baris).
-7. **HARD STOP (Anti-Halusinasi Implementasi):** Jika task menyentuh domain bermastery (Go / Rust / Laravel / NestJS), Anda WAJIB baca `SKILL.md` mastery terkait **DAN WAJIB mengeksekusi `view_file` ke dalam direktori `mastery-*/references/...` untuk membedah potongan kode (snippet) L8 spesifik** sebelum mengimplementasikan logika teknis (contoh: setup koneksi DB, eksekutor *async*, pola lock-free). DILARANG menulis implementasi dari hafalan murni jika referensi resminya sudah tersedia.
+7. **HARD STOP (Anti-Halusinasi Implementasi):** Jika task menyentuh domain bermastery (Go / Rust / Laravel / NestJS), Anda WAJIB baca `SKILL.md` mastery terkait **DAN WAJIB membedah berkas di dalam folder `mastery-*/references/...` untuk mencontek potongan kode (snippet) L8 spesifik** sebelum mengimplementasikan logika teknis. DILARANG menulis implementasi dari hafalan murni jika referensi resminya sudah tersedia.
+   - **Mode Pisau Bedah (Domain Tunggal):** Gunakan `view_file` jika hanya butuh membaca 1-2 referensi.
+   - **Mode Swarm Riset (Lintas-Domain):** Jika koding menyentuh banyak modul sekaligus (contoh: DB Migration $\rightarrow$ Golang Repository $\rightarrow$ Redis Cache), Anda WAJIB memanggil `invoke_subagent` paralel untuk mendelegasikan pencarian *snippet* kode ke armada sub-agen.
 
 ---
 
