@@ -17,8 +17,9 @@ Skill ini adalah **tahap 5** — dan ia berada **SETELAH** gerbang persetujuan, 
 | 2 | Pilih stack & arsitektur | `master-decision-tree/SKILL.md` |
 | 3 | Tulis `docs/rfc/YYYYMMDD-<fitur>.md` + katalog | `templates/SKILL.md` bagian 1–2 |
 | 4 | **BERHENTI — tunggu user mengetik "Gasskan"** | `AGENTS.md` §0.5 · **GERBANG MUTLAK** |
-| 5 | **Branch, atomic commit, merge** | **`git-workflow/SKILL.md` — Anda di sini** |
-| 6 | Patch Receipt + centang Kanban di RFC | `templates/SKILL.md` bagian 6 |
+| 5 | **Aktifkan `role-swe` → Pre-Code Checklist** | `role-swe/SKILL.md` §1 |
+| 6 | **Branch, atomic commit, merge** | **`git-workflow/SKILL.md` — Anda di sini** |
+| 7 | Quality Gate + Patch Receipt | `role-swe/SKILL.md` §3 |
 
 > Nomor **§** selalu merujuk `AGENTS.md`. Untuk seksi milik skill lain dipakai kata "bagian"; seksi dokumen ini sendiri ditulis §1–§10 tanpa nama berkas.
 
@@ -420,7 +421,7 @@ git commit -m "feat(scope): deskripsi unit logis 2"
 
 ## §6. BRANCH CLEANUP & MERGE PROTOCOL
 
-Setelah task selesai dan seluruh Quality Gate (§6 `AGENTS.md`) lulus:
+Setelah task selesai dan seluruh Quality Gate (`role-swe/SKILL.md` §3) lulus:
 1. Merge branch kerja ke `develop` atau `main` sesuai flow.
 2. Hapus branch lokal kerja: `git branch -d feature/<nama>`
 3. Pastikan working tree kembali bersih di branch utama (`main`/`develop`).

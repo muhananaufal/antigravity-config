@@ -7,7 +7,7 @@ description: Gunakan skill ini ketika merancang arsitektur sistem baru, memilih 
 
 > **Filosofi:** Dokumen ini adalah peta keputusan arsitektural yang bersifat **language-agnostic** (bebas bahasa pemrograman). Ia tidak bertanya "Pakai Go atau Laravel?", melainkan bertanya "Apa masalah bisnisnya?" — lalu mengarahkan Anda ke solusi yang tepat beserta referensi spesifik di perpustakaan keempat bahasa kita (Golang, Rust, Laravel, NestJS).
 >
-> **Kapan Dibaca:** Sebelum menulis dokumen RFC (`docs/rfc/`) untuk proyek baru (Greenfield) ATAU sebelum merancang fitur besar di proyek eksisting (Brownfield). Agen AI WAJIB melewati pohon ini sebelum memilih stack atau arsitektur.
+> **Dipanggil oleh:** `role-architect/SKILL.md` §1.5 (mode PM/Architect sebelum membuat RFC). WAJIB dilewati sebelum memilih stack atau arsitektur apa pun.
 >
 > **Cara Membaca:** Ikuti pohon dari atas ke bawah. Setiap NODE adalah pertanyaan. Jawab, lalu ikuti cabangnya. Berhenti di DAUN (leaf) yang memberikan keputusan final beserta rujukan domain.
 

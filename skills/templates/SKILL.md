@@ -5,7 +5,7 @@ description: Gunakan skill ini ketika menulis atau memperbarui artefak baku proy
 
 # Template Artefak (World-Class Principal Engineer Standard)
 
-Kerangka di bawah WAJIB diikuti persis. §5 `AGENTS.md` menunjuk ke sini. Dokumen arsitektur dan perencanaan bukan sekadar formalitas, melainkan instrumen pertahanan sistem (*defense-in-depth*) untuk menjamin nol *downtime*, nol *data corruption*, dan kepastian *failure modes*.
+Kerangka di bawah WAJIB diikuti persis. Dipanggil oleh **`role-architect`** (untuk RFC/RCA/system_map) dan **`role-swe`** (untuk Patch Receipt & Side Note). Dokumen arsitektur dan perencanaan bukan sekadar formalitas, melainkan instrumen pertahanan sistem (*defense-in-depth*) untuk menjamin nol *downtime*, nol *data corruption*, dan kepastian *failure modes*.
 
 ## 🔗 Posisi dalam Rantai Kerja
 
@@ -15,10 +15,11 @@ Skill ini dipakai **dua kali**: di tahap 3 untuk menulis rencana, dan di tahap 6
 | :-: | :--- | :--- |
 | 1 | Routing task | `AGENTS.md` §2 |
 | 2 | Pilih stack & arsitektur | `master-decision-tree/SKILL.md` |
-| 3 | **Tulis `docs/rfc/YYYYMMDD-<fitur>.md` + katalog** | **`templates/SKILL.md` bagian 1–2 — Anda di sini** |
+| 3 | **Tulis `docs/rfc/YYYYMMDD-<fitur>.md` + katalog** | **`templates/SKILL.md` bagian 1–2 — Anda di sini (PM)** |
 | 4 | **BERHENTI — tunggu user mengetik "Gasskan"** | `AGENTS.md` §0.5 · **GERBANG MUTLAK** |
-| 5 | Branch, atomic commit, merge | `git-workflow/SKILL.md` bagian 1–5 |
-| 6 | **Patch Receipt + centang Kanban di RFC** | **`templates/SKILL.md` bagian 6 — Anda di sini lagi** |
+| 5 | Pre-Code Checklist SWE | `role-swe/SKILL.md` §1 |
+| 6 | Branch, atomic commit, merge | `git-workflow/SKILL.md` §3 / §4 |
+| 7 | **Patch Receipt + centang Kanban di RFC** | **`templates/SKILL.md` bagian 6 — Anda di sini lagi (SWE)** |
 
 > Nomor **§** selalu merujuk `AGENTS.md`. Untuk seksi milik skill lain dipakai kata "bagian".
 

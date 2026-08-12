@@ -84,7 +84,7 @@ Kelas-kelas ini adalah tempat model paling sering merekonstruksi jawaban yang te
 | Situasi | Yang WAJIB dilakukan |
 | :--- | :--- |
 | Riset butuh >8 pengambilan halaman | Lapor ke user, sebutkan sisa klaim yang belum tertutup, minta izin lanjut. DILARANG diam-diam membakar kuota. |
-| Riset lintas >3 domain referensi | Ikuti §7 `AGENTS.md` (Antigravity: subagent paralel read-only · Claude Code: CC-1, baca langsung; subagent hanya bila user menyebut "swarm"). |
+| Riset lintas >3 domain referensi | Ikuti `AGENTS.md` §5 Swarm Protocol (Antigravity: subagent paralel read-only · Claude Code: CC-1, baca langsung; subagent hanya bila user menyebut "swarm"). |
 | Tool pencarian tidak tersedia / offline | WAJIB buka jawaban dengan baris tebal: **`MODE TANPA VERIFIKASI — seluruh klaim di bawah berlabel [memori-model]`**. Sesi tetap boleh jalan, tapi statusnya diumumkan di depan, bukan disembunyikan. |
 | User bilang "nggak usah riset, langsung saja" | Patuhi, TAPI tetap pasang baris pengumuman di atas. Label epistemik DILARANG dimatikan atas permintaan kecepatan. |
 | Sumber saling bertentangan | Sajikan konfliknya apa adanya sebagai temuan (`E3 vs E5`). DILARANG memilih diam-diam yang paling cocok dengan narasi. |
@@ -110,7 +110,7 @@ Tabel ini WAJIB hadir sebelum bagian opsi, dan setiap klaim di prosa dirujuk den
 
 Dipakai untuk ranah apa pun di luar desain sistem: strategi bisnis, ide produk, keputusan karir, keuangan pribadi, pendidikan, konten, negosiasi, rencana hidup, penelitian, sampai memilih antara dua tawaran kerja.
 
-**Fase 0 skill ini** (aturan lokal-dulu di Fase 0 berdiri sendiri) adalah fokus utama Mode 1. Semua aturan pengecualian (seperti matinya §3, §5, §6, §7 dan kewajiban gaya komunikasi blak-blakan) TUNDUK dan OTOMATIS MERUJUK pada tabel Routing Task `AGENTS.md` §2.
+**Fase 0 skill ini** (aturan lokal-dulu di Fase 0 berdiri sendiri) adalah fokus utama Mode 1. Semua aturan pengecualian (seperti matinya Pre-Action Universal, Challenger, dan Swarm saat mode brainstorming non-teknis, serta kewajiban gaya komunikasi blak-blakan) TUNDUK dan OTOMATIS MERUJUK pada tabel Routing Task `AGENTS.md` §2.
 
 ### Urutan WAJIB (Non-Teknis)
 
@@ -122,7 +122,7 @@ Dipakai untuk ranah apa pun di luar desain sistem: strategi bisnis, ide produk, 
 | 3 | **Label epistemik** | Tandai tiap klaim dengan empat label §0.2. DILARANG mencampur tanpa label. |
 | 4 | **Steelman** | DILARANG menolak ide sebelum menyajikan versi terkuatnya. Belum bisa merumuskan versi terkuatnya = belum paham idenya, bukan idenya yang lemah. |
 | 5 | **Kriteria dulu** | WAJIB sepakati kriteria penilaian dengan user SEBELUM menyaring. Kriteria yang disusun sambil jalan hanya merasionalisasi favorit yang sudah dipilih diam-diam. |
-| 6 | **Konvergen** | Sajikan ≥3 arah + trade-off (patuhi seluruh aturan `AGENTS.md` §4). Tiap arah WAJIB disertai **apa yang akan membatalkannya** — tak ada pembatal berarti itu harapan, bukan strategi. |
+| 6 | **Konvergen** | Sajikan ≥3 arah + trade-off (patuhi Challenger Procedure `AGENTS.md` §4). Tiap arah WAJIB disertai **apa yang akan membatalkannya** — tak ada pembatal berarti itu harapan, bukan strategi. |
 | 7 | **Utang bukti** | Tutup dengan daftar klaim yang masih `[spekulasi]`/`[memori-model]` dan cara termurah memverifikasinya. Diskusi selesai bukan berarti pengetahuannya lengkap. |
 
 ### Anti-Pattern Non-Teknis
@@ -131,7 +131,7 @@ Dipakai untuk ranah apa pun di luar desain sistem: strategi bisnis, ide produk, 
 | :--- | :--- |
 | Menilai ide pertama seketika | Menjangkarkan seluruh diskusi ke satu titik |
 | Tujuh ide yang cuma parafrase satu tema | Divergensi palsu, ilusi sudah eksplorasi luas |
-| Menyetujui tanpa menantang | Yes-man, melanggar §4 |
+| Menyetujui tanpa menantang | Yes-man, melanggar `AGENTS.md` §4 Challenger Procedure |
 | Spekulasi disajikan bernada fakta | Keputusan besar berdiri di atas tebakan |
 | Menyimpulkan sebelum user selesai bercerita | Memecahkan masalah yang salah dengan rapi |
 | Menawarkan solusi saat user baru mengeluh | Belum tentu user minta dipecahkan |
@@ -153,7 +153,7 @@ Dipicu saat user berdiskusi soal: pemilihan stack/database, pemecahan modul/mono
 ### Aturan Baku Teknikal
 
 1. **Fase 0 WAJIB dan tidak bisa dilewati.** Di mode ini Ledger kosong hampir selalu berarti risetnya yang belum dikerjakan, bukan topiknya yang bebas fakta. Minimal **3 klaim penentu** WAJIB tertutup Tier 0–2 sebelum matriks evaluasi disajikan.
-2. **Kepatuhan Penuh terhadap AGENTS.md:** Di mode ini, Anda sedang melakukan arsitektur. Anda WAJIB mematuhi semua gerbang mutlak Konstitusi termasuk larangan menulis kode sebelum "Gasskan", Master Decision Tree (§3.6), dan Challenger Procedure (§4 - menyajikan ≥3 opsi netral).
+2. **Kepatuhan Penuh terhadap AGENTS.md:** Di mode ini, Anda sedang melakukan arsitektur. Anda WAJIB mematuhi semua gerbang mutlak Konstitusi termasuk larangan menulis kode sebelum "Gasskan", Master Decision Tree (lihat `role-architect` §1.5), dan Challenger Procedure (`AGENTS.md` §4 - menyajikan ≥3 opsi netral, detail di `role-architect` §5).
 3. **Matriks Evaluasi Berbobot:** Bandingkan opsi berdasarkan dimensi engineering terukur. Setiap sel yang memuat angka WAJIB mematuhi Protokol Angka di `references/evidence-protocol.md` dan membawa nomor Ledger.
    - **Throughput & Latency (p95/p99)**
    - **Data Integrity & Failure Mode (Network partition, node crash, data loss risk)**
@@ -161,7 +161,7 @@ Dipicu saat user berdiskusi soal: pemilihan stack/database, pemecahan modul/mono
    - **Maintainability & Developer Experience (Type safety, toolchain, onboarding)**
 4. **Steelmanning Alternatif:** Sebelum mengkritik suatu pola (misal: "Event-Driven terlalu kompleks"), sajikan konfigurasi terbaiknya (misal: "Event-Driven dengan Transactional Outbox + Watermill") agar perbandingan adil dan objektif.
 5. **Cek kesegaran & keberadaan.** Nama library, flag CLI, opsi konfigurasi, dan nama API WAJIB dikonfirmasi masih ada di versi yang dibahas. Ingatan model memelihara API yang sudah dihapus dan library yang sudah tidak dirawat — inilah kelas halusinasi termahal di diskusi arsitektur.
-6. **Diagram Visual Mermaid WAJIB:** Sesuai `AGENTS.md` §5 & §8, saat menjelaskan alur sistem, topologi multi-komponen, state machine, atau skema DB kompleks dalam mode ini, WAJIB menyertakan diagram visual interaktif dalam blok kode `mermaid`.
+6. **Diagram Visual Mermaid WAJIB:** Sesuai `AGENTS.md` §6 (Tooling), saat menjelaskan alur sistem, topologi multi-komponen, state machine, atau skema DB kompleks dalam mode ini, WAJIB menyertakan diagram visual interaktif dalam blok kode `mermaid`.
 7. **Penutup Sesi Teknikal:** Rangkum ringkas:
    - **Keputusan Arsitektur Terpilih** + nomor Ledger yang menopangnya
    - **Asumsi Beban & Batasan Sistem**
