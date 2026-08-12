@@ -35,7 +35,7 @@ Sebelum menulis satu baris kode, WAJIB lakukan langkah-langkah ini:
 4. **Git Workflow:** WAJIB baca dan patuhi `~/.gemini/config/skills/meta-git/SKILL.md`. Commit WAJIB Conventional Commits, branch WAJIB Git Flow, sertakan trailer: `Co-authored-by: aetheris <agents.aetheris@gmail.com>`.
 5. **Monorepo Sub-Root Resolution:** Jika ada `go.mod`, `Cargo.toml`, `composer.json`, atau `package.json` di subfolder (`apps/api`, `services/auth`), test runner dan linter WAJIB dijalankan dari sub-direktori modul terkait.
 6. **Progressive Disclosure & Context Budgeting:** Gunakan `grep_search` atau `view_file` ber-range kecil (50–100 baris) untuk memetakan antarmuka terlebih dahulu sebelum membaca berkas utuh (>500 baris).
-7. Task menyentuh domain bermastery (Go / Rust / Laravel / NestJS) → WAJIB baca seluruh `SKILL.md` mastery terkait + `_protocol/` di dalamnya sebelum menulis kode.
+7. **HARD STOP (Anti-Halusinasi Implementasi):** Jika task menyentuh domain bermastery (Go / Rust / Laravel / NestJS), Anda WAJIB baca `SKILL.md` mastery terkait **DAN WAJIB mengeksekusi `view_file` ke dalam direktori `mastery-*/references/...` untuk membedah potongan kode (snippet) L8 spesifik** sebelum mengimplementasikan logika teknis (contoh: setup koneksi DB, eksekutor *async*, pola lock-free). DILARANG menulis implementasi dari hafalan murni jika referensi resminya sudah tersedia.
 
 ---
 
