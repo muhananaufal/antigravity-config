@@ -46,14 +46,27 @@ Dua hukum yang DILARANG dilanggar dalam kondisi apa pun.
 
 ## §1. BRANCHING MODEL — GIT FLOW
 
-```
-feature/*  ──┐
-fix/*      ──┤
-refactor/* ──┼──► develop ──► release/* ──► staging (opsional) ──► main
-              │       ▲                                              │
-              │       └──────────────── hotfix/* ◄───────────────────┘
-              │                            │
-              │                            └──► develop (cherry-pick / merge back)
+```dot
+digraph git_workflow {
+    node [shape=box];
+    
+    "develop" [shape=cylinder, style=filled, fillcolor=lightblue];
+    "main" [shape=cylinder, style=filled, fillcolor=lightgreen];
+    "feature/*\nfix/*\nrefactor/*" [shape=ellipse];
+    "release/*" [shape=ellipse];
+    "hotfix/*" [shape=ellipse, color=red];
+
+    "develop" -> "feature/*\nfix/*\nrefactor/*" [label=" branch dibuat dari"];
+    "feature/*\nfix/*\nrefactor/*" -> "develop" [label=" merge kembali setelah\nlulus Quality Gate"];
+    
+    "develop" -> "release/*" [label=" branch dibuat saat\nfeature freeze"];
+    "release/*" -> "main" [label=" merge & tag release"];
+    "release/*" -> "develop" [label=" back-merge perbaikan"];
+    
+    "main" -> "hotfix/*" [label=" branch darurat\ndibuat dari production"];
+    "hotfix/*" -> "main" [label=" merge & tag patch"];
+    "hotfix/*" -> "develop" [label=" back-merge agar\nfix tidak hilang"];
+}
 ```
 
 ### Branch Utama (Permanen)
