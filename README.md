@@ -18,15 +18,15 @@
    - [7. Swarm Subagent & DAG Batch Writing](#7-swarm-subagent--dag-batch-writing)
    - [8. Standar Komunikasi & Bahasa](#8-standar-komunikasi--bahasa)
 3. [Skill Bundles & Domain Mastery (`skills/`)](#-skill-bundles--domain-mastery-skills)
-   - [`golang-mastery`](#1-golang-mastery)
-   - [`rust-mastery`](#2-rust-mastery)
-   - [`laravel-mastery`](#3-laravel-mastery)
-   - [`nestjs-mastery`](#4-nestjs-mastery)
-   - [`master-decision-tree`](#5-master-decision-tree)
-   - [`templates`](#6-templates)
-   - [`git-workflow`](#7-git-workflow)
-   - [`brainstorm`](#8-brainstorm)
-   - [`skill-engineering-mastery`](#9-skill-engineering-mastery)
+   - [`mastery-golang`](#1-mastery-golang)
+   - [`mastery-rust`](#2-mastery-rust)
+   - [`mastery-laravel`](#3-mastery-laravel)
+   - [`mastery-nestjs`](#4-mastery-nestjs)
+   - [`meta-decision`](#5-meta-decision)
+   - [`meta-templates`](#6-meta-templates)
+   - [`meta-git`](#7-meta-git)
+   - [`meta-brainstorm`](#8-meta-brainstorm)
+   - [`mastery-skills`](#9-mastery-skills)
 4. [Infrastruktur Otomasi & Hooks (`scripts/` & `hooks.json`)](#-infrastruktur-otomasi--hooks-scripts--hooksjson)
 5. [Memori Persisten & Living Brain (`shared/`)](#-memori-persisten--living-brain-shared)
 6. [Integrasi Multi-Tool & Claude Code Parity](#-integrasi-multi-tool--claude-code-parity)
@@ -60,15 +60,15 @@
 │   └── tool-claude-code.md     # Jembatan Protokol Sinkronisasi Claude Code (~/.claude/CLAUDE.md)
 │
 ├── skills/                     # 9 Skill Bundles Berisi Ratusan Referensi Produksi
-│   ├── brainstorm/             # Brainstorming Umum & Teknikal + Gerbang Bukti anti-sitasi fiktif
-│   ├── git-workflow/           # Git Flow, Conventional Commits, Dual-Avatar Attribution
-│   ├── golang-mastery/         # Go High-Perf, Concurrency, SQLC, gRPC (30 domain, 221 berkas)
-│   ├── laravel-mastery/        # Laravel Octane, Reverb, Horizon, Multi-tenant (27 domain, 136 berkas)
-│   ├── master-decision-tree/   # Matriks Pemilihan Bahasa & Arsitektur Sistem
-│   ├── nestjs-mastery/         # NestJS Hexagonal, Fastify, Microservices (36 domain, 139 berkas)
-│   ├── rust-mastery/           # Rust Async Tokio, Axum, Zero-Cost, Lock-free (34 domain, 195 berkas)
-│   ├── skill-engineering-mastery/ # Meta-Skill Pembuatan & Audit Skill Baru
-│   └── templates/              # Master Template RFC, RCA, System Map, & Patch Receipts
+│   ├── meta-brainstorm/             # Brainstorming Umum & Teknikal + Gerbang Bukti anti-sitasi fiktif
+│   ├── meta-git/           # Git Flow, Conventional Commits, Dual-Avatar Attribution
+│   ├── mastery-golang/         # Go High-Perf, Concurrency, SQLC, gRPC (30 domain, 221 berkas)
+│   ├── mastery-laravel/        # Laravel Octane, Reverb, Horizon, Multi-tenant (27 domain, 136 berkas)
+│   ├── meta-decision/   # Matriks Pemilihan Bahasa & Arsitektur Sistem
+│   ├── mastery-nestjs/         # NestJS Hexagonal, Fastify, Microservices (36 domain, 139 berkas)
+│   ├── mastery-rust/           # Rust Async Tokio, Axum, Zero-Cost, Lock-free (34 domain, 195 berkas)
+│   ├── mastery-skills/ # Meta-Skill Pembuatan & Audit Skill Baru
+│   └── meta-templates/              # Master Template RFC, RCA, System Map, & Patch Receipts
 │
 └── plugins/                    # Plugin PIHAK KETIGA (Apache-2.0) - ter-gitignore, tidak ikut ter-clone.
                                 # Diaudit 2026-08-07: nol kredensial, bukan tulisan sendiri.
@@ -111,8 +111,8 @@ Setiap perintah user dicocokkan secara deterministik dari atas ke bawah:
 5. **Edit $>3$ Berkas / DB Migration / Breaking API:** Gerbang Klarifikasi $\rightarrow$ All-in-One RFC $\rightarrow$ Update Master Catalog $\rightarrow$ Tunggu "Gasskan".
 6. **In-Flight Fix:** Perbaikan bug pada plan yang sudah disetujui dilanjutkan sebagai bagian batch RFC aktif tanpa membuat RFC baru.
 7. **Emergency Pause:** Blocker kritis di tengah jalan memicu pause seketika $\rightarrow$ Susun RCA 5-Whys $\rightarrow$ Sinkronisasi ke `LEARNED.md`.
-8. **Brainstorming Arsitektur / Tech-Stack:** Picu skill `brainstorm` (Mode 2) $\rightarrow$ Gerbang Bukti $\rightarrow$ Catat keputusan di `LEARNED.md` $\rightarrow$ Dilarang tulis kode sebelum "Gasskan".
-9. **Brainstorming Umum / Non-Teknis** (bisnis, karir, keuangan, pendidikan, hukum, rencana hidup)**:** Picu skill `brainstorm` (Mode 1) $\rightarrow$ Gerbang Bukti $\rightarrow$ Evidence Ledger sebelum opsi disajikan.
+8. **Brainstorming Arsitektur / Tech-Stack:** Picu skill `meta-brainstorm` (Mode 2) $\rightarrow$ Gerbang Bukti $\rightarrow$ Catat keputusan di `LEARNED.md` $\rightarrow$ Dilarang tulis kode sebelum "Gasskan".
+9. **Brainstorming Umum / Non-Teknis** (bisnis, karir, keuangan, pendidikan, hukum, rencana hidup)**:** Picu skill `meta-brainstorm` (Mode 1) $\rightarrow$ Gerbang Bukti $\rightarrow$ Evidence Ledger sebelum opsi disajikan.
 10. **Technical Q&A:** Pertanyaan berjawab tunggal dijawab dingin & faktual tanpa mengubah filesystem. Begitu user minta ide/opsi/strategi, jalur naik ke butir 8–9.
 11. **Obrolan Santai:** Sapaan & pertanyaan singkat dijawab langsung tanpa memaksakan gerbang pengujian mutu.
 
@@ -128,7 +128,7 @@ Setiap perintah user dicocokkan secara deterministik dari atas ke bawah:
 * Pada RFC-Path wajib menyajikan **$\ge 3$ Opsi Netral** tanpa memaksakan label `(Recommended)`.
 
 ### 5. Standar Artefak & Dokumentasi Teknis
-Seluruh dokumen teknis wajib mengikuti standar arsitektur L7/L8 yang didefinisikan di `skills/templates/SKILL.md`.
+Seluruh dokumen teknis wajib mengikuti standar arsitektur L7/L8 yang didefinisikan di `skills/meta-templates/SKILL.md`.
 
 ### 6. Quality Gate Ratchet & Patch Receipt
 * **Ratchet Mechanism:** Hanya memblokir baris baru yang diubah agen; baris legacy dilaporkan sebagai `~ PRAADA` (Side Note).
@@ -152,7 +152,7 @@ Seluruh dokumen teknis wajib mengikuti standar arsitektur L7/L8 yang didefinisik
 
 ## 🛠️ Skill Bundles & Domain Mastery (`skills/`)
 
-### 1. `golang-mastery`
+### 1. `mastery-golang`
 Panduan rekayasa backend Golang tingkat tinggi mencakup 30 domain referensi produksi:
 * **Concurrency & Runtime:** Goroutine lifecycle, channel multiplexing, lock-free atomics, runtime memory allocator, sync.Pool.
 * **Database & Storage:** SQLC type-safe query generation, pgx connection pooling, Transactional Outbox, dynamic sharding.
@@ -160,31 +160,31 @@ Panduan rekayasa backend Golang tingkat tinggi mencakup 30 domain referensi prod
 * **Observability & Resilience:** `slog` structured logging, OpenTelemetry distributed tracing, RED metrics, uber-go/ratelimit.
 * **Advanced Systems:** Linux eBPF telemetry, Kubernetes custom controllers/operators, SIMD vectorization, zero-allocation serialization.
 
-### 2. `rust-mastery`
+### 2. `mastery-rust`
 Panduan rekayasa sistem Rust performa tinggi mencakup 34 domain referensi produksi:
 * **Memory Safety & Concurrency:** Lifetime annotations, Borrow checker patterns, Tokio multi-threaded async runtime, crossbeam lock-free queues.
 * **Microservices & Web:** Axum web framework, Tower middleware stack, SQLx compile-time checked queries, Tonic gRPC.
 * **Low-Level & Performance:** Unsafe Rust containment, FFI C-ABI integration, Custom Allocators (jemalloc/mimalloc), SIMD auto-vectorization, Miri undefined behavior validation.
 * **Client & Embedded:** Tauri desktop engine, Bevy game ECS, WebAssembly (WASM) host bindings, eBPF Aya framework.
 
-### 3. `laravel-mastery`
+### 3. `mastery-laravel`
 Panduan arsitektur modern enterprise Laravel mencakup 27 domain referensi produksi:
 * **High-Performance Engines:** Laravel Octane (Swoole/FrankenPHP), Swoole State Resetters, Reverb WebSockets, Horizon queue orchestration.
 * **Database & Scale:** Eloquent optimization, N+1 query prevention, Multi-Tenancy Row Level Security (RLS), Read-Replica split, Redis token bucket.
 * **Fintech & Security:** Cashier subscription billing, Idempotent webhook handling, Zero-Trust Sanctum/Passport auth, STRIDE input sanitation.
 * **Frontend & Reporting:** Livewire v3 / Inertia.js integration, Dompdf precision layout rendering engine truths.
 
-### 4. `nestjs-mastery`
+### 4. `mastery-nestjs`
 Panduan arsitektur Enterprise TypeScript NestJS mencakup 36 domain referensi produksi:
 * **Core Architecture:** Fastify engine adapter, Inversion of Control (IoC) container tuning, Hexagonal Ports & Adapters architecture.
 * **Data Layer:** Prisma & Drizzle ORM performance, Connection pool isolation, Distributed 2PC transactions.
 * **Distributed Services:** Apollo GraphQL Federation v2, Kafka & NATS message transports, BullMQ distributed background workers.
 * **Security & AI:** Multi-Tenancy RLS guards, pgvector LangChain integration, OWASP strict validation pipes.
 
-### 5. `master-decision-tree`
+### 5. `meta-decision`
 Pohon keputusan arsitektur sistem mutlak untuk memilih bahasa dan framework berdasarkan profil throughput, latency, konsistensi data, kecepatan rilis, dan kompleksitas domain.
 
-### 6. `templates`
+### 6. `meta-templates`
 Koleksi template baku L7/L8:
 * `docs/rfc/YYYYMMDD-<fitur>.md`: Template All-in-One RFC lengkap dengan STRIDE Threat Model & DAG Batch Tasks.
 * `docs/rfc/README.md`: Master Catalog pelacak status seluruh RFC di repositori.
@@ -193,7 +193,7 @@ Koleksi template baku L7/L8:
 * `Laporan Hasil Test & Patch Receipt`: Format bukti verifikasi SOTA dengan Proof-of-Defect TDD Harness.
 * `tests/regression/`: Spesifikasi format Failure Banking Artifact untuk mengunci kekebalan terhadap bug masa lalu.
 
-### 7. `git-workflow`
+### 7. `meta-git`
 * Protokol Git Flow (`feature/*`, `fix/*`, `chore/*`).
 * Conventional Commits (`feat:`, `fix:`, `refactor:`, `chore:`).
 * **Stacked PRs & Micro-Branching (Devin Protocol):** Branching terisolasi per batch RFC untuk integrasi bertahap yang aman.
@@ -202,7 +202,7 @@ Koleksi template baku L7/L8:
   Co-authored-by: aetheris <agents.aetheris@gmail.com>
   ```
 
-### 8. `brainstorm`
+### 8. `meta-brainstorm`
 Protokol eksplorasi ide terstruktur untuk ranah **umum** (bisnis, karir, keuangan, hukum, pendidikan, kehidupan) maupun **Teknikal/Arsitektural** (Stack Selection, Distributed Trade-offs), dengan pencatatan otomatis ke `shared/LEARNED.md`.
 
 * **Gerbang Bukti (Evidence Gate):** 7 hukum anti-fabrikasi — DILARANG menyebut sumber yang tidak dibuka di sesi berjalan, angka tanpa sumber WAJIB diturunkan jadi kualitatif, dan atribusi ke tokoh/pasal/harga WAJIB berdokumen.
@@ -210,7 +210,7 @@ Protokol eksplorasi ide terstruktur untuk ranah **umum** (bisnis, karir, keuanga
 * **Evidence Ledger + 4 label epistemik:** `[fakta:E#]` · `[inferensi]` · `[spekulasi]` · `[memori-model]`, lengkap dengan status `TERVERIFIKASI / BANTAHAN / SEBAGIAN / GAGAL / TIDAK DICARI` dan penanda `[BASI]`.
 * **`references/evidence-protocol.md`:** tangga 5 tier sumber (umum & teknis), kerajinan query pembantah, protokol angka, penanganan fetch gagal, dan checklist deteksi halusinasi diri.
 
-### 9. `skill-engineering-mastery`
+### 9. `mastery-skills`
 Meta-skill untuk merancang, mengaudit struktur, dan memastikan kualitas skill bundles baru di ekosistem Antigravity.
 
 ---
