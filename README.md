@@ -10,7 +10,7 @@
 2. [Konstitusi & Aturan Inti (`AGENTS.md`)](#-konstitusi--aturan-inti-agentsmd)
    - [0. Gerbang Mutlak](#0-gerbang-mutlak)
    - [1. Glosarium & Terminologi Baku](#1-glosarium--terminologi-baku)
-   - [2. Taksonomi 11 Jalur Routing Task](#2-taksonomi-11-jalur-routing-task)
+   - [2. Taksonomi 12 Jalur Routing Task](#2-taksonomi-12-jalur-routing-task)
    - [3. Protokol Pra-Koding & Forensic Baseline](#3-protokol-pra-koding--forensic-baseline)
    - [4. Prosedur Challenger (Anti-Yes-Man)](#4-prosedur-challenger-anti-yes-man)
    - [5. Standar Artefak & Dokumentasi Teknis](#5-standar-artefak--dokumentasi-teknis)
@@ -108,19 +108,20 @@ Enam larangan mutlak yang tidak boleh dilanggar dalam situasi apa pun:
 * **Revert-to-Fail Protocol:** Verifikasi TDD 4 langkah untuk mencegah false-positive: Tulis Test $\rightarrow$ Fix (Hijau) $\rightarrow$ Revert Fix (Wajib Merah) $\rightarrow$ Restore Fix (Hijau).
 * **Side Note:** Catatan 1–2 baris di akhir respon mengenai bad practice di luar scope yang tidak boleh disentuh sepihak.
 
-### 2. Taksonomi 11 Jalur Routing Task
+### 2. Taksonomi 12 Jalur Routing Task
 Setiap perintah user dicocokkan secara deterministik dari atas ke bawah:
-1. **Proyek Baru Kecil (<10 files, SQLite/JSON, CLI/Script):** Eksekusi langsung tanpa RFC & Day-0 Quintet, namun Quality Gate tetap aktif.
-2. **Proyek Baru Greenfield (Penuh):** Gerbang Klarifikasi $\rightarrow$ Master Decision Tree $\rightarrow$ Day-0 Quintet $\rightarrow$ All-in-One RFC $\rightarrow$ Tunggu "Gasskan".
-3. **Tambah Fitur / Refactor Brownfield:** Baseline Regresi $\rightarrow$ Forensic Blast Radius Matrix $\rightarrow$ Sajikan $\ge 3$ Opsi Netral $\rightarrow$ Tunggu "Gasskan".
-4. **Edit $\le 3$ Berkas / Bugfix Minor:** Proof-of-Defect TDD $\rightarrow$ Eksekusi bedah presisi $\rightarrow$ Laporan faktual.
-5. **Edit $>3$ Berkas / DB Migration / Breaking API:** Gerbang Klarifikasi $\rightarrow$ All-in-One RFC $\rightarrow$ Update Master Catalog $\rightarrow$ Tunggu "Gasskan".
-6. **In-Flight Fix:** Perbaikan bug pada plan yang sudah disetujui dilanjutkan sebagai bagian batch RFC aktif tanpa membuat RFC baru.
-7. **Emergency Pause:** Blocker kritis di tengah jalan memicu pause seketika $\rightarrow$ Susun RCA 5-Whys $\rightarrow$ Sinkronisasi ke `LEARNED.md`.
-8. **Brainstorming Arsitektur / Tech-Stack:** Picu skill `meta-brainstorm` (Mode 2) $\rightarrow$ Gerbang Bukti $\rightarrow$ Catat keputusan di `LEARNED.md` $\rightarrow$ Dilarang tulis kode sebelum "Gasskan".
-9. **Brainstorming Umum / Non-Teknis** (bisnis, karir, keuangan, pendidikan, hukum, rencana hidup)**:** Picu skill `meta-brainstorm` (Mode 1) $\rightarrow$ Gerbang Bukti $\rightarrow$ Evidence Ledger sebelum opsi disajikan.
-10. **Technical Q&A:** Pertanyaan berjawab tunggal dijawab dingin & faktual tanpa mengubah filesystem. Begitu user minta ide/opsi/strategi, jalur naik ke butir 8–9.
-11. **Obrolan Santai:** Sapaan & pertanyaan singkat dijawab langsung tanpa memaksakan gerbang pengujian mutu.
+1. **Proyek Baru Kecil (<10 files, SQLite/JSON, CLI/Script):** Eksekusi langsung dengan `role-swe` tanpa RFC & Day-0 Quintet.
+2. **Proyek Baru Greenfield (Penuh):** Aktifkan `role-architect` $\rightarrow$ Gerbang Klarifikasi $\rightarrow$ Master Decision Tree $\rightarrow$ Day-0 Quintet $\rightarrow$ All-in-One RFC $\rightarrow$ Tunggu "Gasskan".
+3. **Edit $\le 3$ Berkas / Bugfix Minor:** Proof-of-Defect TDD $\rightarrow$ Eksekusi bedah presisi (`role-swe`). DILARANG bikin RFC.
+4. **Tambah Fitur / Refactor Brownfield / Edit $>3$ Berkas:** Aktifkan `role-architect` $\rightarrow$ Baseline Regresi $\rightarrow$ Forensic Blast Radius Matrix $\rightarrow$ Sajikan $\ge 3$ Opsi Netral $\rightarrow$ All-in-One RFC $\rightarrow$ Tunggu "Gasskan".
+5. **Infrastruktur DevOps & Cloud:** Aktifkan `role-devops` $\rightarrow$ Rancang topologi infrastruktur $\rightarrow$ Tulis konfigurasi IaC (Terraform/K8s/CI).
+6. **Skema DB Masif & Data Architect:** Aktifkan `role-dba` $\rightarrow$ Optimasi Execution Plan, migrasi besar, sharding $\rightarrow$ Susun skrip migrasi/optimasi.
+7. **In-Flight Fix (Bugfix melar):** Perbaikan bug melebihi 3 file pada plan yang disetujui dilanjutkan dengan `role-swe` tanpa RFC baru.
+8. **Emergency Pause:** Blocker arsitektural kritis di tengah jalan memicu pause seketika $\rightarrow$ Susun RCA 5-Whys $\rightarrow$ Tunggu arahan user.
+9. **Brainstorming Arsitektur / Tech-Stack:** Picu skill `meta-brainstorm` (Mode 2) dengan `role-architect` $\rightarrow$ Gerbang Bukti $\rightarrow$ Catat di `LEARNED.md` $\rightarrow$ DILARANG nulis kode sebelum "Gasskan".
+10. **Brainstorming Umum / Non-Teknis:** Picu skill `meta-brainstorm` (Mode 1) $\rightarrow$ Gerbang Bukti $\rightarrow$ Evidence Ledger sebelum opsi disajikan.
+11. **Technical Q&A:** Pertanyaan teknis berjawab tunggal dijawab dingin & faktual tanpa mengubah filesystem. Begitu minta ide, naik ke brainstorming.
+12. **Obrolan Santai:** Sapaan dijawab langsung tanpa memaksakan gerbang pengujian mutu.
 
 ### 3. Protokol Pra-Koding & Forensic Baseline
 * Wajib membaca `shared/LEARNED.md` sebelum interaksi koding.
@@ -160,6 +161,11 @@ Seluruh dokumen teknis wajib mengikuti standar arsitektur L7/L8 yang didefinisik
 ---
 
 ## 🛠️ Skill Bundles & Domain Mastery (`skills/`)
+
+Ekosistem *skills* dikategorikan dalam tiga taksonomi prefiks utama untuk mendikte peran dan *mindset* agen:
+* **`mastery-*`**: Kumpulan pengetahuan teknis *hard-skills* mendalam spesifik-domain (contoh: Golang, Rust, Laravel). Berisi kumpulan ratusan *best practices* tingkat Principal Engineer L8 untuk arsitektur produksi berskala besar.
+* **`meta-*`**: Kemampuan tingkat tinggi yang melampaui *coding* murni. Membimbing AI dalam mengambil keputusan asitektur, *brainstorming* kritis (gerbang bukti), menggunakan protokol Git tingkat lanjut, hingga memformat dokumen (RFC/RCA) dan membuat *skill* baru.
+* **`role-*`**: Persona eksekusi berskala (SOP) yang membungkus agen untuk siklus hidup tertentu. `role-architect` membimbing perencanaan prafase. `role-swe` membimbing pascafase (*Batch Writing*). `role-devops` dan `role-dba` untuk operasi infrastruktur dan manajemen *state* khusus.
 
 ### 1. `mastery-golang`
 Panduan rekayasa backend Golang tingkat tinggi mencakup 30 domain referensi produksi:
