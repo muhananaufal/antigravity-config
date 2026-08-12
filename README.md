@@ -72,6 +72,7 @@
 │   ├── role-architect/         # Mode L8 Principal PM/Architect (SOP Pra-Eksekusi / RFC)
 │   ├── role-dba/               # Mode L8 Principal DBA (Skema DB, Optimasi, Migrasi)
 │   ├── role-devops/            # Mode L8 Principal DevOps (Infrastruktur, Cloud, CI/CD)
+│   ├── role-qa/                # Mode L8 Principal Red Team (Byzantine/Chaos/Pen-Test)
 │   └── role-swe/               # Mode L8 Principal SWE (SOP Pasca-Eksekusi / Batch Writing)
 │
 └── plugins/                    # Plugin PIHAK KETIGA (Apache-2.0) - ter-gitignore, tidak ikut ter-clone.
@@ -227,6 +228,21 @@ Protokol eksplorasi ide terstruktur untuk ranah **umum** (bisnis, karir, keuanga
 
 ### 9. `mastery-skills`
 Meta-skill untuk merancang, mengaudit struktur, dan memastikan kualitas skill bundles baru di ekosistem Antigravity.
+
+### 10. `role-architect`
+Mode **Principal PM / Architect**. Aktif secara otomatis di awal proyek baru atau penambahan fitur besar. Memandu agen untuk menahan diri dari koding prematur, memaksa audit *Blast Radius*, menimbang trade-off arsitektur, dan memimpin delegasi *swarm research* untuk menyusun RFC All-in-One.
+
+### 11. `role-swe`
+Mode **Principal Software Engineer (SWE)**. Lensa eksekutor utama yang aktif setelah user memberikan komando "Gasskan". Terikat penuh pada *Batch Writing Protocol* (maksimal 3-4 file per komit), kewajiban pembuktian regresi (TDD / Revert-to-Fail), dan aturan pembatas *Circuit Breaker*.
+
+### 12. `role-devops`
+Mode **Principal DevOps / SRE**. Aktif saat menangani tugas yang bersentuhan dengan jaringan dan mesin operasi server. Menangani orkestrasi Kubernetes, perancangan CI/CD pipeline, Terraform (Infrastructure as Code), Load Balancing, dan setup *observability* (OpenTelemetry/Grafana).
+
+### 13. `role-dba`
+Mode **Principal Data Architect / DBA**. Spesialis mutasi *state* persisten. Dipanggil saat merancang skema *database* skala masif, melakukan strategi sharding/replikasi, menulis skrip migrasi nol-downtime, atau melakukan inspeksi/optimasi mendalam terhadap *Query Execution Plan* dan N+1 bottleneck.
+
+### 14. `role-qa`
+Pasukan **Red Team / QA Pentagon**. Agen *Adversarial* yang beroperasi secara *Black-Box*. Diaktifkan di ujung alur RFC untuk melakukan injeksi celah (Chaos Monkey), pengujian stres performa, penetrasi batas logika (*Byzantine Faults*), dan eksploitasi *edge-case* secara otonom di lingkungan `tests/e2e/`.
 
 ---
 
