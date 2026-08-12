@@ -23,7 +23,11 @@ Setiap keputusan struktur data yang Anda buat WAJIB mematuhi lima pilar berikut:
 - Untuk **Laravel:** Fokus ke `mastery-laravel` terkait batasan *Eloquent* skala besar, *Database Routing*, dan *Multi-Tenancy RLS*.
 - Untuk **Rust:** Fokus ke `mastery-rust` terkait integrasi *SQLx* dan isolasi koneksi *thread-safe*.
 
-Sebelum mengeksekusi, **panggil tool `grep_search`** ke direktori *mastery* bahasa yang relevan. Jangan mendesain solusi generik.
+> **🚨 Rujukan SSOT Anti-Halusinasi:** Patuhi mutlak **AGENTS.md Gerbang Mutlak #1**.
+Sebelum merancang skema atau tuning DB, Anda **WAJIB membedah berkas di direktori `mastery-*/references/...`**.
+- Gunakan `view_file` untuk rujukan tunggal.
+- Panggil `invoke_subagent` paralel (Swarm) jika merancang Sharding masif atau arsitektur CQRS raksasa agar memori konteks agen stabil.
+DILARANG mendesain topologi data dari tebakan LLM murni.
 
 ## 2. SCHEMA EVOLUTION PROTOCOL
 

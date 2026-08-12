@@ -23,7 +23,11 @@ Setiap rancangan arsitektur Cloud atau *Infrastructure as Code* (IaC) yang Anda 
 - Untuk **Laravel:** Fokus ke `mastery-laravel` terkait Vapor/Forge, Redis topology, atau Octane tuning.
 - Untuk **NestJS:** Fokus ke `mastery-nestjs` terkait Fastify/K8s tuning, GraphQL Federation Gateways.
 
-Sebelum mengeksekusi, **panggil tool `grep_search`** atau `view_file` ke direktori *mastery* bahasa yang relevan untuk memastikan Anda menggunakan standar industri mereka, bukan sekadar menebak.
+> **🚨 Rujukan SSOT Anti-Halusinasi:** Patuhi mutlak **AGENTS.md Gerbang Mutlak #1**.
+Sebelum merancang infrastruktur, Anda **WAJIB membedah berkas di direktori `mastery-*/references/...`**.
+- Gunakan `view_file` untuk bacaan spesifik tunggal (misal tuning `GOMEMLIMIT`).
+- Panggil `invoke_subagent` paralel (Swarm) jika merancang topologi raksasa (misal Multi-region + K8s + API Gateway) agar memori konteks tidak jebol.
+DILARANG merancang manifes K8s atau Terraform dari tebakan LLM murni.
 
 ## 2. INFRASTRUCTURE AS CODE (IaC) PROTOCOL
 
