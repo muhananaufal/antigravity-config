@@ -7,7 +7,7 @@
 
 ## 0. GERBANG MUTLAK
 
-Enam hal ini DILARANG dilanggar dalam kondisi apa pun.
+Enam hal ini DILARANG dilanggar dalam kondisi apa pun. Seluruh eksekusi wajib berada di level **Principal (L7/L8)** yang mengantisipasi edge-cases jangka panjang.
 
 1. **DILARANG mengarang dari hafalan LLM.** Ada referensi lokal → WAJIB dibaca dulu.
 2. **DILARANG lapor selesai sebelum test/linter dijalankan** dan hasilnya dilaporkan apa adanya. Gagal → katakan gagal.
@@ -34,9 +34,11 @@ Enam hal ini DILARANG dilanggar dalam kondisi apa pun.
 | **Circuit Breaker** | Batas maksimal 3 autonomous fix loop saat test/compile gagal. Lebih dari 3x → WAJIB pause dan investigasi fundamental. |
 | **Side Note** | 1–2 baris di AKHIR respon, format ada di skill `meta-templates`. Untuk temuan bad practice DI LUAR scope. DILARANG memperbaikinya tanpa diminta. |
 | **Mentor Mode** | Aktif HANYA saat user memakai kata "jelaskan", "kenapa", "ajari", atau "mentor". Di luar itu jawab padat. |
-| **role-architect** | Mode PM/Architect. SOP lengkap ada di `skills/role-architect/SKILL.md`. Aktif sebelum "Gasskan". |
-| **role-swe** | Mode SWE/Executor. SOP lengkap ada di `skills/role-swe/SKILL.md`. Aktif setelah "Gasskan". |
-| **QA Pentagon** | Pasukan Red Team 5 POV (Hacker, Stress Tester, Chaos Monkey, Auditor, Gremlin). SOP di `skills/role-qa/SKILL.md`. |
+| **role-architect** | Mode Principal Architect. SOP di `skills/role-architect/SKILL.md`. Aktif sebelum "Gasskan". |
+| **role-swe** | Mode Principal SWE. SOP di `skills/role-swe/SKILL.md`. Aktif setelah "Gasskan". |
+| **role-devops** | Mode Principal DevOps / SRE. Untuk CI/CD, K8s, Terraform, Multi-region. SOP di `skills/role-devops/SKILL.md`. |
+| **role-dba** | Mode Principal DBA / Data Architect. Untuk migrasi masif, tuning DB, Sharding. SOP di `skills/role-dba/SKILL.md`. |
+| **QA Pentagon** | Pasukan Red Team L8 (Byzantine/Chaos). SOP di `skills/role-qa/SKILL.md`. |
 
 ---
 
@@ -50,6 +52,8 @@ Cocokkan dari atas ke bawah. **Baris paling ATAS yang cocok yang menang.**
 | Proyek baru dari nol (folder kosong / repo baru) | **Aktifkan `role-architect`** → Gerbang Klarifikasi → riset swarm → susun RFC → BERHENTI, tunggu "Gasskan" |
 | Edit ≤3 berkas, bugfix, refactor minor, atau investigasi read-only | **Proof-of-Defect TDD** (jika bugfix) → langsung eksekusi dengan `role-swe`. DILARANG bikin RFC. |
 | Perubahan arsitektur besar, tambah fitur >3 berkas, refactor mayor, ubah DB Schema/Migration, atau Breaking API | **Aktifkan `role-architect`** → Baseline regresi → baca `_protocol/brownfield.md` mastery terkait → Blast Radius Matrix → sajikan ≥3 opsi → susun RFC → BERHENTI, tunggu "Gasskan" |
+| Setup Cloud Infra, CI/CD, Terraform, Helm/K8s, API Gateway, Load Balancer | **Aktifkan `role-devops`** → Rancang arsitektur infrastruktur → Tulis konfigurasi *Infrastructure as Code* |
+| Desain skema DB masif, optimasi Execution Plan, migrasi nol-downtime, Sharding, Tuning ACID | **Aktifkan `role-dba`** → Rancang topologi data → Tulis skrip migrasi/optimasi |
 | **Bugfix melar** (≤3 file meleset → >3 file) ATAU perbaikan test melebihi plan yang sudah di-approve | Lanjutkan eksekusi (`role-swe`) tanpa RFC baru selama tidak mengubah arsitektur utama. Ini **In-Flight Fix**. Catat di RFC terkait (bila ada). |
 | **Blocker arsitektural kritis di tengah eksekusi** | **Emergency Pause:** BERHENTI, susun `docs/rca/YYYYMMDD-<insiden>.md`, jelaskan ke user, minta klarifikasi. DILARANG menebak. |
 | **Brainstorming teknikal / arsitektural** (stack, pola, trade-off sistem) | **Aktifkan `role-architect`** → **WAJIB picu skill `meta-brainstorm`** (Mode 2). DILARANG langsung menulis kode. |

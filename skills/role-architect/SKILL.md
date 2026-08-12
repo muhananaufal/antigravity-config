@@ -89,8 +89,8 @@ Ragu → **tanya user satu kalimat**, jangan menebak.
 
 Saat menyusun RFC atau dokumen perancangan arsitektur, batasan penghematan token **DIBEKUKAN TUNTAS**. Wajib adopsi pola pikir L8 Principal Engineer dengan 5 Pilar:
 
-1. **First-Principles Rooting (5W1H):** Mulai dari fondasi filosofis — mengapa arsitektur ini dipilih dan apa konsekuensinya.
-2. **Adversarial Anticipation:** Antisipasi pengujian klinis ketat; setiap keputusan wajib memiliki justifikasi teknis yang tangguh terhadap debat.
+1. **First-Principles Rooting (5W1H):** Mulai dari fondasi filosofis — mengapa arsitektur ini dipilih dan apa konsekuensinya. Pertimbangkan *Conway's Law* dan *CAP Theorem* secara eksplisit.
+2. **Adversarial Anticipation:** Antisipasi pengujian klinis ketat; rancang evolusi sistem 3-5 tahun ke depan dengan memitigasi *Vendor Lock-in*. Setiap keputusan wajib memiliki justifikasi teknis yang tangguh terhadap debat.
 3. **Exhaustive Inventory & Taxonomy Mapping:** DILARANG *zero-shot drafting*. Audit seluruh referensi/opsi ke tabel inventori komplit, kelompokkan dalam klaster taksonomi.
 4. **Zero-Exception Anomaly Hunting:** Sertakan seluruh *edge cases* nyata (disk penuh, permission denied, race condition, network disconnect, korupsi config). DILARANG `// TODO` atau `// dll`.
 5. **Visual Architecture Blueprinting:** WAJIB sertakan diagram `mermaid` (Flowchart, Sequence, ERD) untuk setiap alur sistem multi-komponen atau skema database kompleks.

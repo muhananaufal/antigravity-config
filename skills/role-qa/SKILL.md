@@ -24,10 +24,10 @@ Secara konstitusi (berdasarkan `AGENTS.md` §7), Subagent umumnya DILARANG menul
 
 Pengujian harus dilakukan melalui 5 POV (Point of View) spesifik yang mencakup seluruh spektrum kegagalan sistem. Lakukan eksekusi dari kelima POV ini secara **SEKUENSIAL** (berurutan) agar pelacakan akar masalah (RCA) tetap akurat jika terjadi crash. Gunakan *tooling* atau skrip pengujian apa pun yang *stack-agnostic*.
 
-### 🥷 POV 1: The Hacker (Security & Integrity)
+### 🥷 POV 1: The Hacker (Security & Integrity L8)
 Menyerang celah keamanan murni dan akses.
-- **Injeksi Brutal:** Kirim payload SQL/NoSQL Injection (`1' OR '1'='1`). Kirim payload XSS & Command Injection. Bypass proteksi ORM/Query Builder bawaan.
-- **Broken Access Control (BAC):** Manipulasi parameter UUID (IDOR). Ubah token otentikasi, hapus header *Authorization*. Tes ekskalasi hak akses vertikal maupun horizontal.
+- **Injeksi Brutal & Fuzzing:** Kirim payload SQL/NoSQL Injection (`1' OR '1'='1`). Lakukan mutasi *Fuzzing* di level *byte* pada *payload* API untuk mencari buffer overflow atau unhandled panic.
+- **Broken Access Control (BAC):** Manipulasi parameter UUID (IDOR). Ubah token otentikasi, hapus header *Authorization*. Serang enkripsi/kriptografi yang dipakai (misal: menebak *salt* atau JWT downgrade attack).
 
 ### 🦍 POV 2: The Stress Tester (Concurrency & Load)
 Menyerang dengan kekuatan kasar dan beban tinggi untuk menghancurkan *database lock* dan antrean.
@@ -45,10 +45,10 @@ Menyerang kebocoran data sensitif dan kepatuhan (Compliance).
 - **PII Leakage:** Verifikasi apakah respons API membocorkan data pribadi (password, token, email pengguna lain) yang seharusnya tidak di-ekspos ke *client*.
 - **Pagination Missing:** Meminta jutaan data tanpa limit parameter untuk melihat apakah server mengembalikan seluruh isi tabel secara telanjang.
 
-### 🌩️ POV 5: The Gremlin (Network & Infrastructure Resilience)
+### 🌩️ POV 5: The Gremlin (Network & Infrastructure Resilience L8)
 Menyerang stabilitas jaringan dan batas toleransi kegagalan (*fault tolerance*).
-- **Connection Drops:** Membuka koneksi TCP/HTTP lalu memutusnya secara sepihak tepat di tengah pengiriman *body request* (*Slowloris attack* atau *partial stream*).
-- **Timeout Triggering:** Memaksa server menunggu respons asinkron terlalu lama (jika ada webhook/callback) untuk memvalidasi *graceful degradation*.
+- **Byzantine Fault Tolerance:** Injeksi *Byzantine faults* (node mengembalikan data valid secara format namun korup secara logis) untuk menguji *quorum* sistem.
+- **Connection Drops & Chaos Engineering:** Membuka koneksi TCP lalu memutusnya sepihak (Slowloris). Eksekusi skrip Chaos Monkey murni: matikan servis eksternal / *node* secara acak di tengah transaksi (Kill -9) untuk memvalidasi *graceful degradation* dan *Circuit Breaker*.
 
 ---
 
