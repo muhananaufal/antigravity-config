@@ -27,7 +27,7 @@
 
 [CmdletBinding()]
 param(
-    [string]   $Skill    = 'golang-mastery',
+    [string]   $Skill    = 'mastery-golang',
     [string]   $OutJson  = '',
     [int]      $Limit    = 0,
     [switch]   $Build,

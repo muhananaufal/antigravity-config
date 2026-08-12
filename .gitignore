@@ -24,7 +24,7 @@ Thumbs.db
 *.log
 logs/
 
-# CATATAN mengenai git-workflow/SKILL.md section 8:
+# CATATAN mengenai meta-git/SKILL.md section 8:
 # Baseline di sana mewajibkan node_modules/, vendor/, target/, dist/, build/, dan
 # artefak biner. Semua itu SENGAJA tidak dicantumkan: repositori ini berisi Markdown
 # dan PowerShell, tanpa toolchain, tanpa dependensi, tanpa langkah build - sehingga

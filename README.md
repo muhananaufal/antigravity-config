@@ -128,7 +128,7 @@ Setiap perintah user dicocokkan secara deterministik dari atas ke bawah:
 * Pada RFC-Path wajib menyajikan **$\ge 3$ Opsi Netral** tanpa memaksakan label `(Recommended)`.
 
 ### 5. Standar Artefak & Dokumentasi Teknis
-Seluruh dokumen teknis wajib mengikuti standar arsitektur L7/L8 yang didefinisikan di `skills/meta-templates/SKILL.md`.
+Seluruh dokumen teknis wajib mengikuti standar arsitektur L7/L8 yang didefinisikan di `skills/meta-meta-templates/SKILL.md`.
 
 ### 6. Quality Gate Ratchet & Patch Receipt
 * **Ratchet Mechanism:** Hanya memblokir baris baru yang diubah agen; baris legacy dilaporkan sebagai `~ PRAADA` (Side Note).
@@ -289,7 +289,7 @@ Status terakhir diverifikasi **2026-08-07** (lihat `docs/rfc/20260807-audit-inte
 
 > **DILARANG menulis klaim "0 Broken Paths" atau sejenisnya tanpa perintah yang membuktikannya.**
 > Versi sebelumnya menjanjikan nol broken path sementara terdapat pointer menggantung ke
-> `scripts/` per-bundle dan ke berkas `master_decision_tree.md` yang tidak pernah ada.
+> `scripts/` per-bundle dan ke berkas `meta-decision.md` yang tidak pernah ada.
 > Garansi yang tidak bisa dijalankan hanyalah dekorasi, dan lebih berbahaya daripada tidak ada.
 
 ---

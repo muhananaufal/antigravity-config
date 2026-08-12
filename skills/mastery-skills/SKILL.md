@@ -119,7 +119,7 @@ Setiap kali skill bahasa baru (misal: Python, Java, Swift) selesai dibuat, WAJIB
 | **1. Decision Tree** | Tambahkan bahasa baru ke Bagian 1 (NODE 1.1) meta-decision dengan constraint dan use case yang tepat | `~/.gemini/config/skills/meta-decision/SKILL.md` |
 | **2. AGENTS.md** | Tambahkan nama bahasa ke daftar domain bermastery di `role-swe/SKILL.md` §1.7 (contoh: \"Go / Rust / Laravel / NestJS / **Python**\") | `~/.gemini/config/skills/role-swe/SKILL.md` |
 | **3. Claude Code Adaptor** | Tambahkan bahasa ke tabel penerjemah istilah di `shared/tool-claude-code.md` jika ada padanan tool yang berbeda | `~/.gemini/config/shared/tool-claude-code.md` |
-| **4. Skill SKILL.md** | Pastikan SKILL.md bahasa baru memuat: pointer ke `meta-decision/SKILL.md`, pointer ke `meta-git/SKILL.md`, Protokol Eksekusi Greenfield/Brownfield, Quality Gate commands | `skills/<bahasa>-mastery/SKILL.md` |
-| **5. Verifikasi** | Trace alur: User input → AGENTS.md routing → master_decision_tree → SKILL.md baru → greenfield/brownfield protocol. Semua link harus terhubung. | Manual cross-check |
+| **4. Skill SKILL.md** | Pastikan SKILL.md bahasa baru memuat: pointer ke `meta-decision/SKILL.md`, pointer ke `meta-git/SKILL.md`, Protokol Eksekusi Greenfield/Brownfield, Quality Gate commands | `skills/mastery-<bahasa>/SKILL.md` |
+| **5. Verifikasi** | Trace alur: User input → AGENTS.md routing → meta-decision → SKILL.md baru → greenfield/brownfield protocol. Semua link harus terhubung. | Manual cross-check |
 
 > **DILARANG** merilis skill bahasa baru sebelum kelima langkah ini selesai. Skill yang tidak terintegrasi ke routing global tidak akan pernah dipicu secara otomatis oleh sistem.

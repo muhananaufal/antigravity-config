@@ -293,10 +293,10 @@ if ($Full) {
     }
 
     # Diselaraskan dengan Quality Gate di SKILL.md tiap bundle mastery. Sebelumnya gate ini
-    # lebih longgar dari yang diwajibkan dokumen, padahal nestjs-mastery menyebutnya
+    # lebih longgar dari yang diwajibkan dokumen, padahal mastery-nestjs menyebutnya
     # "gerbang primer" - klaim yang hanya benar bila isinya memang superset.
     #
-    # `cargo miri test` SENGAJA tidak dipasang: rust-mastery mewajibkannya hanya bila kode
+    # `cargo miri test` SENGAJA tidak dipasang: mastery-rust mewajibkannya hanya bila kode
     # menyentuh blok `unsafe`, butuh toolchain nightly, dan berjalan sangat lambat.
     # Menjalankannya tanpa syarat akan menghukum setiap proyek Rust yang aman.
     function Get-StackCommands([string]$stack, [string]$dir) {
@@ -304,7 +304,7 @@ if ($Full) {
         if ($stack -eq 'rust') { return @('cargo fmt -- --check','cargo clippy --all-targets --all-features -- -D warnings','cargo test --all-targets --all-features','cargo audit') }
         if ($stack -eq 'php')  { return @('vendor\bin\pint --test','vendor\bin\phpstan analyse --level=9 app','php artisan test','composer audit') }
         if ($stack -eq 'node') {
-            # Hormati package manager proyek. nestjs-mastery mewajibkan corepack/pnpm;
+            # Hormati package manager proyek. mastery-nestjs mewajibkan corepack/pnpm;
             # memaksa `npm` di repo pnpm memicu resolusi dependensi yang salah.
             $pm = 'npm'
             if (Test-Path (Join-Path $dir 'pnpm-lock.yaml'))  { $pm = 'pnpm' }

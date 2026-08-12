@@ -87,15 +87,15 @@ function Get-CodeLines([string[]]$lines) {
     return $code
 }
 
-# --- Gate rantai kerja: templates / master-decision-tree / git-workflow ---
+# --- Gate rantai kerja: templates / meta-decision / meta-git ---
 # Rantai 6 tahap sengaja diduplikasi ke tiga skill agar tiap dokumen tahu posisinya.
 # Duplikasi tanpa penjaga adalah drift yang menunggu terjadi - persis mekanisme yang
 # melahirkan temuan H7 dan H11. Dicek di sini supaya tidak bisa melenceng diam-diam.
 function Test-WorkflowChain([string]$skillsRoot) {
     $chainFiles = @{
-        'templates'            = Join-Path $skillsRoot 'templates\SKILL.md'
-        'master-decision-tree' = Join-Path $skillsRoot 'master-decision-tree\SKILL.md'
-        'git-workflow'         = Join-Path $skillsRoot 'git-workflow\SKILL.md'
+        'meta-templates'            = Join-Path $skillsRoot 'templates\SKILL.md'
+        'meta-decision' = Join-Path $skillsRoot 'meta-decision\SKILL.md'
+        'meta-git'         = Join-Path $skillsRoot 'meta-git\SKILL.md'
     }
     $bad = New-Object System.Collections.Generic.List[string]
     $sig = @{}
@@ -235,7 +235,7 @@ foreach ($b in $bundles) {
 if (-not $Skill) {
     $chainBad = @(Test-WorkflowChain $Root)
     Write-Output ""
-    Write-Output "=== Rantai kerja (templates / master-decision-tree / git-workflow) ==="
+    Write-Output "=== Rantai kerja (templates / meta-decision / meta-git) ==="
     if ($chainBad.Count -eq 0) { Write-Output "  RANTAI  : utuh - 6 tahap identik, gerbang Gasskan hadir, 4 rute pengecualian lengkap, rujukan silang penuh" }
     else {
         Write-Output "  RANTAI  : $($chainBad.Count) temuan"

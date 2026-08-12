@@ -72,15 +72,15 @@ Berlaku sama dengan `AGENTS.md §3.6` dan `§3.9`, dengan terjemahan tool:
 
 | Aturan | Di Antigravity | Di Claude Code |
 | :--- | :--- | :--- |
-| Baca `master-decision-tree/SKILL.md` sebelum pilih stack | `view_file` | `Read` |
-| Baca `git-workflow/SKILL.md` sebelum menyentuh repo | `view_file` | `Read` |
+| Baca `meta-decision/SKILL.md` sebelum pilih stack | `view_file` | `Read` |
+| Baca `meta-git/SKILL.md` sebelum menyentuh repo | `view_file` | `Read` |
 | Buat `.gitignore` sebagai Langkah 0 Greenfield | `write_to_file` | `Write` |
 | Buat branch `feature/*` sebelum menulis kode | `run_command git checkout -b` | `Bash` |
 | Atomic commit per unit logis | `run_command git commit` | `Bash` |
 | Subagent DILARANG menulis file atau commit | `invoke_subagent` READ-ONLY | `Explore` READ-ONLY |
 
 **WAJIB dibaca sebelum proyek baru:**
-- `~/.gemini/config/skills/master-decision-tree/SKILL.md`
-- `~/.gemini/config/skills/git-workflow/SKILL.md`
+- `~/.gemini/config/skills/meta-decision/SKILL.md`
+- `~/.gemini/config/skills/meta-git/SKILL.md`
 
 **DILARANG** membuat branch atau commit tanpa lebih dulu membaca kedua dokumen di atas.
