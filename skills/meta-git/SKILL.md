@@ -15,10 +15,10 @@ Skill ini adalah **tahap 5** — dan ia berada **SETELAH** gerbang persetujuan, 
 | :-: | :--- | :--- |
 | 1 | Routing task | `AGENTS.md` §2 |
 | 2 | Pilih stack & arsitektur | `meta-decision/SKILL.md` |
-| 3 | Tulis `docs/rfc/YYYYMMDD-<fitur>.md` + katalog | `meta-meta-templates/SKILL.md` bagian 1–2 |
+| 3 | Tulis `docs/rfc/YYYYMMDD-<fitur>.md` + katalog | `meta-templates/SKILL.md` bagian 1–2 |
 | 4 | **BERHENTI — tunggu user mengetik "Gasskan"** | `AGENTS.md` §0.5 · **GERBANG MUTLAK** |
 | 5 | **Aktifkan `role-swe` → Pre-Code Checklist** | `role-swe/SKILL.md` §1 |
-| 6 | **Branch, atomic commit, merge** | **`meta-meta-git/SKILL.md` — Anda di sini** |
+| 6 | **Branch, atomic commit, merge** | **`meta-git/SKILL.md` — Anda di sini** |
 | 7 | Quality Gate + Patch Receipt | `role-swe/SKILL.md` §3 |
 
 > Nomor **§** selalu merujuk `AGENTS.md`. Untuk seksi milik skill lain dipakai kata "bagian"; seksi dokumen ini sendiri ditulis §1–§10 tanpa nama berkas.
@@ -31,7 +31,7 @@ Semua rute eksekusi (seperti proyek kecil, bugfix minor, dan insiden kritis) TUN
 **Tiga sambungan yang WAJIB dijaga konsisten:**
 - Nama branch WAJIB sama persis dengan field **Target Branch** di dokumen RFC (`templates` §1) dan di katalog `docs/rfc/README.md`.
 - Satu **Batch** RFC memetakan ke satu atau lebih commit atomik (§5 di bawah); setelah batch lolos Quality Gate dan ter-commit, centang `[x]`-nya di RFC.
-- Kerangka RFC, RCA, `system_map.md`, dan Patch Receipt seluruhnya didefinisikan di `meta-meta-templates/SKILL.md` — DILARANG mengarang formatnya sendiri.
+- Kerangka RFC, RCA, `system_map.md`, dan Patch Receipt seluruhnya didefinisikan di `meta-templates/SKILL.md` — DILARANG mengarang formatnya sendiri.
 
 ---
 

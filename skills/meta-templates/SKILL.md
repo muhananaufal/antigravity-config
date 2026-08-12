@@ -15,18 +15,18 @@ Skill ini dipakai **dua kali**: di tahap 3 untuk menulis rencana, dan di tahap 6
 | :-: | :--- | :--- |
 | 1 | Routing task | `AGENTS.md` §2 |
 | 2 | Pilih stack & arsitektur | `meta-decision/SKILL.md` |
-| 3 | **Tulis `docs/rfc/YYYYMMDD-<fitur>.md` + katalog** | **`meta-meta-templates/SKILL.md` bagian 1–2 — Anda di sini (PM)** |
+| 3 | **Tulis `docs/rfc/YYYYMMDD-<fitur>.md` + katalog** | **`meta-templates/SKILL.md` bagian 1–2 — Anda di sini (PM)** |
 | 4 | **BERHENTI — tunggu user mengetik "Gasskan"** | `AGENTS.md` §0.5 · **GERBANG MUTLAK** |
 | 5 | Pre-Code Checklist SWE | `role-swe/SKILL.md` §1 |
-| 6 | Branch, atomic commit, merge | `meta-meta-git/SKILL.md` §3 / §4 |
-| 7 | **Patch Receipt + centang Kanban di RFC** | **`meta-meta-templates/SKILL.md` bagian 6 — Anda di sini lagi (SWE)** |
+| 6 | Branch, atomic commit, merge | `meta-git/SKILL.md` §3 / §4 |
+| 7 | **Patch Receipt + centang Kanban di RFC** | **`meta-templates/SKILL.md` bagian 6 — Anda di sini lagi (SWE)** |
 
 > Nomor **§** selalu merujuk `AGENTS.md`. Untuk seksi milik skill lain dipakai kata "bagian".
 
 **Tiga sambungan yang WAJIB dijaga konsisten:**
-- Field **Target Branch** (bagian 1 di bawah) WAJIB memakai konvensi penamaan `meta-meta-git/SKILL.md` bagian 1 (Git Flow), dan WAJIB sama persis dengan branch yang benar-benar dibuat.
+- Field **Target Branch** (bagian 1 di bawah) WAJIB memakai konvensi penamaan `meta-git/SKILL.md` bagian 1 (Git Flow), dan WAJIB sama persis dengan branch yang benar-benar dibuat.
 - Opsi di **§2 Eksplorasi Arsitektur** adalah keluaran `meta-decision/SKILL.md` — DILARANG mengarang opsi tanpa melewati pohon itu.
-- Tiap **Batch** di §4 memetakan ke satu atau lebih commit atomik (`git-workflow` §5); status `[x]` hanya boleh dicentang setelah batch itu lolos Quality Gate **dan** ter-commit.
+- Tiap **Batch** di §4 memetakan ke satu atau lebih commit atomik (`meta-git` §5); status `[x]` hanya boleh dicentang setelah batch itu lolos Quality Gate **dan** ter-commit.
 
 ---
 

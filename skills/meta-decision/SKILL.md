@@ -718,10 +718,10 @@ Pohon ini adalah **tahap 2** dari enam. Keputusan yang Anda ambil di sini menjad
 | :-: | :--- | :--- |
 | 1 | Routing task | `AGENTS.md` §2 |
 | 2 | **Pilih stack & arsitektur** | **`meta-decision/SKILL.md` — Anda di sini** |
-| 3 | Tulis `docs/rfc/YYYYMMDD-<fitur>.md` + katalog | `meta-meta-templates/SKILL.md` bagian 1–2 |
+| 3 | Tulis `docs/rfc/YYYYMMDD-<fitur>.md` + katalog | `meta-templates/SKILL.md` bagian 1–2 |
 | 4 | **BERHENTI — tunggu user mengetik "Gasskan"** | `AGENTS.md` §0.5 · **GERBANG MUTLAK** |
-| 5 | Branch, atomic commit, merge | `meta-meta-git/SKILL.md` bagian 1–5 |
-| 6 | Patch Receipt + centang Kanban di RFC | `meta-meta-templates/SKILL.md` bagian 6 |
+| 5 | Branch, atomic commit, merge | `meta-git/SKILL.md` bagian 1–5 |
+| 6 | Patch Receipt + centang Kanban di RFC | `meta-templates/SKILL.md` bagian 6 |
 
 > **Pengecualian Rute:** Semua rute eksekusi (seperti proyek kecil, bugfix minor) tunduk murni pada `AGENTS.md` §2.
 

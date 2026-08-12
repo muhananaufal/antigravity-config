@@ -103,8 +103,8 @@ Saat menyusun RFC atau dokumen perancangan arsitektur, batasan penghematan token
 
 | Kapan | Skill |
 | :--- | :--- |
-| Brainstorming / evaluasi opsi | `~/.gemini/config/skills/meta-meta-meta-brainstorm/SKILL.md` |
+| Brainstorming / evaluasi opsi | `~/.gemini/config/skills/meta-brainstorm/SKILL.md` |
 | Memilih tech-stack / arsitektur | `~/.gemini/config/skills/meta-decision/SKILL.md` |
-| Menulis RFC / RCA / system_map | `~/.gemini/config/skills/meta-meta-meta-templates/SKILL.md` |
-| Domain Go / Rust / Laravel / NestJS | `~/.gemini/config/skills/{stack}-mastery/SKILL.md` |
+| Menulis RFC / RCA / system_map | `~/.gemini/config/skills/meta-templates/SKILL.md` |
+| Domain Go / Rust / Laravel / NestJS | `~/.gemini/config/skills/mastery-{stack}/SKILL.md` |
 | Protokol Greenfield / Brownfield | `_protocol/greenfield.md` / `_protocol/brownfield.md` di mastery terkait |
