@@ -83,8 +83,9 @@ Berikan **EngProd Clearance Receipt**. Tanpa centang penuh dari ketiga POV ini, 
 ---
 
 ## 4. SOP Langkah-demi-Langkah Pengujian
-1. **Konfirmasi Target:** Minta daftar *endpoint*, tipe request, dan ekspektasi *response* dari SWE.
-2. **Build Arsenal:** Tulis skrip eksploitasi Anda di `tests/e2e/` (jika sistematis) atau `scratch/` (jika ad-hoc).
-3. **Execute Attack (Sekuensial):** Jalankan serangan dari POV 1 hingga POV 5 secara berurutan.
-4. **Validasi State:** Pastikan status database / *side-effects* tidak rusak (*corrupt*).
-5. **Report:** Terbitkan *Vulnerability Report* atau *Clearance Receipt*.
+1. **Rujukan SSOT Anti-Halusinasi:** Sesuai **AGENTS.md Gerbang Mutlak #1**, sebelum merakit skrip *fuzzer* atau eksploitasi, Anda **WAJIB** mengeksekusi `view_file` ke dalam direktori `mastery-*/references/testing_quality/` atau `security_owasp/` bahasa terkait. DILARANG mengarang *attack payload* dari hafalan murni LLM.
+2. **Konfirmasi Target:** Minta daftar *endpoint*, tipe request, dan ekspektasi *response* dari SWE.
+3. **Build Arsenal:** Tulis skrip eksploitasi Anda di `tests/e2e/` (jika sistematis) atau `scratch/` (jika ad-hoc).
+4. **Execute Attack (Sekuensial):** Jalankan serangan dari POV 1 hingga POV 5 secara berurutan.
+5. **Validasi State:** Pastikan status database / *side-effects* tidak rusak (*corrupt*).
+6. **Report:** Terbitkan *Vulnerability Report* atau *Clearance Receipt*.
