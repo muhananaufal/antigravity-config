@@ -31,7 +31,7 @@ Enam hal ini DILARANG dilanggar dalam kondisi apa pun. Seluruh eksekusi wajib be
 | **staleness check** | Verifikasi `system_map.md` / katalog `docs/rfc/` aktif masih cocok dengan kode nyata. Tidak cocok → WAJIB lapor ke user sebelum lanjut. |
 | **exit gate** | Seluruh butir Quality Gate di `role-swe` §3. Belum lulus semua → status task DILARANG diubah jadi `[x]`. |
 | **RCA / `docs/rca/`** | Dokumen Blameless 5-Whys Root Cause Analysis saat Emergency Pause / insiden kritis di `docs/rca/YYYYMMDD-<insiden>.md`. |
-| **Circuit Breaker** | Batas maksimal 5 autonomous fix loop. Lapis 1 (Ronde 1-3) untuk main agent. Lapis 2 (Ronde 4-5) ganti/riset mendalam. >5x → WAJIB STOP dan tinggalkan jejak di buku besar `progress.md`. |
+| **Circuit Breaker** | Batas maksimal 5 autonomous fix loop. Lapis 1 (Ronde 1-3) untuk main agent. Lapis 2 (Ronde 4-5) ganti/riset mendalam. >5x → WAJIB STOP dan tinggalkan jejak di buku besar `docs/rfc/progress.md`. |
 | **Iron Law of Deletion** | Jika kode produksi ditulis sebelum *test* TDD-nya ada, kode produksi tersebut WAJIB DIHAPUS TOTAL tanpa sisa. |
 | **Revert-to-Fail** | Protokol TDD 4 langkah: Tulis Test → Fix (Hijau) → Revert Fix (WAJIB MERAH) → Restore Fix (Hijau). Membuktikan test bukan *false-positive*. |
 | **Side Note** | 1–2 baris di AKHIR respon, format ada di skill `meta-templates`. Untuk temuan bad practice DI LUAR scope. DILARANG memperbaikinya tanpa diminta. |
