@@ -3,9 +3,21 @@ name: mastery-golang
 description: Gunakan skill ini ketika merancang arsitektur, konkurensi, DB/SQLC, gRPC, HFT, testing, security, distributed systems, K8s Operators, Linux Systems Programming, atau runtime internals di Golang.
 ---
 
-# Golang Mastery
+# Golang Mastery (L8 Neutral Encyclopedia)
 
-SSOT arsitektur & rekayasa sistem Golang enterprise & high-throughput (30 Domain, 221 File Mahakarya).
+SSOT arsitektur & rekayasa sistem Golang enterprise & high-throughput (30 Domain, 221 File Mahakarya). Dokumen ini BUKAN sekadar tutorial SWE; ini adalah **Fakta Objektif Netral** yang memfasilitasi 5 POV Principal Roles (Architect, SWE, QA, DevOps, DBA).
+
+## 👓 Matriks Lensa Principal (Multi-POV)
+
+Gunakan *lensa* spesifik saat membaca file referensi di direktori ini, sesuai dengan peran Anda saat ini:
+
+| Role Aktif | Lensa Fokus Utama di Ekosistem Golang |
+| :--- | :--- |
+| **Architect** | Batasan antar *package* (`internal/`), stabilitas antarmuka, kontrak gRPC (`.proto`), dan propagasi *Distributed Tracing* (OpenTelemetry). |
+| **SWE** | *Mechanical Sympathy* (alokasi memori, escape analysis), manajemen *goroutine* berpemilik, mitigasi *Data Race*, dan struktur *Clean Architecture*. |
+| **DevOps** | *Graceful shutdown* (`SIGTERM`), penyetelan `GOMEMLIMIT` & `GOGC`, probe K8s, metrik Prometheus, dan *build distroless* tanpa CGO. |
+| **DBA** | Tuning *Connection Pool* (`SetMaxOpenConns`, `SetConnMaxLifetime`), isolasi transaksi SQLC, tipe data JSONB, dan manajemen *lock* DB via Go. |
+| **QA (Red Team)** | *Fuzzing* target API (mencari *unhandled panic*), eksploitasi celah konkurensi (memanipulasi *race condition* HTTP), pengujian batas *timeout* `context`. |
 
 ## 🏛️ Pilar Arsitektur Mutlak
 
@@ -113,45 +125,36 @@ Domain yang hampir selalu relevan untuk Go service manapun:
 
 ---
 
-## ✅ Quality Gate (Checklist Sebelum Selesai)
+## ✅ Terdesentralisasi Quality Gate (Per-Role)
 
-**Go & Code Quality:**
-- `go test -race ./...` — zero data race
-- `golangci-lint run` — zero lint error
-- Clean Architecture: `DTO → Handler → Service → Repository` — no business logic di Handler
-- Strongly-Typed Error: `errors.As` / Sentinel Errors — no bare `nil` return
-- `context.WithTimeout` pada SEMUA panggilan DB, Redis, gRPC, HTTP Client
-- `defer recover()` pada setiap goroutine baru yang di-spawn
-- `SetMaxOpenConns` / `SetMaxIdleConns` / `SetConnMaxLifetime` — no default unlimited pool
-
-**API & System:**
-- Prefix versi API (`/api/v1/`) + Pagination (cursor/offset)
-- Idempotency Key (Redis/DB) pada POST yang mutate state
-- OpenAPI spec (`swaggo`/`ogen`) sejak awal
-- Correlation ID (`X-Request-ID`) propagasi ke semua downstream
-- `/health` + `/ready` endpoint pada setiap service
-- Zero-Downtime Migration — kolom baru `nullable`, no rename/drop langsung
-
-**Observability & Security:**
-- RED Metrics + OpenTelemetry tracing per service
-- Structured Logging (`zerolog`/`slog`) — no PII/token di log
-- Circuit Breaker + timeout + retry untuk semua external calls
-- Rate Limiting pada endpoint publik
-- OWASP: SQL Injection, IDOR, Mass Assignment, Broken Auth
-- Audit N+1 Query — gunakan batch atau eager loading
-- p99 < 200ms — verifikasi dengan `go test -bench`
-
-**Docker & Container:**
-- Multi-stage build: `golang:1.23-alpine` → `distroless/static-debian12:nonroot` atau `scratch`
-- Non-root user — no `root` di production container
-- `.dockerignore` eksplisit — no `.env*`, `.git/`, `*_test.go` ikut ter-COPY
-- `ENTRYPOINT ["/app"]` exec form — no shell form (SIGTERM tidak sampai ke app)
-- `HEALTHCHECK` di Dockerfile selaras dengan `/health` endpoint
-- Resource limits di `docker-compose.yml` / K8s manifest
-- `depends_on.condition: service_healthy` untuk DB/Redis dependency
-
-**Gerbang global (WAJIB, mendahului semua di atas):**
+**Gerbang Global (WAJIB bagi semua role yang mengubah kode/infrastruktur):**
 ```
 powershell -NoProfile -ExecutionPolicy Bypass -File ~/.gemini/config/scripts/quality_gate.ps1 -Full
 ```
-Nol placeholder · nol credential hardcode · nol untyped bypass · linter & test lulus (`role-swe/SKILL.md` §3).
+
+Sebagai agen otonom, WAJIB periksa bagian di bawah ini sesuai dengan peran aktif Anda. DILARANG mencentang tugas `[x]` bila gerbang *role* Anda belum terpenuhi secara spesifik.
+
+### 🏛️ `[ ]` Gerbang Architect (PM)
+- **Modularity:** Tidak ada *circular dependency*. Bisnis logic terisolasi murni di `internal/`.
+- **API Contract:** OpenAPI spec (`swaggo`/`ogen`) atau kontrak gRPC (`.proto`) disepakati *sebelum* eksekusi.
+- **Traceability:** Correlation ID (`X-Request-ID`) masuk ke *context* dan dipropagasi ke sistem hilir.
+
+### ⚙️ `[ ]` Gerbang SWE
+- **Data Race:** `go test -race ./...` wajib lulus 100%.
+- **Goroutine Leak:** Semua `go func()` harus dilindungi `defer recover()` dan terikat `context.Context`.
+- **Type-Safety:** Menggunakan `errors.As` dan *Sentinel Error*, tidak menggunakan `any` tanpa validasi.
+- **Resilience:** Semua *external call* ke DB/Redis/HTTP API wajib memakai `context.WithTimeout`.
+
+### 🛡️ `[ ]` Gerbang QA (Red Team)
+- **Fuzzing Tuntas:** API menerima *dirty input* (tipe data aneh, JSON bersarang) tanpa mengalami *panic* 500.
+- **Race Attack Meleset:** Menguji *endpoint* modifikasi (*checkout/payment*) dengan konkurensi brutal (100 request/detik) -> sistem harus merespons 429 atau 409 Conflict, bukan *double-spend*.
+
+### 🌩️ `[ ]` Gerbang DevOps
+- **Distroless & Security:** *Multi-stage build* ke `distroless` (atau `scratch`) dengan `CGO_ENABLED=0`. Kontainer berjalan sebagai `nonroot`.
+- **Resource Aware:** Variabel `GOMEMLIMIT` selaras dengan *Memory Limit* Kubernetes.
+- **Graceful Shutdown:** Aplikasi menangkap `SIGTERM` dan menunggu maksimal N detik sebelum membunuh koneksi. Liveness/Readiness probe akurat merujuk `/health`.
+
+### 🗄️ `[ ]` Gerbang DBA
+- **Pool Tuning:** `SetMaxOpenConns`, `SetMaxIdleConns`, dan `SetConnMaxLifetime` terkonfigurasi non-default (menghindari penumpukan *idle connection* di DB).
+- **Zero-Downtime:** Semua skema migrasi tidak memiliki operasi *locking* tabel berat (misal `DROP` kolom berbarengan di DB besar).
+- **Index Plan:** Query SQL yang dibuat SWE telah dipastikan aman lewat `EXPLAIN ANALYZE` (menghindari `Seq Scan`).
