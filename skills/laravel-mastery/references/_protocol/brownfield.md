@@ -1,5 +1,8 @@
 # Brownfield Laravel — Protokol Forensik & Blast Radius Repo Eksisting
 
+> [!WARNING]
+> **SSOT Override:** Segala instruksi di file ini (termasuk pembentukan Swarm subagent, Day-0 Quintet, RFC, dan Matriks) **TUNDUK** pada pengecualian di AGENTS.md §2 dan §7. Jika proyek berukuran kecil atau sekadar edit minor, **ABAIKAN** instruksi berat di file ini dan langsung tulis kode. DILARANG spawn subagent untuk tugas yang tidak memenuhi syarat di §7.
+
 > Dipicu dari `SKILL.md` saat tambah fitur / refactor / optimasi / audit pada repo ber-`composer.json`. **Baseline regresi (§3.4 `AGENTS.md`) WAJIB tuntas lebih dulu.**
 
 **DILARANG:** Big Bang Rewrite · "Frankenstein Codebase" · Mengubah kode tanpa memetakan Blast Radius.
@@ -8,7 +11,7 @@
 
 ## 1. Rekonesans Forensik — Bentuk Tim Sesuai Kenyataan Repo
 
-Pindai struktur direktori + `composer.json` + config framework **dulu**, baru sebar subagent tier `pro` (3–10, elastis):
+Pindai struktur direktori + `composer.json` + config framework **dulu**, baru sebar subagent paralel (1 per domain, sesuai `AGENTS.md` §7):
 
 | Kondisi Repo | Fokus Audit Subagent | Target Berkas & Concern |
 | :--- | :--- | :--- |
@@ -17,7 +20,6 @@ Pindai struktur direktori + `composer.json` + config framework **dulu**, baru se
 | Eloquent intensif / Queue | **Eloquent N+1 & Queue Hunter** | Query tanpa `->with()`, pagination hilang, job tanpa `$afterCommit` |
 | Endpoint API/Web | **Security & OWASP Auditor** | IDOR, Mass Assignment `$fillable`, raw query SQLi, missing rate-limiting |
 | Multi-tenant / routing subdomain terdeteksi | **Tenant Isolation Auditor** | Global scope tenant bocor, query lintas-tenant tanpa `tenant_id`, cache key tanpa prefiks tenant |
-| **Selalu, tepat 1** | **Mastery Standard Matcher** | Konsolidasi seluruh temuan auditor, baca `references/` yang relevan, lalu susun Matriks Blast Radius |
 
 ---
 
@@ -45,12 +47,3 @@ Subagent auditor wajib menyusun tabel forensik ini sebelum opsi arsitektur diaju
 
 ---
 
-## 4. Sajikan ≥3 Opsi Arsitektur — Zero-Steering Grilling
-
-| Opsi | Kapan Cocok | Konsekuensi & Guardrail |
-| :--- | :--- | :--- |
-| **Native Consistent Extension** (KISS) | Pola repo masih sehat | Cepat & konsisten. WAJIB tetap suntik `FormRequest` validation, `->paginate()`, eager loading, SLA k6, zero PHPStan level 9 error pada kode baru. |
-| **Strangler Fig** | Modul baru bisa berdiri sendiri | Lapisan Clean Architecture: **FormRequest → Controller → Action/Service → Repository → Model**, struktur lawas tidak disentuh. |
-| **Surgical Rewrite & Hardening** | Modul lama fatal (pembayaran/inventaris penuh N+1, race condition di Horizon/Queue) | Bedah modul lama sekalian bangun fitur barunya. Paling mahal, paling bersih. |
-
-DILARANG memberi label "(Recommended)" sepihak — lihat §4 `AGENTS.md`. Tuangkan opsi terpilih ke dalam `docs/rfc/YYYYMMDD-<fitur>.md` dan update `docs/rfc/README.md`.

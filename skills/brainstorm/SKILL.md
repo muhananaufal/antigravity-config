@@ -62,7 +62,7 @@ flowchart TD
 | 3 | **Search ≠ sumber** | Hasil WebSearch hanya dipakai untuk MENEMUKAN alamat. DILARANG mengutip dari cuplikan hasil pencarian — cuplikan sering potongan kalimat bersyarat yang berubah makna. |
 | 4 | **Fetch dan baca** | Klaim hanya boleh naik jadi `[fakta]` setelah halamannya benar-benar diambil dan dibaca. Catat **tanggal publikasi** dan konteks pengikatnya — wilayah/negara, tahun, populasi, atau versi produk. Angka tanpa konteks itu bukan fakta, cuma angka. |
 | 5 | **Pencarian pembantah** | WAJIB minimal **satu** query yang berusaha MEMBANTAH arah favorit. Bukti yang hanya dikumpulkan dari sisi pro adalah ruang gema, dan itulah persis cara "asumsi yang paling sering dibicarakan" menyamar jadi riset. |
-| 6 | **Deduplikasi popularitas** | Sumber yang saling menyalin — listicle, konten SEO, Medium tanpa data, blog yang mengutip blog — dihitung **SATU** sumber, bukan lima. WAJIB telusuri ke sumber primernya; tidak ketemu primernya → statusnya `[spekulasi]`, bukan `[fakta]`. |
+| 6 | **Tulis Evidence Ledger** | Masukkan hasil ke dalam tabel. Terapkan seluruh uji independensi dan penurunan derajat sumber sesuai `references/evidence-protocol.md` sebelum menyimpulkan. |
 
 ### Kelas klaim berisiko tinggi (WAJIB diverifikasi, ranah apa pun)
 
@@ -110,7 +110,7 @@ Tabel ini WAJIB hadir sebelum bagian opsi, dan setiap klaim di prosa dirujuk den
 
 Dipakai untuk ranah apa pun di luar desain sistem: strategi bisnis, ide produk, keputusan karir, keuangan pribadi, pendidikan, konten, negosiasi, rencana hidup, penelitian, sampai memilih antara dua tawaran kerja.
 
-**§3, §5, §6, §7 `AGENTS.md` MATI di sini** — tanpa quality gate kode, template artefak formal, atau pengingat test. Yang tetap hidup: §8 (bahasa & kepadatan), §4 (Challenger — **gaya komunikasi WAJIB blak-blakan, tajam, dan evaluasi dingin; DILARANG flattery atau pujian pasif**), §9 (catat ke `shared/LEARNED.md`), dan **§0 + Fase 0 skill ini** (aturan lokal-dulu di Fase 0 berdiri sendiri, tidak bergantung pada §3.8 yang mati).
+**Fase 0 skill ini** (aturan lokal-dulu di Fase 0 berdiri sendiri) adalah fokus utama Mode 1. Semua aturan pengecualian (seperti matinya §3, §5, §6, §7 dan kewajiban gaya komunikasi blak-blakan) TUNDUK dan OTOMATIS MERUJUK pada tabel Routing Task `AGENTS.md` §2.
 
 ### Urutan WAJIB (Non-Teknis)
 
@@ -122,7 +122,7 @@ Dipakai untuk ranah apa pun di luar desain sistem: strategi bisnis, ide produk, 
 | 3 | **Label epistemik** | Tandai tiap klaim dengan empat label §0.2. DILARANG mencampur tanpa label. |
 | 4 | **Steelman** | DILARANG menolak ide sebelum menyajikan versi terkuatnya. Belum bisa merumuskan versi terkuatnya = belum paham idenya, bukan idenya yang lemah. |
 | 5 | **Kriteria dulu** | WAJIB sepakati kriteria penilaian dengan user SEBELUM menyaring. Kriteria yang disusun sambil jalan hanya merasionalisasi favorit yang sudah dipilih diam-diam. |
-| 6 | **Konvergen** | Sajikan ≥3 arah + trade-off (§4 `AGENTS.md`). DILARANG label "(Recommended)" sepihak kecuali diminta. Tiap arah WAJIB disertai **apa yang akan membatalkannya** — tak ada pembatal berarti itu harapan, bukan strategi. |
+| 6 | **Konvergen** | Sajikan ≥3 arah + trade-off (patuhi seluruh aturan `AGENTS.md` §4). Tiap arah WAJIB disertai **apa yang akan membatalkannya** — tak ada pembatal berarti itu harapan, bukan strategi. |
 | 7 | **Utang bukti** | Tutup dengan daftar klaim yang masih `[spekulasi]`/`[memori-model]` dan cara termurah memverifikasinya. Diskusi selesai bukan berarti pengetahuannya lengkap. |
 
 ### Anti-Pattern Non-Teknis
@@ -153,41 +153,23 @@ Dipicu saat user berdiskusi soal: pemilihan stack/database, pemecahan modul/mono
 ### Aturan Baku Teknikal
 
 1. **Fase 0 WAJIB dan tidak bisa dilewati.** Di mode ini Ledger kosong hampir selalu berarti risetnya yang belum dikerjakan, bukan topiknya yang bebas fakta. Minimal **3 klaim penentu** WAJIB tertutup Tier 0–2 sebelum matriks evaluasi disajikan.
-2. **DILARANG Menulis Kode:** Diskusi teknikal murni analisis dan desain. DILARANG menulis atau mengedit kode implementasi sebelum ada persetujuan user ("Gasskan").
-3. **Master Decision Tree First:** Jika diskusi melibatkan pemilihan bahasa/framework utama atau sistem baru dari nol, WAJIB rujuk alur `~/.gemini/config/skills/master-decision-tree/SKILL.md`.
-4. **Netralitas Opsi (Anti-Yes-Man):** Sajikan **≥3 opsi arsitektur netral**. Tiap opsi WAJIB memuat **≥3 kelebihan DAN ≥3 kekurangan** konkret (performa, kompleksitas operasional, failure mode). DILARANG melabeli salah satu opsi sebagai "(Recommended)" kecuali diminta eksplisit oleh user.
-5. **Matriks Evaluasi Berbobot:** Bandingkan opsi berdasarkan dimensi engineering terukur. Setiap sel yang memuat angka WAJIB membawa nomor Ledger; sel tanpa bukti diisi kualitatif, bukan angka karangan.
+2. **Kepatuhan Penuh terhadap AGENTS.md:** Di mode ini, Anda sedang melakukan arsitektur. Anda WAJIB mematuhi semua gerbang mutlak Konstitusi termasuk larangan menulis kode sebelum "Gasskan", Master Decision Tree (§3.6), dan Challenger Procedure (§4 - menyajikan ≥3 opsi netral).
+3. **Matriks Evaluasi Berbobot:** Bandingkan opsi berdasarkan dimensi engineering terukur. Setiap sel yang memuat angka WAJIB mematuhi Protokol Angka di `references/evidence-protocol.md` dan membawa nomor Ledger.
    - **Throughput & Latency (p95/p99)**
    - **Data Integrity & Failure Mode (Network partition, node crash, data loss risk)**
    - **Operational Overhead (DevOps, monitoring, infra complexity)**
    - **Maintainability & Developer Experience (Type safety, toolchain, onboarding)**
-6. **Angka WAJIB membawa kondisi pengukuran.** Hardware, ukuran payload, tingkat konkurensi, versi, dan **siapa yang mengukur**. Benchmark vendor atas produknya sendiri WAJIB ditandai konflik kepentingan, bukan dikutip polos.
-7. **Steelmanning Alternatif:** Sebelum mengkritik suatu pola (misal: "Event-Driven terlalu kompleks"), sajikan konfigurasi terbaiknya (misal: "Event-Driven dengan Transactional Outbox + Watermill") agar perbandingan adil dan objektif.
-8. **Cek kesegaran & keberadaan.** Nama library, flag CLI, opsi konfigurasi, dan nama API WAJIB dikonfirmasi masih ada di versi yang dibahas. Ingatan model memelihara API yang sudah dihapus dan library yang sudah tidak dirawat — inilah kelas halusinasi termahal di diskusi arsitektur.
-9. **Penutup Sesi Teknikal:** Rangkum ringkas:
+4. **Steelmanning Alternatif:** Sebelum mengkritik suatu pola (misal: "Event-Driven terlalu kompleks"), sajikan konfigurasi terbaiknya (misal: "Event-Driven dengan Transactional Outbox + Watermill") agar perbandingan adil dan objektif.
+5. **Cek kesegaran & keberadaan.** Nama library, flag CLI, opsi konfigurasi, dan nama API WAJIB dikonfirmasi masih ada di versi yang dibahas. Ingatan model memelihara API yang sudah dihapus dan library yang sudah tidak dirawat — inilah kelas halusinasi termahal di diskusi arsitektur.
+6. **Diagram Visual Mermaid WAJIB:** Sesuai `AGENTS.md` §5 & §8, saat menjelaskan alur sistem, topologi multi-komponen, state machine, atau skema DB kompleks dalam mode ini, WAJIB menyertakan diagram visual interaktif dalam blok kode `mermaid`.
+7. **Penutup Sesi Teknikal:** Rangkum ringkas:
    - **Keputusan Arsitektur Terpilih** + nomor Ledger yang menopangnya
    - **Asumsi Beban & Batasan Sistem**
    - **Trigger Pivot** (kondisi apa yang mewajibkan perubahan arsitektur di masa depan)
    - **Utang Bukti** — klaim penentu yang masih belum terverifikasi + cara termurah menutupnya
-   - **Catat ke `~/.gemini/config/shared/LEARNED.md`** jika ada pelajaran arsitektural penting yang disepakati, atau bila sebuah keyakinan lama ternyata **terbantah** oleh bukti sesi ini.
 
 ---
 
 ## ✅ Pemeriksaan Terakhir Sebelum Mengirim
 
-Jalankan checklist ini pada draf jawaban, bukan pada niat.
-
-```
-[ ] Setiap angka di jawaban punya nomor Ledger — atau sudah diturunkan jadi kualitatif
-[ ] Setiap URL yang disebut benar-benar diambil di sesi ini
-[ ] Nol frasa penanda fabrikasi tanpa nomor Ledger (§0.4)
-[ ] Kutipan verbatim tidak diparafrase jadi lebih kuat dari aslinya
-[ ] Ada minimal satu sumber yang MELAWAN arah favorit
-[ ] Klaim [memori-model] tidak dipakai sebagai tumpuan keputusan
-[ ] Setiap kutipan tokoh & atribusi ke lembaga/aturan punya sumber asli (§0.5)
-[ ] Harga, tenggat, syarat, dan ketentuan dicek pada tanggal hari ini — bukan dari ingatan
-[ ] Nama API / flag / library / program sudah dikonfirmasi masih ada & berlaku
-[ ] Utang bukti ditulis eksplisit, bukan dibiarkan menguap
-```
-
-Checklist rinci beserta contoh sebelum/sesudah ada di `references/evidence-protocol.md`.
+Jalankan **Checklist Deteksi Halusinasi Diri** yang berada di `references/evidence-protocol.md` bagian 7 pada draf jawaban, bukan pada niat. Setiap "ya" di sana WAJIB ditindak sebelum kirim.

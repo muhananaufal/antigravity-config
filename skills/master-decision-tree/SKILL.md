@@ -615,7 +615,7 @@ NODE 9.1: Level keamanan apa yang dibutuhkan?
 │   ├── CSRF: Token untuk form submission (atau SameSite cookie).
 │   ├── CORS: Whitelist origin. JANGAN Access-Control-Allow-Origin: *
 │   ├── Password: Argon2id (pilihan utama) atau bcrypt. JANGAN MD5/SHA.
-│   ├── Secrets: .env + validation saat boot. JANGAN hardcode di source code.
+│   ├── Secrets: Patuhi aturan rahasia di `AGENTS.md` §6 (zero placeholder & schema validation).
 │   ├── Dependencies: Audit reguler (npm audit, cargo audit, composer audit).
 │   └── HTTPS: Everywhere. No exceptions.
 │   Ref: semua bahasa → domain security masing-masing
@@ -697,7 +697,7 @@ NODE 10.1: Bagaimana strategi pengujian yang tepat?
 └── ⚠️ ANTI-PATTERN:
     - Mocking SEMUA dependency → test lulus tapi production meledak.
     - Test yang bergantung pada urutan eksekusi → flaky test nightmare.
-    - Test tanpa assertion → test "hijau" tapi tidak menguji apa-apa.
+    - Test tautologis tanpa asersi memadai (pelanggaran mutlak `AGENTS.md` §6).
 ```
 
 ---
@@ -723,37 +723,6 @@ Pohon ini adalah **tahap 2** dari enam. Keputusan yang Anda ambil di sini menjad
 | 5 | Branch, atomic commit, merge | `git-workflow/SKILL.md` bagian 1–5 |
 | 6 | Patch Receipt + centang Kanban di RFC | `templates/SKILL.md` bagian 6 |
 
-> Nomor **§** selalu merujuk `AGENTS.md`. Untuk seksi milik skill lain dipakai kata "bagian".
+> **Pengecualian Rute:** Semua rute eksekusi (seperti proyek kecil, bugfix minor) tunduk murni pada `AGENTS.md` §2.
 
-**Empat rute §2 `AGENTS.md` MENGGUGURKAN tahap 3–4. DILARANG memaksakan RFC di sana:**
 
-| Rute §2 | Yang berlaku |
-| :--- | :--- |
-| Proyek baru **kecil** (4 syarat §2) | RFC & Day-0 Quintet DILARANG dipaksakan → langsung tahap 5 |
-| Edit **≤3 berkas**, bugfix, refactor minor, investigasi | DILARANG bikin RFC → langsung tahap 5. Bugfix tetap WAJIB Proof-of-Defect (§0.6) |
-| **In-Flight Fix** — >3 berkas tapi berasal dari RFC yang SUDAH disetujui | **DILARANG buat RFC kedua.** Catat perubahannya di seksi task RFC yang sedang aktif |
-| **Emergency Pause** — blocker arsitektural kritis di tengah eksekusi | BERHENTI. Susun `docs/rca/YYYYMMDD-<insiden>.md` (`templates/SKILL.md` bagian 3), lapor ke user, jangan putuskan sepihak |
-
----
-
-## LANGKAH WAJIB BERIKUTNYA SETELAH KEPUTUSAN ARSITEKTUR
-
-**DILARANG melompat dari pohon ini langsung ke `git checkout -b`.** Urutannya:
-
-1. **Tuangkan keputusan ke dokumen RFC.** Buka `~/.gemini/config/skills/templates/SKILL.md` bagian 1 dan isi kerangkanya. Opsi arsitektur yang Anda temukan di pohon ini masuk ke **bab 2 dokumen RFC — "Eksplorasi Arsitektur & Trade-off Matrix"** — WAJIB ≥3 opsi netral, tanpa label "(Recommended)" sepihak. Perbarui juga katalog `docs/rfc/README.md` (kerangkanya di `templates` bagian 2).
-
-2. **BERHENTI. Tunggu "Gasskan".** Ini Gerbang Mutlak §0.5 `AGENTS.md`, bukan formalitas. Membuat branch dan menulis kode sebelum kata itu diucapkan adalah pelanggaran, sekalipun keputusan arsitekturnya sudah benar.
-   *Pengecualian:* jalur **proyek kecil** (§2 `AGENTS.md`) dan **edit ≤3 berkas** memang menggugurkan RFC — di situ lanjut langsung ke langkah 3.
-
-3. **Baru buka skill `git-workflow`** (`~/.gemini/config/skills/git-workflow/SKILL.md`):
-   - Greenfield → protokol §3 (mulai Langkah 0: buat `.gitignore` **sebelum berkas apa pun**)
-   - Brownfield → protokol §4 (mulai `git pull --rebase`)
-
-4. **Buat branch kerja** sesuai Git Flow §1 — namanya WAJIB sama dengan field **Target Branch** di dokumen RFC:
-   ```
-   git checkout -b feature/<nama-fitur>   # untuk fitur baru
-   git checkout -b fix/<nama-bug>         # untuk perbaikan bug
-   git checkout -b refactor/<nama-scope>  # untuk refactoring
-   ```
-
-   DILARANG menulis kode di `main` atau `develop` secara langsung.

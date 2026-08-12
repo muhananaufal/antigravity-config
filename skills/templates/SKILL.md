@@ -22,15 +22,6 @@ Skill ini dipakai **dua kali**: di tahap 3 untuk menulis rencana, dan di tahap 6
 
 > Nomor **§** selalu merujuk `AGENTS.md`. Untuk seksi milik skill lain dipakai kata "bagian".
 
-**Empat rute §2 `AGENTS.md` MENGGUGURKAN tahap 3–4. DILARANG memaksakan RFC di sana:**
-
-| Rute §2 | Yang berlaku |
-| :--- | :--- |
-| Proyek baru **kecil** (4 syarat §2) | RFC & Day-0 Quintet DILARANG dipaksakan → langsung tahap 5 |
-| Edit **≤3 berkas**, bugfix, refactor minor, investigasi | DILARANG bikin RFC → langsung tahap 5. Bugfix tetap WAJIB Proof-of-Defect (§0.6) |
-| **In-Flight Fix** — >3 berkas tapi berasal dari RFC yang SUDAH disetujui | **DILARANG buat RFC kedua.** Catat perubahannya di seksi task RFC yang sedang aktif |
-| **Emergency Pause** — blocker arsitektural kritis di tengah eksekusi | BERHENTI. Susun `docs/rca/YYYYMMDD-<insiden>.md` (bagian 3 di bawah), lapor ke user, jangan putuskan sepihak |
-
 **Tiga sambungan yang WAJIB dijaga konsisten:**
 - Field **Target Branch** (bagian 1 di bawah) WAJIB memakai konvensi penamaan `git-workflow/SKILL.md` bagian 1 (Git Flow), dan WAJIB sama persis dengan branch yang benar-benar dibuat.
 - Opsi di **§2 Eksplorasi Arsitektur** adalah keluaran `master-decision-tree/SKILL.md` — DILARANG mengarang opsi tanpa melewati pohon itu.
@@ -38,18 +29,7 @@ Skill ini dipakai **dua kali**: di tahap 3 untuk menulis rencana, dan di tahap 6
 
 ---
 
-## 0. All-Out Principal Planning Protocol (The AETHERIS Master Key Formula)
 
-Saat merancang arsitektur baru, membuat fitur rumit, atau menyusun Grand Blueprint / RFC, AI dan Subagent **WAJIB MENGETINGGALKAN SELURUH PEMBATASAN KETAT ONGKOS TOKEN DALAM MENJAWAB**. Anggaplah pesan *default* user senantiasa berbunyi: *"Silakan memasak, time is yours. Buatkan paling lengkap dari 5W1H dengan penanganan semua edge cases tanpa terkecuali."*
-
-### 5 Pilar Wajib (L8 Principal Standard):
-1. **First-Principles & 5W1H:** Jangan pernah melompat ke sintaks tanpa merancang landasan filosofis mengapa arsitektur atau teknologi tersebut dipilih.
-2. **Adversarial Anticipation:** Jangan mengacu pada *happy-path*. Bangun desain dengan asumsi akan diuji/dibantai oleh pengamat teknikal kritis; setiap pilihan teknikal wajib disertai justifikasi mendalam dan analisis trade-off jujur.
-3. **Exhaustive Inventory Grounding (Anti-Zero-Shot):** Lakukan audit referensi lokal (`references/`) dan sumber daya eksisting untuk memaparkan seluruh entitas/opsi domain komplit ke dalam klaster taksonomi spesifik sebelum merinci abstraksi kodenya. Hal ini menjamin 0% pemotongan karena *lost-in-the-middle bias*.
-4. **Zero-Exception Anomaly Hunting (Edge Cases):** Pada setiap dokumen perancangan, eksplorasi kasus tepi (*edge cases*) tidak boleh diabaikan atau diringkas dengan `// dll`. WAJIB memetakan minimal 5–10 anomali operasional (disk penuh, permission denied, race condition, network disconnect, korupsi konfigurasi, koneksi terputus, atau anomali struktur folder legacy) beserta mitigasi eksplisitnya.
-5. **Visual Architecture Blueprinting (Mermaid Grounding):** DILARANG menjelaskan alur sistem multi-komponen, state machine, atau skema database kompleks hanya dengan teks tebal/ASCII biasa. WAJIB mempresentasikan diagram visual eksplisit dalam blok kode `mermaid` (Flowchart, Sequence Diagram, atau ERD/Class Diagram) agar arsitektur tergambar presisi, tidak ambigu, dan siap untuk audit klinis.
-
----
 
 ## 1. `docs/rfc/YYYYMMDD-<nama-fitur>.md` (All-in-One RFC / PRD / Batch Task)
 
@@ -88,7 +68,6 @@ Dokumen tunggal terpadu untuk perancangan fitur baru, refactor besar, atau inisi
 ---
 
 ## 2. Eksplorasi Arsitektur & Trade-off Matrix (Anti-Yes-Man §4)
-<!-- WAJIB menyajikan ≥3 opsi arsitektur netral. DILARANG memberi label "(Recommended)" sepihak kecuali diminta user -->
 
 ### Opsi A: <Nama Pendekatan A>
 - **Deskripsi Arsitektur:** <!-- Ringkasan pola, topology, dan komponen utama -->
@@ -112,7 +91,7 @@ Dokumen tunggal terpadu untuk perancangan fitur baru, refactor besar, atau inisi
 
 ## 3. Spesifikasi Teknis & Desain Sistem Terpilih
 ### 3.1 Topologi & Visualisasi Arsitektur (Mermaid Blueprint)
-<!-- WAJIB menyajikan minimal 1 diagram visual interaktif dalam blok kode `mermaid` (Sequence Diagram, Flowchart, atau ERD) yang memetakan interaksi antar komponen, alur request/event, atau relasi entitas -->
+<!-- Patuhi mandat Visual Architecture Blueprinting di AGENTS.md §5 (Mermaid Grounding) -->
 ```mermaid
 sequenceDiagram
     autonumber
@@ -165,7 +144,7 @@ sequenceDiagram
      DILARANG menunjuk §7 sendirian - section itu dinyatakan DIABAIKAN di Claude Code, sehingga
      penunjuk tunggal membuat DAG, Contract-First, dan Batch Writing tampak gugur di sana. -->
 
-<!-- ATURAN KANBAN: Maksimal 2 item berstatus [/] (WIP) bersamaan. Centang [x] setelah batch terverifikasi -->
+<!-- ATURAN KANBAN: Patuhi batas maksimal WIP di AGENTS.md §8 serta syarat checklist mutlak di AGENTS.md §6. -->
 
 ### Batch 1: Schema Locking & Contract Initialization
 * **DependsOn:** `[]` (Fondasi Awal)
@@ -198,11 +177,7 @@ sequenceDiagram
 - **Rencana Pengujian:**
   - Unit & Race Test: `go test -race ./...` / `cargo test` / `composer test` / `pnpm test`
   - Concurrency & Edge Cases: Zero payload, expired token, network partition, duplicate event delivery.
-- **Self-Review Checklist (§6):**
-  - N+1 query: `<temuan / nihil>`
-  - OWASP Top 10: `<temuan / nihil>`
-  - Race condition: `<temuan / nihil>`
-  - Memory / Goroutine / Promise leak: `<temuan / nihil>`
+- **Self-Review Checklist:** <!-- Salin format persis dari AGENTS.md §6 dan isi temuan faktualnya -->
 
 ---
 
@@ -371,14 +346,12 @@ flowchart TD
 Maksimal 2 baris, ditaruh di **PALING AKHIR** respon. Format wajib:
 
 ```markdown
-> Side Note: <temuan di luar scope> — <dampaknya>. Di luar scope task aktif, tidak saya ubah (sesuai §4 Anti-Yes-Man & Ratchet Gate).
+> Side Note: <temuan di luar scope> — <dampaknya>. Di luar scope task aktif, tidak saya ubah (sesuai §4 Anti-Yes-Man & §6 Ratchet Gate).
 ```
 
 ---
 
 ## 6. Laporan Hasil Test & Patch Receipt (SOTA Verification Evidence)
-
-WAJIB memuat perintah yang dijalankan **dan** outputnya apa adanya. DILARANG mengklaim lulus tanpa menampilkan bukti konsol.
 
 ```markdown
 ### 🧾 SOTA Patch Receipt & Verification Evidence
@@ -396,7 +369,7 @@ WAJIB memuat perintah yang dijalankan **dan** outputnya apa adanya. DILARANG men
 
 ---
 
-### 🧪 Proof-of-Defect Reproduction Receipt (Wajib untuk Task Bugfix)
+### 🧪 Proof-of-Defect Reproduction Receipt
 1. **Fase 1 (Proof of Failure):** Skrip/Test Reproduksi dijalankan $\rightarrow$ **MERAH (Failed / Exit Code $\ne 0$)**
    ```text
    --- FAIL: TestOrderDoubleChargeBug (0.05s)
@@ -414,7 +387,7 @@ WAJIB memuat perintah yang dijalankan **dan** outputnya apa adanya. DILARANG men
 
 ## 7. `tests/regression/` & Failure Banking Artifact Specification
 
-Setiap perbaikan bug atau insiden post-mortem (RCA) **WAJIB meninggalkan artefak regression test permanen** dengan konvensi penamaan standar:
+Sesuai amanat `AGENTS.md` §6 (Regression Banking), gunakan konvensi penamaan berikut untuk file regression test permanen:
 
 ```markdown
 ### Standar File Regression Test:

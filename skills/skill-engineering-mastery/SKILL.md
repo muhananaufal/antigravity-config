@@ -13,7 +13,7 @@ SSOT perancangan & evolusi Skill Bundle: standar penulisan, protokol swarm, dan 
 | :--- | :--- |
 | **Critical Challenger POV** | DILARANG yes-man, DILARANG shortcut (laziness), DILARANG narasi bertele-tele. Rancangan atau skop skill tidak rasional → tantang profesional dengan ≥3 opsi standar industri. |
 | **Zero-Steering Grilling** | Saat menyajikan opsi arsitektur atau pembagian domain: WAJIB ≥3 opsi netral, tiap opsi ≥3 kelebihan & ≥3 kekurangan. DILARANG label "(Recommended)" sepihak — biarkan fakta teknis dan diskusi user yang memutuskan ("Gasskan"). |
-| **Swarm Reference Loading** | DILARANG merancang, menulis kode, atau menjawab dari hafalan LLM. DILARANG `search_web` sebelum SELURUH referensi lokal dibedah tuntas. |
+| **Pembedahan Referensi Lokal** | Proses rekayasa skill wajib membedah seluruh korpus lokal sebelum mengajukan desain. Pembacaan referensi dan pencarian web tunduk pada `AGENTS.md` §0.1 dan §3.8. |
 | **Sinkronisasi Sistem Wajib** | Setiap skill bahasa baru yang dibuat WAJIB terintegrasi ke: (1) `skills/master-decision-tree/SKILL.md` Bagian 1, (2) `AGENTS.md` §3.5, (3) `shared/tool-claude-code.md`. Tanpa integrasi ini, skill baru menjadi pulau terisolasi yang tidak pernah dipicu oleh sistem. |
 | **Git Workflow Non-Negotiable** | Semua skill bahasa WAJIB menyertakan pointer ke `git-workflow/SKILL.md` dan `master-decision-tree/SKILL.md` di bagian Protokol Eksekusi. Subagent yang dihasilkan dari skill ini DILARANG menulis file — hanya Main Agent yang boleh. |
 
@@ -62,14 +62,9 @@ Struktur direktori sebuah skill bundle diatur dalam tata susunan modular bermutu
 
 ---
 
-## 🚦 4. Protokol Eksekusi (WAJIB dibaca sesuai situasi)
+## 🚦 4. Protokol Eksekusi
 
-| Situasi | WAJIB baca dulu sebelum menulis apa pun |
-| :--- | :--- |
-| Inisiasi project baru dari nol (empty folder / new repository) | `references/_protocol/greenfield.md` |
-| Tambah fitur / modifikasi / optimasi / audit di repo eksisting | `references/_protocol/brownfield.md` |
-
-DILARANG membuat dokumen RFC (`docs/rfc/`) atau menulis kode sebelum protokol yang relevan dibaca tuntas.
+Patuhi mutlak **Tabel Routing Task di `AGENTS.md` §2** untuk menentukan kapan harus membaca `references/_protocol/greenfield.md` atau `brownfield.md`.
 
 ## 🧭 5. Routing Table (WAJIB Baca Sebelum Perancangan mau pun Audit Skill Bundle)
 Sebelum Anda merilis, mengedit, atau membangun sebuah Skill Bundle baru, **WAJIB konsultasikan tabel panduan rute referensi lokal ini menggunakan tool `view_file`**:

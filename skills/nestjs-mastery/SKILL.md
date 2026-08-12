@@ -13,22 +13,14 @@ SSOT arsitektur backend TypeScript enterprise (36 Domain, 139 Berkas). Zero-Tole
 | :--- | :--- |
 | **Fastify First** | `@nestjs/platform-fastify` adalah adapter HTTP utama. Express DILARANG jadi default — lamban dan boros I/O. |
 | **Hexagonal & DDD** | Direktori WAJIB dipisah per *Bounded Context* + *Ports & Adapters*. Business logic di core, buta terhadap DB eksternal maupun protokol HTTP/gRPC. |
-| **Zero `any` Bypass** | `any` / `Object` / `unknown` tanpa validasi runtime ketat (Zod, Ajv, TypeBox, atau class-validator `whitelist: true`) DILARANG. |
+| **Validasi Runtime Ingress** | DTO wajib bervalidasi runtime (`class-validator` `whitelist: true`, Zod, Ajv, atau TypeBox) di setiap pintu masuk. Pelanggaran untyped bypass tunduk pada `AGENTS.md` §0.4. |
 | **Non-Blocking Event Loop** | Komputasi CPU-bound masif (hashing, kriptografi, Excel gb-scale) WAJIB keluar dari main event loop → Piscina Worker Threads atau `napi-rs`. |
 | **Zero-Trust & OWASP** | JWKS asimetris / OIDC di HTTP-Only Secure Cookie · RBAC/ABAC lewat `Reflector` · throttling Redis Valkey di pintu masuk. |
 
-## 🚦 Protokol Eksekusi (WAJIB dibaca sesuai situasi)
+## 🚦 Protokol Eksekusi
 
-> **SEBELUM membuka tabel di bawah:** Jika ini adalah proyek baru atau keputusan arsitektur besar, WAJIB lewati Master Decision Tree (`~/.gemini/config/skills/master-decision-tree/SKILL.md`) terlebih dahulu. DILARANG langsung memilih NestJS sebagai stack tanpa justifikasi dari Decision Tree.
-
-| Situasi | WAJIB baca dulu sebelum menulis apa pun |
-| :--- | :--- |
-| Inisiasi project baru dari nol | `references/_protocol/greenfield.md` |
-| Tambah fitur / refactor / optimasi / audit di repo eksisting | `references/_protocol/brownfield.md` |
-| Keputusan arsitektur / menantang pilihan stack (Challenger Mode §4) | `references/_protocol/tradeoff.md` |
-| Proyek berada di dalam repo Git — branching, atomic commit, Conventional Commits | `~/.gemini/config/skills/git-workflow/SKILL.md` (§3.9 `AGENTS.md`) |
-
-DILARANG membuat dokumen RFC (`docs/rfc/`) atau menulis kode sebelum protokol yang relevan dibaca tuntas.
+Patuhi mutlak **Tabel Routing Task di `AGENTS.md` §2** untuk menentukan kapan harus membaca `references/_protocol/greenfield.md`, `brownfield.md`, atau `tradeoff.md`.
+> **Pengecualian Mutlak:** Jika ini adalah proyek baru atau keputusan arsitektur besar, WAJIB lewati Master Decision Tree (`~/.gemini/config/skills/master-decision-tree/SKILL.md`) terlebih dahulu sesuai `AGENTS.md` §3.6.
 
 ---
 
@@ -92,8 +84,6 @@ Agent WAJIB mencocokkan nature of task ke domain berikut **secara proaktif**.
 ---
 
 ## 🛡️ Penegakan Mutu & Quality Gates (Zero-Tolerance)
-
-DILARANG mengubah status task jadi `[x]` sebelum SEMUA gerbang ini lulus.
 
 **TypeScript & Code Quality:**
 - `tsc --noEmit` — nol error kompilasi

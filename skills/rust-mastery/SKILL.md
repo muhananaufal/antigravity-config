@@ -11,24 +11,16 @@ SSOT arsitektur & rekayasa sistem Rust enterprise, systems programming, dan ultr
 
 | Pilar | Hukumnya |
 | :--- | :--- |
-| **Kegagalan Bertipe** | `thiserror` di pustaka, `anyhow` di biner. `.unwrap()` DILARANG di jalur produksi — di dalam test ia justru idiomatik. Panic adalah keputusan, bukan kelalaian. |
+| **Propagasi Error Eksplisit** | `thiserror` di pustaka, `anyhow` di biner. Penggunaan `unwrap()` di jalur produksi tunduk pada larangan Gerbang Mutlak `AGENTS.md` §0.4 (di dalam test, `unwrap()` idiomatik). |
 | **Async Tidak Boleh Diblokir** | `Mutex` guard DILARANG hidup melintasi `.await`. Komputasi berat dan blocking I/O WAJIB `spawn_blocking` — kalau tidak, satu worker thread runtime membeku bersama semua task di atasnya. |
 | **Cancel-Safety Disengaja** | Setiap cabang `tokio::select!` diperiksa: cabang yang kalah dibatalkan **di tengah jalan**. Future yang tidak cancel-safe kehilangan data yang sudah ditarik dari socket. |
 | **Kepemilikan Bukan Kebetulan** | Siklus `Arc<T>` diputus `Weak<T>`. Memori bisa bocor tanpa satu baris `unsafe` pun — borrow checker tidak menjaga Anda dari siklus. |
 | **`unsafe` Terkurung & Terbukti** | Setiap blok `unsafe` dibungkus antarmuka aman, diberi komentar invariant-nya, dan diverifikasi `cargo miri test`. Tanpa Miri, itu harapan, bukan jaminan. |
 
-## 🚦 Protokol Eksekusi (WAJIB dibaca sesuai situasi)
+## 🚦 Protokol Eksekusi
 
-> **SEBELUM membuka tabel di bawah:** Jika ini adalah proyek baru atau keputusan arsitektur besar, WAJIB lewati Master Decision Tree (`~/.gemini/config/skills/master-decision-tree/SKILL.md`) terlebih dahulu. DILARANG langsung memilih Rust sebagai stack tanpa justifikasi dari Decision Tree.
-
-| Situasi | WAJIB baca dulu sebelum menulis apa pun |
-| :--- | :--- |
-| Inisiasi project baru dari nol (empty folder / new repository) | `references/_protocol/greenfield.md` |
-| Tambah fitur / modifikasi / optimasi / audit di repo eksisting | `references/_protocol/brownfield.md` |
-| Keputusan arsitektur / menantang pilihan stack (Challenger Mode §4) | `references/_protocol/tradeoff.md` |
-| Proyek berada di dalam repo Git — branching, atomic commit, Conventional Commits | `~/.gemini/config/skills/git-workflow/SKILL.md` (§3.9 `AGENTS.md`) |
-
-DILARANG membuat dokumen RFC (`docs/rfc/`) atau menulis kode sebelum protokol yang relevan dibaca tuntas.
+Patuhi mutlak **Tabel Routing Task di `AGENTS.md` §2** untuk menentukan kapan harus membaca `references/_protocol/greenfield.md`, `brownfield.md`, atau `tradeoff.md`.
+> **Pengecualian Mutlak:** Jika ini adalah proyek baru atau keputusan arsitektur besar, WAJIB lewati Master Decision Tree (`~/.gemini/config/skills/master-decision-tree/SKILL.md`) terlebih dahulu sesuai `AGENTS.md` §3.6.
 
 ## 📦 Core References (WAJIB Baca Setiap Project Rust)
 

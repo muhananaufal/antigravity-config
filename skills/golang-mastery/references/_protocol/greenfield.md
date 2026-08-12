@@ -1,19 +1,19 @@
 # Greenfield Go — Protokol Init
 
+> [!WARNING]
+> **SSOT Override:** Segala instruksi di file ini (termasuk pembentukan Swarm subagent, Day-0 Quintet, RFC, dan Matriks) **TUNDUK** pada pengecualian di AGENTS.md §2 dan §7. Jika proyek berukuran kecil atau sekadar edit minor, **ABAIKAN** instruksi berat di file ini dan langsung tulis kode. DILARANG spawn subagent untuk tugas yang tidak memenuhi syarat di §7.
+
 > Dipicu dari `SKILL.md` saat proyek baru dari nol. **Gerbang Klarifikasi (§2 `AGENTS.md`) WAJIB tuntas lebih dulu.**
 
 ## 1. Riset — sebar subagent tier `pro`
 
-| Subagent | WAJIB baca SELURUH berkas di |
+| Subagent (1 per domain - sesuai `AGENTS.md` §7) | WAJIB baca SELURUH berkas di |
 | :--- | :--- |
-| Infra & Data | `arch_patterns/` `db_sqlc/` `devops_control_planes/` |
-| API & Logic | `microservices_grpc/` `testing_quality/` `concurrency/` |
-| Security & Resilience | `security_owasp/` `observability_resilience/` `distributed_patterns_resilience/` `caching_strategy/` |
-| +1 per domain niche | sesuai tabel Auto-Detect di `SKILL.md` |
+| Subagents Core | Domain dari tabel **Core References** di `SKILL.md` |
+| Subagents Niche | Domain dari tabel **Auto-Detect** di `SKILL.md` |
 
-3 core WAJIB, niche elastis — 4 niche terdeteksi berarti 7 subagent paralel. DILARANG menulis dokumen RFC (`docs/rfc/`) sebelum semua subagent melapor.
 
-## 2. Day-0 Quintet — WAJIB ada di root
+## 2. Day-0 Quintet (HANYA jika proyek besar/menengah - lihat AGENTS.md §2)
 
 | Pilar | Isi wajib |
 | :--- | :--- |

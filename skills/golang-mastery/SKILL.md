@@ -17,18 +17,10 @@ SSOT arsitektur & rekayasa sistem Golang enterprise & high-throughput (30 Domain
 | **Error Bertipe** | Sentinel error + `%w` wrapping + `errors.As`. `if err != nil { return err }` tanpa konteks adalah ritual kosong yang menghapus jejak. |
 | **Timeout di Setiap Batas** | Tidak ada panggilan DB, Redis, gRPC, atau HTTP tanpa `context.WithTimeout`. Satu dependensi lambat menghabiskan pool dan menjatuhkan seluruh layanan. |
 
-## 🚦 Protokol Eksekusi (WAJIB dibaca sesuai situasi)
+## 🚦 Protokol Eksekusi
 
-> **SEBELUM membuka tabel di bawah:** Jika ini adalah proyek baru atau keputusan arsitektur besar, WAJIB lewati Master Decision Tree (`~/.gemini/config/skills/master-decision-tree/SKILL.md`) terlebih dahulu. DILARANG langsung memilih Go sebagai stack tanpa justifikasi dari Decision Tree.
-
-| Situasi | WAJIB baca dulu sebelum menulis apa pun |
-| :--- | :--- |
-| Inisiasi project baru dari nol (empty folder / new repository) | `references/_protocol/greenfield.md` |
-| Tambah fitur / modifikasi / optimasi / audit di repo eksisting | `references/_protocol/brownfield.md` |
-| Keputusan arsitektur / menantang pilihan stack (Challenger Mode §4) | `references/_protocol/tradeoff.md` |
-| Proyek berada di dalam repo Git — branching, atomic commit, Conventional Commits | `~/.gemini/config/skills/git-workflow/SKILL.md` (§3.9 `AGENTS.md`) |
-
-DILARANG membuat dokumen RFC (`docs/rfc/`) atau menulis kode sebelum protokol yang relevan dibaca tuntas.
+Patuhi mutlak **Tabel Routing Task di `AGENTS.md` §2** untuk menentukan kapan harus membaca `references/_protocol/greenfield.md`, `brownfield.md`, atau `tradeoff.md`.
+> **Pengecualian Mutlak:** Jika ini adalah proyek baru atau keputusan arsitektur besar, WAJIB lewati Master Decision Tree (`~/.gemini/config/skills/master-decision-tree/SKILL.md`) terlebih dahulu sesuai `AGENTS.md` §3.6.
 
 ## 🔍 Auto-Detect Context Domain (Scan dari Task)
 

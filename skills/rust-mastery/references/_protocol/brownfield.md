@@ -1,5 +1,8 @@
 # Brownfield Rust — Protokol Forensik & Blast Radius Repo Eksisting
 
+> [!WARNING]
+> **SSOT Override:** Segala instruksi di file ini (termasuk pembentukan Swarm subagent, Day-0 Quintet, RFC, dan Matriks) **TUNDUK** pada pengecualian di AGENTS.md §2 dan §7. Jika proyek berukuran kecil atau sekadar edit minor, **ABAIKAN** instruksi berat di file ini dan langsung tulis kode. DILARANG spawn subagent untuk tugas yang tidak memenuhi syarat di §7.
+
 > Dipicu dari `SKILL.md` saat tambah fitur / refactor / optimasi / audit pada repo ber-`Cargo.toml`. **Baseline regresi (§3.4 `AGENTS.md`) WAJIB tuntas lebih dulu.**
 
 **DILARANG:** Big Bang Rewrite · "Frankenstein Codebase" · Mengubah kode tanpa memetakan Blast Radius.
@@ -8,7 +11,7 @@
 
 ## 1. Rekonesans Forensik — Bentuk Tim Sesuai Kenyataan Repo
 
-Pindai struktur direktori + `Cargo.toml` (termasuk workspace crates) **dulu**, baru sebar subagent tier `pro` (3–10, elastis):
+Pindai struktur direktori + `Cargo.toml` (termasuk workspace crates) **dulu**, baru sebar subagent paralel (1 per domain, sesuai `AGENTS.md` §7):
 
 | Kondisi Repo | Fokus Audit Subagent | Target Berkas & Concern |
 | :--- | :--- | :--- |
@@ -17,7 +20,6 @@ Pindai struktur direktori + `Cargo.toml` (termasuk workspace crates) **dulu**, b
 | `sqlx` / `sea-orm` terdeteksi | **DB & N+1 Hunter** | Loop query tanpa join, koneksi tanpa pool limit, migrasi tanpa fallback |
 | Blok `unsafe` / FFI terdeteksi | **Unsafe Provenance Auditor** | Pointer aliasing, transmute hazard, kepatuhan Stacked Borrows / Miri |
 | Broker terdeteksi (`rdkafka`, `async-nats`, `lapin`) | **Broker & DLQ Auditor** | Ack hilang saat task dibatalkan, Transactional Outbox absen, DLQ tanpa jalur replay |
-| **Selalu, tepat 1** | **Mastery Standard Matcher** | Konsolidasi seluruh temuan auditor, baca `references/` yang relevan, lalu susun Matriks Blast Radius |
 
 ---
 
@@ -40,17 +42,8 @@ Subagent auditor wajib menyusun tabel forensik ini sebelum opsi arsitektur diaju
 1. **`Mutex` ditahan lintas `.await`:** guard yang hidup melewati titik await menahan lock selama task tersuspensi — starvation, dan pada `tokio::sync::Mutex` bisa berujung deadlock. Persempit scope guard, atau pakai `parking_lot::Mutex` non-async.
 2. **Blocking I/O di dalam async:** operasi berkas, kriptografi berat, atau panggilan sinkron tanpa `spawn_blocking` membekukan seluruh worker thread runtime, bukan hanya task itu.
 3. **Cancellation hazard pada `tokio::select!`:** cabang yang kalah dibatalkan **di tengah jalan**. Future yang tidak cancel-safe akan kehilangan data yang sudah diambil dari socket atau channel.
-4. **`unwrap()` di jalur produksi:** panic pada `None`/`Err` mematikan task, dan di banyak konfigurasi ikut mematikan proses. Gunakan `thiserror`/`anyhow` dengan propagasi eksplisit — kecuali di dalam test, di mana `unwrap()` justru idiomatik.
+4. **`unwrap()` di jalur produksi:** Pelanggaran fatal terhadap Gerbang Mutlak `AGENTS.md` §0.4. Gunakan `thiserror`/`anyhow` dengan propagasi eksplisit — kecuali di dalam test, di mana `unwrap()` justru idiomatik.
 5. **Siklus `Arc<T>`:** dua struktur yang saling memegang `Arc` tidak pernah mencapai count nol. Memori bocor tanpa satu pun `unsafe`. Pemutusnya `Weak<T>`.
 
 ---
 
-## 4. Sajikan ≥3 Opsi Arsitektur — Zero-Steering Grilling
-
-| Opsi | Kapan Cocok | Konsekuensi & Guardrail |
-| :--- | :--- | :--- |
-| **Native Consistent Extension** (KISS) | Pola repo masih sehat | Cepat & konsisten. WAJIB tetap suntik `thiserror`, timeout di panggilan eksternal, `Weak<T>` pemutus siklus `Arc<T>`, zero clippy warning. |
-| **Strangler Fig** | Modul baru bisa berdiri sendiri | Crate baru di workspace atau modul terisolasi berstandar Top 1%, kode lama tidak disentuh. |
-| **Surgical Rewrite & Hardening** | Modul lama fatal (race condition, bocor memori di `unsafe`) | Bedah modul lama sekalian bangun fitur barunya. Paling mahal, paling bersih. |
-
-DILARANG memberi label "(Recommended)" sepihak — lihat §4 `AGENTS.md`. Tuangkan opsi terpilih ke dalam `docs/rfc/YYYYMMDD-<fitur>.md` dan update `docs/rfc/README.md`.

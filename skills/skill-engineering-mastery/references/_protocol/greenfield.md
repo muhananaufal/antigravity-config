@@ -1,17 +1,20 @@
 # Greenfield — Protokol Init Proyek dari Nol
 
+> [!WARNING]
+> **SSOT Override:** Segala instruksi di file ini (termasuk pembentukan Swarm subagent, Day-0 Quintet, RFC, dan Matriks) **TUNDUK** pada pengecualian di AGENTS.md §2 dan §7. Jika proyek berukuran kecil atau sekadar edit minor, **ABAIKAN** instruksi berat di file ini dan langsung tulis kode. DILARANG spawn subagent untuk tugas yang tidak memenuhi syarat di §7.
+
 > Dipicu dari `SKILL.md` saat membuat proyek baru dari nol. **Gerbang Klarifikasi (§2 `AGENTS.md`) WAJIB tuntas lebih dulu.**
 
 ## 1. Riset — sebar subagent tier `pro`
 
-| Subagent | Cakupan bacaan |
+| Subagent (1 per domain - sesuai `AGENTS.md` §7) | Cakupan bacaan |
 | :--- | :--- |
-| 3 core tetap | Arsitektur · Database/Storage · Keamanan OWASP · Konkurensi · DevOps/Container |
-| +1 per domain niche | sesuai tabel Auto-Detect pada skill stack terkait (K8s Operator, HFT zero-alloc, Fintech ledger, AI Scout, dll) |
+| Subagents Core | Domain dari tabel **Core References** di `SKILL.md` stack terkait |
+| Subagents Niche | Domain dari tabel **Auto-Detect** di `SKILL.md` stack terkait |
 
 DILARANG menulis kode atau menerbitkan dokumen RFC (`docs/rfc/`) sebelum seluruh subagent melapor.
 
-## 2. Day-0 Quintet — WAJIB ada di root
+## 2. Day-0 Quintet (HANYA jika proyek besar/menengah - lihat AGENTS.md §2)
 
 | Pilar | Isi wajib |
 | :--- | :--- |

@@ -22,16 +22,10 @@ Skill ini adalah **tahap 5** — dan ia berada **SETELAH** gerbang persetujuan, 
 
 > Nomor **§** selalu merujuk `AGENTS.md`. Untuk seksi milik skill lain dipakai kata "bagian"; seksi dokumen ini sendiri ditulis §1–§10 tanpa nama berkas.
 
-**DILARANG membuat branch untuk pekerjaan berjalur RFC sebelum tahap 4 terlewati.**
+**DILARANG membuat feature branch untuk eksekusi kode berjalur RFC sebelum tahap 4 (Gasskan) terlewati.** Dokumen perancangan RFC (`docs/rfc/`) dan katalog ter-commit pada branch aktif saat ini (`main`/`develop`) dengan commit `docs(rfc): add initial RFC plan` sebelum Gasskan, sehingga working tree tetap bersih (§9 `AGENTS.md`). Pembuatan branch `feature/*` dilakukan setelah Gasskan.
 
-**Empat rute §2 `AGENTS.md` MENGGUGURKAN tahap 3–4 — di sana branch boleh langsung dibuat:**
-
-| Rute §2 | Yang berlaku |
-| :--- | :--- |
-| Proyek baru **kecil** (4 syarat §2) | RFC & Day-0 Quintet DILARANG dipaksakan → langsung ke §3 dokumen ini |
-| Edit **≤3 berkas**, bugfix, refactor minor, investigasi | DILARANG bikin RFC → langsung ke §4 dokumen ini. Bugfix tetap WAJIB Proof-of-Defect (§0.6) |
-| **In-Flight Fix** — >3 berkas tapi berasal dari RFC yang SUDAH disetujui | **DILARANG buat RFC kedua, dan DILARANG buat branch kedua.** Lanjutkan di branch RFC yang aktif |
-| **Emergency Pause** — blocker arsitektural kritis di tengah eksekusi | BERHENTI. Jangan commit setengah jadi; susun `docs/rca/YYYYMMDD-<insiden>.md` (`templates/SKILL.md` bagian 3) lebih dulu |
+**Pengecualian Rute Eksekusi:**
+Semua rute eksekusi (seperti proyek kecil, bugfix minor, dan insiden kritis) TUNDUK pada tabel Routing Task `AGENTS.md` §2. Jika rute tersebut menggugurkan pembuatan RFC, maka pembuatan branch bisa langsung dilakukan tanpa RFC.
 
 **Tiga sambungan yang WAJIB dijaga konsisten:**
 - Nama branch WAJIB sama persis dengan field **Target Branch** di dokumen RFC (`templates` §1) dan di katalog `docs/rfc/README.md`.
@@ -42,11 +36,10 @@ Skill ini adalah **tahap 5** — dan ia berada **SETELAH** gerbang persetujuan, 
 
 ## §0. HUKUM BESI
 
-Tiga hukum yang DILARANG dilanggar dalam kondisi apa pun.
+Dua hukum yang DILARANG dilanggar dalam kondisi apa pun.
 
-1. **SUBAGENT DILARANG MENULIS.** Subagent hanya boleh: membaca file (`view_file`, `grep_search`), menjalankan perintah read-only (`git status`, `git log`, `git diff`, test runner, linter), dan melaporkan temuan. Subagent DILARANG: `write_to_file`, `replace_file_content`, `multi_replace_file_content`, `git commit`, `git checkout -b`, `git push`, `git merge`, atau perintah apa pun yang mengubah filesystem atau Git history. **Hanya Main Agent yang menyentuh filesystem dan Git.**
-2. **SATU COMMIT = SATU UNIT LOGIS.** Commit yang mencampur fitur baru + refactor + config update dalam satu snapshot adalah pelanggaran. Pecah menjadi commit atomik berdasarkan *alasan perubahan*, bukan jumlah file.
-3. **JANGAN COMMIT KE `main` ATAU `develop` SECARA LANGSUNG.** Semua pekerjaan WAJIB dilakukan di branch `feature/*`, `fix/*`, `hotfix/*`, atau `refactor/*`. Merge ke `develop` atau `main` hanya melalui mekanisme yang terkontrol (merge/PR).
+1. **SATU COMMIT = SATU UNIT LOGIS.** Commit yang mencampur fitur baru + refactor + config update dalam satu snapshot adalah pelanggaran. Pecah menjadi commit atomik berdasarkan *alasan perubahan*, bukan jumlah file.
+2. **JANGAN COMMIT KE `main` ATAU `develop` SECARA LANGSUNG.** Semua pekerjaan WAJIB dilakukan di branch `feature/*`, `fix/*`, `hotfix/*`, atau `refactor/*`. Merge ke `develop` atau `main` hanya melalui mekanisme yang terkontrol (merge/PR).
 
 ---
 
@@ -274,6 +267,9 @@ Urutan langkah WAJIB sebelum menyentuh kode di repo yang sudah ada:
   $ git checkout develop                # Pastikan di branch develop
   $ git pull --rebase origin develop    # Rebase, BUKAN merge (history bersih)
 
+[Langkah 1.5: Baseline Regresi]
+  WAJIB jalankan test suite yang ada SEBELUM mengubah apa pun (sesuai AGENTS.md §3.4). Catat hasilnya.
+
 [Langkah 2: Buat Branch Kerja]
   $ git checkout -b feature/<nama-fitur>    # atau fix/, refactor/, dll
   
@@ -419,54 +415,12 @@ git commit -m "feat(scope): deskripsi unit logis 2"
 
 ---
 
-## §6. SUBAGENT CONSTRAINTS
+## §6. BRANCH CLEANUP & MERGE PROTOCOL
 
-### Yang BOLEH Dilakukan Subagent
-
-| Aksi | Contoh | Alasan |
-| :--- | :--- | :--- |
-| Membaca file | `view_file`, `grep_search`, `list_dir` | Riset codebase |
-| Search web | `search_web`, `read_url_content` | Riset dokumentasi |
-| Git read-only | `git status`, `git log`, `git diff`, `git branch -a` | Audit repository |
-| Jalankan test/linter | `go test`, `cargo test`, `npm test`, `phpstan` | Cek baseline |
-| Kalkulasi / analisis | Hitung file, bandingkan output, parse log | Analisis temuan |
-
-### Yang DILARANG Dilakukan Subagent
-
-| Aksi | Alasan |
-| :--- | :--- |
-| `write_to_file` / `replace_file_content` / `multi_replace_file_content` | Hanya Main Agent yang menulis |
-| `git add` / `git commit` / `git push` | Hanya Main Agent yang mengubah Git history |
-| `git checkout -b` / `git merge` / `git rebase` | Hanya Main Agent yang mengelola branch |
-| `rm`, `mv`, `mkdir` (yang mengubah structure) | Hanya Main Agent yang mengubah filesystem |
-| Install dependency (`npm install`, `go get`, `cargo add`) | Mengubah lockfile = mengubah filesystem |
-
-### Alur Kerja dengan Subagent
-
-```
-Main Agent menerima task dari user
-│
-├── Apakah task butuh riset paralel (>3 domain, audit besar)?
-│   ├── YA → Spawn subagents (READ-ONLY) untuk:
-│   │         - Membaca referensi dari skills/
-│   │         - Audit file dan direktori codebase
-│   │         - Menjalankan test suite untuk baseline
-│   │         - Search web untuk dokumentasi
-│   │         └── Subagents melaporkan temuan ke Main Agent
-│   │
-│   └── TIDAK → Main Agent riset sendiri
-│
-├── Main Agent menyusun dokumen RFC di docs/rfc/
-├── User approve ("Gasskan")
-│
-├── Main Agent:
-│   ├── git checkout -b feature/...
-│   ├── Menulis SEMUA file sendiri (berdasarkan temuan subagent)
-│   ├── git add + commit per unit logis (§5)
-│   └── Lapor ke user: "Siap di-review/push"
-│
-└── User review → push / merge
-```
+Setelah task selesai dan seluruh Quality Gate (§6 `AGENTS.md`) lulus:
+1. Merge branch kerja ke `develop` atau `main` sesuai flow.
+2. Hapus branch lokal kerja: `git branch -d feature/<nama>`
+3. Pastikan working tree kembali bersih di branch utama (`main`/`develop`).
 
 ---
 
@@ -478,7 +432,7 @@ Sebelum SETIAP `git commit`, Main Agent WAJIB memverifikasi:
 [ ] Commit message mengikuti Conventional Commits format (§2)
 [ ] Perubahan dalam commit ini adalah SATU unit logis (§5)
 [ ] Tidak ada file yang seharusnya masuk commit lain (staging parsial)
-[ ] Tidak ada `// TODO`, credential hardcode, atau placeholder
+[ ] Patuh mutlak pada AGENTS.md §0 (Nol TODO, nol kredensial hardcode, telah ditest)
 [ ] Tidak ada file temporary / debug yang ikut ter-stage
 [ ] .gitignore sudah mencakup build artifacts, .env, node_modules, target/
 ```
