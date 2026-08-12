@@ -208,8 +208,8 @@ Dokumentasi rancangan arsitektur, keputusan sistem (ADR), dan riwayat implementa
 
 | RFC ID | Inisiatif Fitur / Arsitektur | Tier (T-Shirt) | Domain / Modul | Target Branch | Status | Tanggal Rilis |
 | :--- | :--- | :--- | :--- | :--- | :---: | :---: |
-| `20260801` | [Order State Machine](20260801-order-state-machine.md) | `Tier 1 (Full)` | Order / Core | `feature/order-sm` | `IMPLEMENTED` | 2026-08-01 |
-| `20260806` | [Payment Resilience & Idempotency](20260806-payment-idempotency.md) | `Tier 1 (Full)` | Fintech | `feature/pay-retry` | `ACCEPTED` | 2026-08-06 |
+| `20260801` | Order State Machine (contoh) | `Tier 1 (Full)` | Order / Core | `feature/order-sm` | `IMPLEMENTED` | 2026-08-01 |
+| `20260806` | Payment Resilience & Idempotency (contoh) | `Tier 1 (Full)` | Fintech | `feature/pay-retry` | `ACCEPTED` | 2026-08-06 |
 
 ### Panduan Siklus Status & Klasifikasi RFC Tiering:
 * `Tier 1 (Full RFC)`: Perubahan arsitektur sistem baru, pemecahan monolit, migrasi skema DB berisiko tinggi, atau breaking API. Menggunakan seluruh 6 Bab kerangka lengkap.
