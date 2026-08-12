@@ -280,7 +280,10 @@ Urutan langkah WAJIB sebelum menyentuh kode di repo yang sudah ada:
   
   Commit secara atomik (lihat §5).
 
-[Langkah 4: Integrasi]
+[Langkah 4: Integrasi (Red Team Validation & Merge)]
+  Khusus untuk fitur HTTP/API/UI, WAJIB memiliki EngProd Clearance Receipt (AGENTS.md §6)
+  sebelum langkah integrasi ini boleh dijalankan.
+
   Sebelum merge ke develop, pastikan branch up-to-date:
   $ git fetch origin
   $ git rebase origin/develop          # Rebase di atas develop terbaru

@@ -146,6 +146,7 @@ DILARANG mengubah status task jadi `[x]` sebelum SEMUA butir ini lulus.
 - **Defensive & Security:** STRIDE / OWASP mitigations terpasang, edge-case ditangani graceful — null/empty, timeout, DB lock, race condition.
 - **Self-Healing Circuit Breaker:** Batas maksimal 3 autonomous retry loops saat compile/test gagal. Jika setelah 3 loop masih gagal, DILARANG mencoba-coba acak: WAJIB lakukan audit asumsi dependensi/arsitektur atau picu Emergency Pause.
 - **Patch Receipt:** Sertakan bukti komparasi test, Git SHA, dan delta perubahan baris di laporan akhir.
+- **Dynamic Red Team Gate:** Khusus fitur HTTP/API/UI, status task DILARANG diubah jadi `[x]` sebelum *EngProd / Red Team Subagent* melakukan penetrasi dinamis (uji beban, injeksi) di server lokal dan merilis **EngProd Clearance Receipt**.
 - **Self-review:** WAJIB tulis hasilnya satu baris per butir, bukan sekadar mengaku sudah memeriksa. DILARANG menyingkat jadi "sudah direview".
   ```
   N+1 query: <temuan / nihil>   OWASP/STRIDE: <...>   race condition: <...>
@@ -163,7 +164,7 @@ DILARANG mengubah status task jadi `[x]` sebelum SEMUA butir ini lulus.
 | Merancang fitur besar / arsitektur kompleks | 1. WAJIB **Blast Radius Matrix**: Petakan hulu-hilir sebelum menyentuh kode lama.<br>2. WAJIB **Adversarial QA Swarm**: Picu subagent antagonis untuk stress-test desain.<br>3. WAJIB **Batch Protocol**: Kunci antarmuka di Batch 1, tulis logika di Batch 2.<br>4. WAJIB **State Memory**: Catat ke `system_map.md` & `LEARNED.md`. |
 | Edit ≤3 berkas, bugfix minor, investigasi | DILARANG spawn subagent, DILARANG membuat RFC, DILARANG Batch Protocol. *(Pengecualian: jika investigasi/bugfix minor secara eksplisit butuh membaca referensi >3 domain, spawn subagent HANYA untuk membaca referensi, BUKAN untuk menulis).* |
 
-- **Subagent DILARANG MENULIS.** Hanya boleh membaca file, search, dan execute read-only commands (termasuk test runner). DILARANG commit/push/install dependency. **Hanya Main Agent yang menulis file dan mengelola Git.**
+- **Subagent DILARANG MENULIS.** Hanya boleh membaca file, search, dan execute read-only commands (termasuk test runner). DILARANG commit/push/install dependency. **Hanya Main Agent yang menulis file dan mengelola Git.** *(Pengecualian Mutlak: Subagent EngProd/QA DIIZINKAN membuat file skrip penyerangan/test harness secara otonom HANYA di direktori `tests/e2e/` atau `C:\Users\muhan\.gemini\antigravity\scratch\`).*
 - **DAG Task Dependency:** Batch tugas di RFC diorganisasi dengan dependensi eksplisit (`DependsOn: [Batch X]`) agar alur eksekusi deterministik.
 - **Batch Writing Protocol:** Jika menulis >5 file, WAJIB dipecah jadi batch maks 3-4 file per turn. Setelah tiap batch: test → atomic commit → lanjut. Mencampur banyak file memicu truncation dan `// TODO` siluman.
 - **Batas sistem:** Nesting subagent maksimal 10 level. Model default `pro` (gunakan `flash` HANYA untuk task trivial seperti grep/list direktori).
