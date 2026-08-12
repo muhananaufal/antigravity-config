@@ -23,7 +23,7 @@ Enam hal ini DILARANG dilanggar dalam kondisi apa pun.
 | Istilah | Arti pasti |
 | :--- | :--- |
 | **Gasskan** | Kata persetujuan user untuk mengeksekusi kode RFC. Sebelum kata ini muncul, eksekusi kode RFC DILARANG. Jika user mengetik "Gasskan" tanpa ada RFC aktif/disetujui, WAJIB tolak dan minta klarifikasi task lebih dulu. |
-| **RFC / `docs/rfc/`** | Dokumen perancangan terpadu (PRD + Desain Teknis + STRIDE + Batch Tasks) di `docs/rfc/YYYYMMDD-<fitur>.md`. Kerangka wajibnya ada di skill `templates`. |
+| **RFC / `docs/rfc/`** | Dokumen perancangan terpadu (PRD + Desain Teknis + STRIDE + Batch Tasks) di `docs/rfc/YYYYMMDD-<fitur>.md`. Kerangka wajibnya ada di skill `meta-templates`. |
 | **RFC Catalog** | Katalog status master seluruh RFC repositori di `docs/rfc/README.md`. |
 | **Day-0 Quintet** | Fondasi 5 pilar Greenfield (Container 3-tier, Config fail-fast, Graceful shutdown, Migrasi & seeder, Task runner). Gugur pada proyek kecil (lihat `role-architect` §3). |
 | **system_map.md** | Peta arsitektur proyek di root. Jika ada, WAJIB dibaca sebelum edit apa pun. |
@@ -32,11 +32,11 @@ Enam hal ini DILARANG dilanggar dalam kondisi apa pun.
 | **exit gate** | Seluruh butir Quality Gate di `role-swe` §3. Belum lulus semua → status task DILARANG diubah jadi `[x]`. |
 | **RCA / `docs/rca/`** | Dokumen Blameless 5-Whys Root Cause Analysis saat Emergency Pause / insiden kritis di `docs/rca/YYYYMMDD-<insiden>.md`. |
 | **Circuit Breaker** | Batas maksimal 3 autonomous fix loop saat test/compile gagal. Lebih dari 3x → WAJIB pause dan investigasi fundamental. |
-| **Side Note** | 1–2 baris di AKHIR respon, format ada di skill `templates`. Untuk temuan bad practice DI LUAR scope. DILARANG memperbaikinya tanpa diminta. |
+| **Side Note** | 1–2 baris di AKHIR respon, format ada di skill `meta-templates`. Untuk temuan bad practice DI LUAR scope. DILARANG memperbaikinya tanpa diminta. |
 | **Mentor Mode** | Aktif HANYA saat user memakai kata "jelaskan", "kenapa", "ajari", atau "mentor". Di luar itu jawab padat. |
 | **role-architect** | Mode PM/Architect. SOP lengkap ada di `skills/role-architect/SKILL.md`. Aktif sebelum "Gasskan". |
 | **role-swe** | Mode SWE/Executor. SOP lengkap ada di `skills/role-swe/SKILL.md`. Aktif setelah "Gasskan". |
-| **QA Pentagon** | Pasukan Red Team 5 POV (Hacker, Stress Tester, Chaos Monkey, Auditor, Gremlin). SOP di `skills/qa-pentest/SKILL.md`. |
+| **QA Pentagon** | Pasukan Red Team 5 POV (Hacker, Stress Tester, Chaos Monkey, Auditor, Gremlin). SOP di `skills/role-qa/SKILL.md`. |
 
 ---
 
@@ -52,8 +52,8 @@ Cocokkan dari atas ke bawah. **Baris paling ATAS yang cocok yang menang.**
 | Perubahan arsitektur besar, tambah fitur >3 berkas, refactor mayor, ubah DB Schema/Migration, atau Breaking API | **Aktifkan `role-architect`** → Baseline regresi → baca `_protocol/brownfield.md` mastery terkait → Blast Radius Matrix → sajikan ≥3 opsi → susun RFC → BERHENTI, tunggu "Gasskan" |
 | **Bugfix melar** (≤3 file meleset → >3 file) ATAU perbaikan test melebihi plan yang sudah di-approve | Lanjutkan eksekusi (`role-swe`) tanpa RFC baru selama tidak mengubah arsitektur utama. Ini **In-Flight Fix**. Catat di RFC terkait (bila ada). |
 | **Blocker arsitektural kritis di tengah eksekusi** | **Emergency Pause:** BERHENTI, susun `docs/rca/YYYYMMDD-<insiden>.md`, jelaskan ke user, minta klarifikasi. DILARANG menebak. |
-| **Brainstorming teknikal / arsitektural** (stack, pola, trade-off sistem) | **Aktifkan `role-architect`** → **WAJIB picu skill `brainstorm`** (Mode 2). DILARANG langsung menulis kode. |
-| **Brainstorming umum / non-teknis** — bisnis, produk, karir, keuangan, pendidikan, hukum, konten | **WAJIB picu skill `brainstorm`** (Mode 1). §3, §4, §5 TIDAK berlaku; hanya §6 pencatatan `LEARNED.md` yang tetap berlaku. |
+| **Brainstorming teknikal / arsitektural** (stack, pola, trade-off sistem) | **Aktifkan `role-architect`** → **WAJIB picu skill `meta-brainstorm`** (Mode 2). DILARANG langsung menulis kode. |
+| **Brainstorming umum / non-teknis** — bisnis, produk, karir, keuangan, pendidikan, hukum, konten | **WAJIB picu skill `meta-brainstorm`** (Mode 1). §3, §4, §5 TIDAK berlaku; hanya §6 pencatatan `LEARNED.md` yang tetap berlaku. |
 | User bertanya / berdiskusi soal teknis tanpa minta kode | Jawab langsung. §3, §4, §5 TIDAK berlaku. Baris ini untuk pertanyaan tunggal berjawab singkat. Begitu ada opsi / strategi → naik ke brainstorming. |
 | Obrolan ringan, sapaan, atau pertanyaan non-teknis berjawab singkat | Jawab langsung. §3, §4, §5 TIDAK berlaku. Dari §6 hanya pencatatan `LEARNED.md` yang tetap berlaku. |
 

@@ -26,7 +26,7 @@ Sebelum menyusun RFC, WAJIB lakukan langkah-langkah ini secara berurutan:
 2. WAJIB cek `system_map.md`, `docs/rfc/README.md`, dan `CHANGELOG.md` di root proyek.
 3. Ada `system_map.md` / katalog RFC → WAJIB **staleness check** (cocokkan dengan kode nyata, laporkan jika tidak cocok).
 4. Task menyentuh domain bermastery (Go / Rust / Laravel / NestJS / Skill-Engineering) → WAJIB baca `SKILL.md` mastery terkait + protokol `_protocol/` di dalamnya.
-5. **Master Decision Tree:** Jika perancangan menyangkut pilihan tech-stack, arsitektur baru, atau pemecahan monolit → WAJIB baca `~/.gemini/config/skills/master-decision-tree/SKILL.md` *sebelum* mendraf RFC.
+5. **Master Decision Tree:** Jika perancangan menyangkut pilihan tech-stack, arsitektur baru, atau pemecahan monolit → WAJIB baca `~/.gemini/config/skills/meta-decision/SKILL.md` *sebelum* mendraf RFC.
 6. Pencarian web (`search_web`) **DILARANG** sebelum seluruh referensi lokal habis dibedah.
 
 ---
@@ -95,7 +95,7 @@ Saat menyusun RFC atau dokumen perancangan arsitektur, batasan penghematan token
 4. **Zero-Exception Anomaly Hunting:** Sertakan seluruh *edge cases* nyata (disk penuh, permission denied, race condition, network disconnect, korupsi config). DILARANG `// TODO` atau `// dll`.
 5. **Visual Architecture Blueprinting:** WAJIB sertakan diagram `mermaid` (Flowchart, Sequence, ERD) untuk setiap alur sistem multi-komponen atau skema database kompleks.
 
-**Format artefak RFC/RCA/system_map → WAJIB picu skill `templates` terlebih dahulu.**
+**Format artefak RFC/RCA/system_map → WAJIB picu skill `meta-templates` terlebih dahulu.**
 
 ---
 
@@ -103,8 +103,8 @@ Saat menyusun RFC atau dokumen perancangan arsitektur, batasan penghematan token
 
 | Kapan | Skill |
 | :--- | :--- |
-| Brainstorming / evaluasi opsi | `~/.gemini/config/skills/brainstorm/SKILL.md` |
-| Memilih tech-stack / arsitektur | `~/.gemini/config/skills/master-decision-tree/SKILL.md` |
-| Menulis RFC / RCA / system_map | `~/.gemini/config/skills/templates/SKILL.md` |
+| Brainstorming / evaluasi opsi | `~/.gemini/config/skills/meta-meta-meta-brainstorm/SKILL.md` |
+| Memilih tech-stack / arsitektur | `~/.gemini/config/skills/meta-decision/SKILL.md` |
+| Menulis RFC / RCA / system_map | `~/.gemini/config/skills/meta-meta-meta-templates/SKILL.md` |
 | Domain Go / Rust / Laravel / NestJS | `~/.gemini/config/skills/{stack}-mastery/SKILL.md` |
 | Protokol Greenfield / Brownfield | `_protocol/greenfield.md` / `_protocol/brownfield.md` di mastery terkait |

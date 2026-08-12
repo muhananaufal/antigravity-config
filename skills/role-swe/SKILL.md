@@ -30,7 +30,7 @@ Sebelum menulis satu baris kode, WAJIB lakukan langkah-langkah ini:
    - Tanpa pembanding, klaim "test lulus" setelah perubahan tidak bermakna.
    - Sudah merah sejak awal → sebutkan; DILARANG dihitung sebagai kerusakan Anda.
    - Tidak ada test sama sekali → katakan apa adanya + rekomendasikan harness.
-4. **Git Workflow:** WAJIB baca dan patuhi `~/.gemini/config/skills/git-workflow/SKILL.md`. Commit WAJIB Conventional Commits, branch WAJIB Git Flow, sertakan trailer: `Co-authored-by: aetheris <agents.aetheris@gmail.com>`.
+4. **Git Workflow:** WAJIB baca dan patuhi `~/.gemini/config/skills/meta-meta-meta-git-workflow/SKILL.md`. Commit WAJIB Conventional Commits, branch WAJIB Git Flow, sertakan trailer: `Co-authored-by: aetheris <agents.aetheris@gmail.com>`.
 5. **Monorepo Sub-Root Resolution:** Jika ada `go.mod`, `Cargo.toml`, `composer.json`, atau `package.json` di subfolder (`apps/api`, `services/auth`), test runner dan linter WAJIB dijalankan dari sub-direktori modul terkait.
 6. **Progressive Disclosure & Context Budgeting:** Gunakan `grep_search` atau `view_file` ber-range kecil (50–100 baris) untuk memetakan antarmuka terlebih dahulu sebelum membaca berkas utuh (>500 baris).
 7. Task menyentuh domain bermastery (Go / Rust / Laravel / NestJS) → WAJIB baca seluruh `SKILL.md` mastery terkait + `_protocol/` di dalamnya sebelum menulis kode.
@@ -66,7 +66,7 @@ Jika RFC memiliki >5 file yang perlu ditulis:
 - **KISS:** prioritaskan first-party / mature package. DILARANG reinvent the wheel.
 - **Defensive & Security:** STRIDE / OWASP mitigations terpasang, edge-case ditangani graceful — null/empty, timeout, DB lock, race condition.
 - **Patch Receipt:** Sertakan bukti komparasi test, Git SHA, dan delta perubahan baris di laporan akhir.
-- **Dynamic Red Team Gate:** Khusus fitur HTTP/API/UI → WAJIB panggil `qa-pentest` (QA Pentagon Swarm) dan tunggu **EngProd Clearance Receipt** sebelum task bisa dicentang `[x]`.
+- **Dynamic Red Team Gate:** Khusus fitur HTTP/API/UI → WAJIB panggil `role-qa` (QA Pentagon Swarm) dan tunggu **EngProd Clearance Receipt** sebelum task bisa dicentang `[x]`.
 - **Self-review:** WAJIB tulis hasilnya satu baris per butir.
   ```
   N+1 query: <temuan / nihil>   OWASP/STRIDE: <...>   race condition: <...>
@@ -79,8 +79,8 @@ Jika RFC memiliki >5 file yang perlu ditulis:
 
 | Kapan | Skill |
 | :--- | :--- |
-| Setiap operasi Git | `~/.gemini/config/skills/git-workflow/SKILL.md` |
-| Menulis Patch Receipt / Side Note | `~/.gemini/config/skills/templates/SKILL.md` |
+| Setiap operasi Git | `~/.gemini/config/skills/meta-meta-meta-git-workflow/SKILL.md` |
+| Menulis Patch Receipt / Side Note | `~/.gemini/config/skills/meta-meta-meta-templates/SKILL.md` |
 | Domain Go / Rust / Laravel / NestJS | `~/.gemini/config/skills/{stack}-mastery/SKILL.md` |
-| Setelah server lokal menyala (HTTP/API) | `~/.gemini/config/skills/qa-pentest/SKILL.md` |
+| Setelah server lokal menyala (HTTP/API) | `~/.gemini/config/skills/role-qa/SKILL.md` |
 | Protokol Greenfield / Brownfield | `_protocol/greenfield.md` / `_protocol/brownfield.md` di mastery terkait |
