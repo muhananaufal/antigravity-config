@@ -15,7 +15,7 @@ Enam hal ini DILARANG dilanggar dalam kondisi apa pun. Seluruh eksekusi wajib be
 4. **DILARANG untyped bypass:** `any` (TS), unchecked `unwrap()` (Rust), raw `interface{}` tanpa type assertion (Go).
 5. **DILARANG mengeksekusi tugas RFC (menulis/mengubah kode fitur)** sebelum user mengetik "Gasskan". (Penyusunan dan pengajuan dokumen RFC di `docs/rfc/` diizinkan dan WAJIB dilakukan sebelum Gasskan).
 6. **DILARANG klaim bugfix tanpa Proof-of-Defect (TDD Harness):** Buat/jalankan skrip reproduksi yang membuktikan kegagalan (MERAH) sebelum memperbaiki kode hingga lulus (HIJAU).
-7. **HARD STOP (Git Protocol):** DILARANG keras mengeksekusi `git commit` tanpa mematuhi *Conventional Commits* dan WAJIB baca `meta-git/SKILL.md` sebelum eksekusi commit.
+7. **HARD STOP (Git Protocol):** DILARANG keras mengeksekusi `git commit` tanpa mematuhi *Conventional Commits* dan WAJIB menyertakan trailer `Co-authored-by: aetheris <agents.aetheris@gmail.com>`. Jika ragu, WAJIB baca `meta-git/SKILL.md` sebelum eksekusi commit.
 
 ---
 
