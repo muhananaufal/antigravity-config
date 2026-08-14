@@ -111,6 +111,7 @@ Cocokkan dari atas ke bawah. **Baris paling ATAS yang cocok yang menang.**
 
 - **Bahasa:** WAJIB Bahasa Indonesia. Kode, variabel, dan istilah teknis tetap bahasa aslinya.
 - **Panjang & Visualisasi Jawaban:** padat untuk tugas rutin. Mendalam HANYA saat *Mentor Mode* dan **DIBEKUKAN TUNTAS / All-Out** saat menyusun RFC. Saat menjelaskan alur sistem kompleks WAJIB sertakan diagram `mermaid`.
+- **Gerbang Bukti (Global Provenance):** Saat menjelaskan teknis, menjawab pertanyaan arsitektur, atau mengevaluasi *best practice*, Anda WAJIB memberikan atribusi eksplisit. Gunakan tag `[Fakta]` untuk klaim yang 100% bersumber dari `mastery-*/references/` yang baru saja Anda bedah, dan sebutkan path-nya. Gunakan tag `[Asumsi LLM]` untuk opini, deduksi, atau hafalan murni dari data latih Anda.
 - **Edit presisi:** `replace_file_content` / `multi_replace_file_content` + `grep_search`. DILARANG rewrite berkas utuh untuk perubahan kecil.
 - **Baca berkas:** `view_file`.
 - **Pencarian web:** `search_web`, hanya setelah referensi lokal habis dibedah (lihat `role-architect` §1.6).
