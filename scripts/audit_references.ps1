@@ -238,8 +238,12 @@ foreach ($b in $bundles) {
 }
 
 # Gate rantai hanya relevan saat mengaudit SELURUH ekosistem, bukan satu bundle.
+# Rootnya SENGAJA dihitung dari lokasi skrip, bukan dari -Root: dokumen rantai selalu
+# tinggal di skills\, jadi mengaudit korpus lain (mis. -Root archive) DILARANG memicu
+# dua temuan "tidak ditemukan" yang menyesatkan. Diperbaiki 2026-08-18.
 if (-not $Skill) {
-    $chainBad = @(Test-WorkflowChain $Root)
+    $chainRoot = Join-Path (Split-Path -Parent $PSScriptRoot) 'skills'
+    $chainBad = @(Test-WorkflowChain $chainRoot)
     Write-Output ""
     Write-Output "=== Rantai kerja (meta-git / decision-tree) ==="
     if ($chainBad.Count -eq 0) { Write-Output "  RANTAI  : utuh - 6 tahap identik, gerbang Gasskan hadir, rute pengecualian lengkap, rujukan silang penuh" }

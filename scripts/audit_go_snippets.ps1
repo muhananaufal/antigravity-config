@@ -51,7 +51,17 @@ $ConfigRoot = Split-Path -Parent $PSScriptRoot
 # bahwa pengklasifikasi masih waras adalah ingatan sesi yang mengalibrasinya.
 if ($SelfTest) { $Root = Join-Path $PSScriptRoot 'testdata\go_snippets_control' }
 
-$RefRoot = if ($Root) { $Root } else { Join-Path $ConfigRoot "skills\$Skill\references" }
+# Korpus mastery-* dipindah dari skills\ ke archive\ pada 2026-08-18 (Lean v2).
+# skills\ tetap dicoba lebih dulu supaya bundle aktif mana pun yang punya blok Go
+# tetap terjangkau tanpa flag; archive\ jadi jatuh-balik untuk korpus pensiunan.
+$RefRoot = if ($Root) { $Root } else {
+    $candidates = @(
+        (Join-Path $ConfigRoot "skills\$Skill\references"),
+        (Join-Path $ConfigRoot "archive\$Skill\references")
+    )
+    $hit = $candidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+    if ($hit) { $hit } else { $candidates[0] }
+}
 
 if (-not (Test-Path $RefRoot)) { Write-Host "FATAL: tidak ada $RefRoot" -F Red; exit 2 }
 

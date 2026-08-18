@@ -1,7 +1,12 @@
----
-name: mastery-rust
-description: Gunakan skill ini ketika merancang arsitektur, Borrow Checker memory safety, Tokio async, Traits & Generics, Unsafe Rust & FFI, Axum microservices, HFT zero-cost abstractions, WebAssembly/eBPF, Tauri/Bevy/Blockchain, LLVM internals, Lock-free structures, atau Custom Allocators di Rust.
----
+# mastery-rust -- ARSIP (dinonaktifkan sebagai skill)
+
+> **Status:** korpus ini DIPENSIUNKAN dari jalur aktif pada 2026-08-18 (Lean Constitution v2).
+> Frontmatter skill-nya sengaja dicabut supaya bundle ini TIDAK lagi ditawarkan sebagai skill
+> oleh mesin discovery mana pun. Isinya tetap utuh dan boleh dikutip sebagai [fakta:path],
+> tetapi TIDAK wajib dibaca sebelum menulis kode -- kewajiban verifikasi kini menunjuk sumber
+> nyata (source library terpasang, dokumentasi resmi, kode proyek), lihat `AGENTS.md` section 0.1.
+>
+> **Cakupan asli:** Gunakan skill ini ketika merancang arsitektur, Borrow Checker memory safety, Tokio async, Traits & Generics, Unsafe Rust & FFI, Axum microservices, HFT zero-cost abstractions, WebAssembly/eBPF, Tauri/Bevy/Blockchain, LLVM internals, Lock-free structures, atau Custom Allocators di Rust.
 
 # Rust Mastery (L8 Neutral Encyclopedia)
 

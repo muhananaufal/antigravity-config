@@ -1,7 +1,12 @@
----
-name: mastery-golang
-description: Gunakan skill ini ketika merancang arsitektur, konkurensi, DB/SQLC, gRPC, HFT, testing, security, distributed systems, K8s Operators, Linux Systems Programming, atau runtime internals di Golang.
----
+# mastery-golang -- ARSIP (dinonaktifkan sebagai skill)
+
+> **Status:** korpus ini DIPENSIUNKAN dari jalur aktif pada 2026-08-18 (Lean Constitution v2).
+> Frontmatter skill-nya sengaja dicabut supaya bundle ini TIDAK lagi ditawarkan sebagai skill
+> oleh mesin discovery mana pun. Isinya tetap utuh dan boleh dikutip sebagai [fakta:path],
+> tetapi TIDAK wajib dibaca sebelum menulis kode -- kewajiban verifikasi kini menunjuk sumber
+> nyata (source library terpasang, dokumentasi resmi, kode proyek), lihat `AGENTS.md` section 0.1.
+>
+> **Cakupan asli:** Gunakan skill ini ketika merancang arsitektur, konkurensi, DB/SQLC, gRPC, HFT, testing, security, distributed systems, K8s Operators, Linux Systems Programming, atau runtime internals di Golang.
 
 # Golang Mastery (L8 Neutral Encyclopedia)
 

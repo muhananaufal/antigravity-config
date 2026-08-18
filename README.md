@@ -33,6 +33,9 @@
 ├── hooks.json                  # Lifecycle Hooks (Quality Gate otomatis saat Stop)
 ├── mcp_config.json             # Integrasi MCP Servers
 │
+├── archive/                    # Korpus PENSIUNAN — di luar jalur aktif, frontmatter skill dicabut
+│   └── mastery-{golang,rust,laravel,nestjs,skills}/
+│
 ├── drafts/                     # Draf perubahan konstitusi sebelum diaktifkan
 ├── projects/                   # State per-proyek Antigravity (ter-gitignore)
 │
@@ -47,13 +50,11 @@
 │   ├── LEARNED.md              # Living Brain — pelajaran yang sudah dibayar mahal
 │   └── tool-claude-code.md     # Adaptor Claude Code (terjemahan mekanisme tool)
 │
-├── skills/
+├── skills/                     # Tiga skill aktif. Itu saja.
 │   ├── meta-panel/             # ★ GERBANG UTAMA — Panel Multi-POV 7 lensa
 │   │   └── references/decision-tree.md   # Pohon keputusan stack & arsitektur
 │   ├── meta-brainstorm/        # Brainstorming umum & teknikal + Gerbang Bukti
-│   ├── meta-git/               # Git Flow, Conventional Commits, atribusi
-│   ├── mastery-skills/         # Meta-skill pembuatan & audit skill baru
-│   └── mastery-{golang,rust,laravel,nestjs}/   # ARSIP — korpus referensi domain
+│   └── meta-git/               # Git Flow, Conventional Commits, atribusi
 │
 └── plugins/                    # Plugin pihak ketiga (Apache-2.0) — ter-gitignore
 ```
@@ -133,15 +134,21 @@ Git Flow (`feature/*`, `fix/*`, `chore/*`), Conventional Commits, atomic commit 
 Co-authored-by: aetheris <agents.aetheris@gmail.com>
 ```
 
-### `mastery-skills`
+---
 
-Meta-skill untuk merancang dan mengaudit skill bundle baru.
+## 📦 `archive/` — korpus pensiunan
 
-### `mastery-{golang,rust,laravel,nestjs}` — **ARSIP**
+`mastery-{golang,rust,laravel,nestjs,skills}` — **720 berkas, 8.83 MB** (terukur `Get-ChildItem`). Dipensiunkan **2026-08-18**.
 
-Korpus referensi domain (703 berkas referensi total di seluruh bundle, terukur lewat `scripts/audit_references.ps1`). **Statusnya arsip sejak Lean v2:** masih di disk, boleh dikutip sebagai `[fakta:path]`, tetapi **tidak lagi wajib dibaca** sebelum menulis kode.
+**Apa artinya pensiun di sini:**
 
-Alasannya ada di `LEARNED.md`: volume referensi bukan nilai — struktur dan routing yang menentukan. Kewajiban verifikasi kini menunjuk sumber nyata (source library terpasang, dokumentasi resmi, kode proyek itu sendiri), bukan korpus internal yang bisa basi tanpa ada yang tahu.
+- Dipindah keluar dari `skills/`, dan **frontmatter `name:`/`description:`-nya dicabut** — jadi tidak lagi ditawarkan sebagai skill oleh mesin discovery mana pun. Ini alasan utama pemindahannya.
+- Isinya **tetap utuh** dan boleh dikutip sebagai `[fakta:path]`. Header tiap `SKILL.md` menyimpan cakupan aslinya.
+- **Tidak wajib dibaca** sebelum menulis kode. Kewajiban verifikasi menunjuk sumber nyata — source library terpasang, dokumentasi resmi, kode proyek itu sendiri (`AGENTS.md` §0.1).
+
+**Kenapa dipensiunkan, bukan dihapus:** `LEARNED.md` mencatat bahwa volume referensi bukan nilai — struktur dan routing yang menentukan; korpus internal juga bisa basi tanpa ada yang tahu, dan audit pernah menemukan kekeliruan faktual di dalamnya. Tapi isinya mahal dan masih benar sebagian besar, jadi ia dicabut dari jalur wajib, bukan dibuang.
+
+**Kalau suatu saat mau diaktifkan lagi:** kembalikan frontmatter di `SKILL.md`-nya dan pindahkan foldernya ke `skills/`. Riwayat lengkapnya ada di git.
 
 ---
 
@@ -212,18 +219,21 @@ Satu kali edit di `AGENTS.md` berlaku di keduanya tanpa sinkronisasi manual. **D
 ## 🛡️ Jaminan Integritas Sistem
 
 Klaim di bawah **terukur, bukan janji** — tiap baris menyebut perintah yang membuktikannya.
-Status terakhir diverifikasi **2026-08-18** lewat eksekusi langsung `scripts/audit_references.ps1` (bundle=7, berkas=703).
+Status terakhir diverifikasi **2026-08-18** lewat eksekusi langsung `scripts/audit_references.ps1` (bundle=2, berkas=2, exit 0).
 
 | Properti | Status | Cara membuktikan |
 | :--- | :--- | :--- |
 | Rantai kerja 6 tahap identik di kedua dokumen | ✅ utuh | `scripts/audit_references.ps1` |
 | Gerbang "Gasskan" hadir di seluruh dokumen rantai | ✅ | `scripts/audit_references.ps1` |
 | Rujukan silang antar-dokumen rantai resolve | ✅ | `scripts/audit_references.ps1` |
-| Berkas referensi lolos gate FATAL | ⚠️ **92 pelanggaran** — `mastery-rust` 88, `mastery-laravel` 4 | `scripts/audit_references.ps1` |
+| Berkas referensi **jalur aktif** lolos gate FATAL | ✅ 2/2 bundle | `scripts/audit_references.ps1` |
+| Berkas referensi **arsip** lolos gate FATAL | ⚠️ **92 pelanggaran belum diperbaiki** | `scripts/audit_references.ps1 -Root archive` |
 | Nol kredensial hardcode ter-commit | ✅ | `git log -S` + `scripts/quality_gate.ps1` |
 | Conventional Commits + Co-author trailer | ✅ | `git log --format=%s` |
 
-> **92 pelanggaran FATAL itu utang lama di korpus arsip, bukan regresi.** Keduanya ada di bundle yang tidak disentuh migrasi Lean v2 (`git log main..HEAD -- skills/mastery-rust skills/mastery-laravel` mengembalikan kosong). Karena korpus itu kini berstatus arsip dan tidak lagi di jalur wajib, dampaknya turun — tapi angkanya tetap ditulis di sini, bukan disembunyikan.
+> **Baca dua baris FATAL itu bersamaan.** Audit rutin kini exit 0 — tapi **bukan karena 92 pelanggarannya diperbaiki**, melainkan karena korpusnya pindah ke `archive/` dan keluar dari cakupan default `-Root skills`. Utangnya masih ada persis seperti sebelumnya (`mastery-rust` 88, `mastery-laravel` 4: berkas di bawah 130 baris + satu berkas UTF-16LE), dan bisa dilihat kapan saja lewat `-Root archive`.
+>
+> Angka hijau yang lahir dari mempersempit cakupan adalah jenis kebohongan yang paling mudah dipercaya. Karena itu barisnya dipisah, bukan dihapus.
 
 > **DILARANG menulis klaim "0 Broken Paths" atau sejenisnya tanpa perintah yang membuktikannya.**
 > Garansi yang tidak bisa dijalankan hanyalah dekorasi, dan lebih berbahaya daripada tidak ada.
