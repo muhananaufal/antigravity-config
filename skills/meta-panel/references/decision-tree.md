@@ -1,15 +1,12 @@
----
-name: meta-decision
-description: Gunakan skill ini ketika merancang arsitektur sistem baru, memilih tech-stack, membuat proyek dari nol, atau menambahkan komponen arsitektur besar (message broker, caching strategy, pecah monolit). WAJIB dilewati sebelum memilih bahasa/framework apa pun.
----
+# 🌳 decision-tree — Pohon Keputusan Arsitektural
 
-# 🌳 meta-decision — Principal Engineering Architectural Guide
-
-> **Filosofi:** Dokumen ini adalah peta keputusan arsitektural yang bersifat **language-agnostic** (bebas bahasa pemrograman). Ia tidak bertanya "Pakai Go atau Laravel?", melainkan bertanya "Apa masalah bisnisnya?" — lalu mengarahkan Anda ke solusi yang tepat beserta referensi spesifik di perpustakaan keempat bahasa kita (Golang, Rust, Laravel, NestJS).
+> **Status:** REFERENSI `meta-panel`, bukan gerbang wajib. Dibuka saat lensa 📋 Manager atau eskalasi §4 panel menyentuh pemilihan stack / komponen arsitektur besar.
 >
-> **Dipanggil oleh:** `role-architect/SKILL.md` §1.5 (mode PM/Architect sebelum membuat RFC). WAJIB dilewati sebelum memilih stack atau arsitektur apa pun.
+> **Filosofi:** peta keputusan yang **language-agnostic**. Ia tidak bertanya "Pakai Go atau Laravel?", melainkan "Apa masalah bisnisnya?" — lalu mengarahkan ke solusi yang tepat.
 >
-> **Cara Membaca:** Ikuti pohon dari atas ke bawah. Setiap NODE adalah pertanyaan. Jawab, lalu ikuti cabangnya. Berhenti di DAUN (leaf) yang memberikan keputusan final beserta rujukan domain.
+> **Cara Membaca:** Ikuti pohon dari atas ke bawah. Setiap NODE adalah pertanyaan. Jawab, lalu ikuti cabangnya. Berhenti di DAUN (leaf) yang memberikan keputusan final.
+>
+> **Soal baris `Ref:`** — penunjuk ke korpus `skills/mastery-*/references/` yang kini berstatus **arsip**: masih ada di disk dan boleh dikutip sebagai `[fakta:path]`, tetapi TIDAK lagi wajib dibaca sebelum menulis kode. Kewajiban verifikasi sekarang ada di `AGENTS.md` §0.1 dan §3.4 — yang menuntut sumber nyata (source library terpasang, dokumentasi resmi, kode proyek), bukan korpus internal.
 
 ---
 
@@ -615,7 +612,7 @@ NODE 9.1: Level keamanan apa yang dibutuhkan?
 │   ├── CSRF: Token untuk form submission (atau SameSite cookie).
 │   ├── CORS: Whitelist origin. JANGAN Access-Control-Allow-Origin: *
 │   ├── Password: Argon2id (pilihan utama) atau bcrypt. JANGAN MD5/SHA.
-│   ├── Secrets: Patuhi aturan rahasia di `AGENTS.md` §6 (zero placeholder & schema validation).
+│   ├── Secrets: DILARANG credential hardcode (`AGENTS.md` §0.5). Pakai env + validasi schema saat boot.
 │   ├── Dependencies: Audit reguler (npm audit, cargo audit, composer audit).
 │   └── HTTPS: Everywhere. No exceptions.
 │   Ref: semua bahasa → domain security masing-masing
@@ -697,7 +694,7 @@ NODE 10.1: Bagaimana strategi pengujian yang tepat?
 └── ⚠️ ANTI-PATTERN:
     - Mocking SEMUA dependency → test lulus tapi production meledak.
     - Test yang bergantung pada urutan eksekusi → flaky test nightmare.
-    - Test tautologis tanpa asersi memadai (pelanggaran mutlak `AGENTS.md` §6).
+    - Test tautologis tanpa asersi memadai (pelanggaran exit gate `AGENTS.md` §5.5).
 ```
 
 ---
@@ -708,21 +705,20 @@ NODE 10.1: Bagaimana strategi pengujian yang tepat?
 2. **Brownfield:** Mulai dari BAGIAN 0 → lewati BAGIAN 1 → langsung ke BAGIAN yang relevan dengan fitur baru.
 3. **Audit Arsitektur:** Baca BAGIAN 6 (Observability), 9 (Security), 10 (Testing) untuk mengecek apakah sistem eksisting sudah memenuhi baseline.
 
-> **Ingat:** Pohon ini adalah KOMPAS, bukan PETA. Ia memberi arah, bukan langkah-langkah kode spesifik. Setelah Anda menemukan arah yang tepat dari pohon ini, baru buka referensi domain spesifik di `SKILL.md` masing-masing bahasa untuk mendapatkan kode dan arsitektur detail.
+> **Ingat:** Pohon ini adalah KOMPAS, bukan PETA. Ia memberi arah, bukan langkah kode spesifik. Arah yang ia berikan tetap berstatus `[inferensi]` sampai diverifikasi ke sumber nyata.
 
 ## 🔗 Posisi dalam Rantai Kerja
 
-Pohon ini adalah **tahap 2** dari enam. Keputusan yang Anda ambil di sini menjadi masukan untuk dokumen RFC, bukan izin untuk mulai menulis kode.
+Pohon ini dibuka **di dalam** Panel, bukan sebelum atau sesudahnya. Keputusannya menjadi masukan bagi lensa panel — bukan izin untuk mulai menulis kode.
 
 | # | Tahap | Dokumen |
 | :-: | :--- | :--- |
 | 1 | Routing task | `AGENTS.md` §2 |
-| 2 | **Pilih stack & arsitektur** | **`meta-decision/SKILL.md` — Anda di sini** |
-| 3 | Tulis `docs/rfc/YYYYMMDD-<fitur>.md` + katalog | `meta-templates/SKILL.md` bagian 1–2 |
-| 4 | **BERHENTI — tunggu user mengetik "Gasskan"** | `AGENTS.md` §0.5 · **GERBANG MUTLAK** |
-| 5 | Branch, atomic commit, merge | `meta-git/SKILL.md` bagian 1–5 |
-| 6 | Patch Receipt + centang Kanban di RFC | `meta-templates/SKILL.md` bagian 6 |
+| 2 | Sapu 7 lensa Panel Multi-POV | `skills/meta-panel/SKILL.md` bagian 1–2 |
+| 3 | **Pilih stack & arsitektur** | **dokumen ini — Anda di sini** |
+| 4 | **BERHENTI — tunggu persetujuan user ("Gasskan")** | `AGENTS.md` §0.2 · **GERBANG MUTLAK** |
+| 5 | Branch, atomic commit, merge | `skills/meta-git/SKILL.md` |
+| 6 | Disiplin eksekusi + exit gate | `AGENTS.md` §5 |
 
-> **Pengecualian Rute:** Semua rute eksekusi (seperti proyek kecil, bugfix minor) tunduk murni pada `AGENTS.md` §2.
-
+**Pengecualian Rute Eksekusi:** perbaikan trivial yang panelnya nihil temuan (`meta-panel` bagian 0.4) boleh langsung dikerjakan tanpa melewati tahap 3–4.
 

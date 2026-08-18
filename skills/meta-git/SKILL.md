@@ -14,24 +14,21 @@ Skill ini adalah **tahap 5** — dan ia berada **SETELAH** gerbang persetujuan, 
 | # | Tahap | Dokumen |
 | :-: | :--- | :--- |
 | 1 | Routing task | `AGENTS.md` §2 |
-| 2 | Pilih stack & arsitektur | `meta-decision/SKILL.md` |
-| 3 | Tulis `docs/rfc/YYYYMMDD-<fitur>.md` + katalog | `meta-templates/SKILL.md` bagian 1–2 |
-| 4 | **BERHENTI — tunggu user mengetik "Gasskan"** | `AGENTS.md` §0.5 · **GERBANG MUTLAK** |
-| 5 | **Aktifkan `role-swe` → Pre-Code Checklist** | `role-swe/SKILL.md` §1 |
-| 6 | **Branch, atomic commit, merge** | **`meta-git/SKILL.md` — Anda di sini** |
-| 7 | Quality Gate + Patch Receipt | `role-swe/SKILL.md` §3 |
+| 2 | Sapu 7 lensa Panel Multi-POV | `skills/meta-panel/SKILL.md` bagian 1–2 |
+| 3 | Pilih stack & arsitektur | `skills/meta-panel/references/decision-tree.md` |
+| 4 | **BERHENTI — tunggu persetujuan user ("Gasskan")** | `AGENTS.md` §0.2 · **GERBANG MUTLAK** |
+| 5 | **Branch, atomic commit, merge** | **`meta-git/SKILL.md` — Anda di sini** |
+| 6 | Disiplin eksekusi + exit gate | `AGENTS.md` §5 |
 
 > Nomor **§** selalu merujuk `AGENTS.md`. Untuk seksi milik skill lain dipakai kata "bagian"; seksi dokumen ini sendiri ditulis §1–§10 tanpa nama berkas.
 
-**DILARANG membuat feature branch untuk eksekusi kode berjalur RFC sebelum tahap 4 (Gasskan) terlewati.** Dokumen perancangan RFC (`docs/rfc/`) dan katalog ter-commit pada branch aktif saat ini (`main`/`develop`) dengan commit `docs(rfc): add initial RFC plan` sebelum Gasskan, sehingga working tree tetap bersih (§9 `AGENTS.md`). Pembuatan branch `feature/*` dilakukan setelah Gasskan.
+**DILARANG membuat feature branch untuk eksekusi sebelum tahap 4 (persetujuan) terlewati.** Panel disajikan di dalam percakapan, bukan sebagai dokumen ter-commit — jadi sebelum "Gasskan" tidak ada berkas yang perlu masuk ke `main`/`develop`, dan working tree tetap bersih (`AGENTS.md` §8). Pembuatan branch `feature/*` dilakukan setelah persetujuan.
 
-**Pengecualian Rute Eksekusi:**
-Semua rute eksekusi (seperti proyek kecil, bugfix minor, dan insiden kritis) TUNDUK pada tabel Routing Task `AGENTS.md` §2. Jika rute tersebut menggugurkan pembuatan RFC, maka pembuatan branch bisa langsung dilakukan tanpa RFC.
+**Pengecualian Rute Eksekusi:** perbaikan trivial yang panelnya nihil temuan (`meta-panel` bagian 0.4) boleh langsung dikerjakan tanpa melewati tahap 3–4 — branch tetap dibuat sesuai §1 di bawah.
 
-**Tiga sambungan yang WAJIB dijaga konsisten:**
-- Nama branch WAJIB sama persis dengan field **Target Branch** di dokumen RFC (`templates` §1) dan di katalog `docs/rfc/README.md`.
-- Satu **Batch** RFC memetakan ke satu atau lebih commit atomik (§5 di bawah); setelah batch lolos Quality Gate dan ter-commit, centang `[x]`-nya di RFC.
-- Kerangka RFC, RCA, `system_map.md`, dan Patch Receipt seluruhnya didefinisikan di `meta-templates/SKILL.md` — DILARANG mengarang formatnya sendiri.
+**Dua sambungan yang WAJIB dijaga konsisten:**
+- Satu unit logis pekerjaan memetakan ke satu commit atomik (§5 di bawah); commit hanya setelah exit gate `AGENTS.md` §5.5 lulus.
+- Batch menulis maksimal 3–4 berkas per giliran (`AGENTS.md` §5.3); tiap batch: test terkait → atomic commit → lanjut.
 
 ---
 
@@ -164,18 +161,18 @@ feat: → minor bump  (1.0.0 → 1.1.0)
 
 ## §2b. STACKED PRs & MICRO-BRANCHING (SOTA Devin Protocol)
 
-Untuk fitur besar berbasis All-in-One RFC yang mencakup banyak batch tugas:
+Untuk fitur besar yang pecah menjadi banyak batch tugas:
 
 ```
 develop
-  ├── feature/rfc-20260806-core-schema (Batch 1: Contract Locking & Migrations)
-  │     └── feature/rfc-20260806-domain-logic (Batch 2: Services & Repositories)
-  │           └── feature/rfc-20260806-http-transport (Batch 3: Controllers & E2E)
+  ├── feature/20260806-core-schema (Batch 1: Contract Locking & Migrations)
+  │     └── feature/20260806-domain-logic (Batch 2: Services & Repositories)
+  │           └── feature/20260806-http-transport (Batch 3: Controllers & E2E)
 ```
 
-1. **Micro-Branching per Batch:** Setiap batch RFC yang bersifat independen dikerjakan dalam branch terisolasi yang di-stack di atas batch sebelumnya.
-2. **Atomic Verification Gate:** Setiap micro-branch wajib melewati seluruh test unit/integrasi dan quality gate sebelum di-merge ke branch fitur utama (`feature/rfc-*`).
-3. **Clean Squash/Rebase:** Saat seluruh batch selesai, branch di-squash/rebase secara bersih ke `develop` dengan melampirkan Patch Receipt lengkap.
+1. **Micro-Branching per Batch:** Setiap batch yang bersifat independen dikerjakan dalam branch terisolasi yang di-stack di atas batch sebelumnya.
+2. **Atomic Verification Gate:** Setiap micro-branch wajib melewati seluruh test unit/integrasi dan exit gate (`AGENTS.md` §5.5) sebelum di-merge ke branch fitur utama.
+3. **Clean Squash/Rebase:** Saat seluruh batch selesai, branch di-squash/rebase secara bersih ke `develop`.
 
 ---
 
@@ -189,12 +186,9 @@ Urutan langkah yang WAJIB diikuti saat membuat proyek dari nol:
   build sebelum .gitignore ada dan ter-commit. Secret yang ter-stage
   sekali pun sulit dihapus permanen dari Git History.
 
-  DIKECUALIKAN: dokumen perencanaan (docs/rfc/, docs/rca/, system_map.md).
-  Rantai kerja menempatkannya di tahap 3, yaitu SEBELUM "Gasskan" dan
-  karenanya sebelum git init di tahap 5 - jadi urutannya memang wajib
-  mendahului .gitignore. Larangan di atas melindungi dari kebocoran
-  kredensial dan artefak biner; berkas Markdown perencanaan tidak
-  memuat keduanya.
+  Larangan ini melindungi dari kebocoran kredensial dan artefak biner.
+  Panel disajikan di percakapan, bukan sebagai berkas - jadi tidak ada
+  dokumen perencanaan yang perlu mendahului .gitignore.
 
   Salin baseline .gitignore dari §8 dokumen ini ke root project:
   $ git init
@@ -282,7 +276,7 @@ Urutan langkah WAJIB sebelum menyentuh kode di repo yang sudah ada:
   $ git pull --rebase origin develop    # Rebase, BUKAN merge (history bersih)
 
 [Langkah 1.5: Baseline Regresi]
-  WAJIB jalankan test suite yang ada SEBELUM mengubah apa pun (sesuai AGENTS.md §3.4). Catat hasilnya.
+  WAJIB jalankan test suite yang ada SEBELUM mengubah apa pun (sesuai AGENTS.md §5.1). Catat hasilnya.
 
 [Langkah 2: Buat Branch Kerja]
   $ git checkout -b feature/<nama-fitur>    # atau fix/, refactor/, dll
@@ -290,13 +284,14 @@ Urutan langkah WAJIB sebelum menyentuh kode di repo yang sudah ada:
   DILARANG langsung bekerja di develop atau main.
 
 [Langkah 3: Kerjakan Fitur]
-  ... eksekusi batch checklist di docs/rfc/ ...
+  ... eksekusi per batch, maksimal 3-4 berkas per giliran (AGENTS.md §5.3) ...
   
   Commit secara atomik (lihat §5).
 
 [Langkah 4: Integrasi (Red Team Validation & Merge)]
-  Khusus untuk fitur HTTP/API/UI, WAJIB memiliki EngProd Clearance Receipt (AGENTS.md §6)
-  sebelum langkah integrasi ini boleh dijalankan.
+  Khusus untuk fitur HTTP/API/UI, WAJIB menjalankan checklist serangan
+  lensa Security/Ops/QA (meta-panel §1 lensa 4/5/7) terhadap server yang
+  benar-benar menyala sebelum langkah integrasi ini boleh dijalankan.
 
   Sebelum merge ke develop, pastikan branch up-to-date:
   $ git fetch origin
@@ -434,7 +429,7 @@ git commit -m "feat(scope): deskripsi unit logis 2"
 
 ## §6. BRANCH CLEANUP & MERGE PROTOCOL
 
-Setelah task selesai dan seluruh Quality Gate (`role-swe/SKILL.md` §3) lulus:
+Setelah task selesai dan seluruh exit gate (`AGENTS.md` §5.5) lulus:
 1. Merge branch kerja ke `develop` atau `main` sesuai flow.
 2. Hapus branch lokal kerja: `git branch -d feature/<nama>`
 3. Pastikan working tree kembali bersih di branch utama (`main`/`develop`).

@@ -23,6 +23,11 @@
 
 .NOTES
   Berkas ini WAJIB ASCII murni (PowerShell 5.1 salah membaca UTF-8 tanpa BOM pada .ps1).
+
+  STATUS (Lean Constitution v2): korpus mastery-* kini berstatus ARSIP - masih ada di
+  disk dan boleh dikutip, tapi TIDAK lagi wajib dibaca sebelum menulis kode. Skrip ini
+  tetap berfungsi dan tetap berguna saat korpus itu disunting, hanya saja ia bukan lagi
+  bagian dari gerbang rutin. Jalankan sesuai kebutuhan, bukan tiap sesi.
 #>
 
 [CmdletBinding()]

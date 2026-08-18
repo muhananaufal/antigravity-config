@@ -27,6 +27,8 @@ Tujuh hukum. Berlaku di kedua mode dan di ranah apa pun — bisnis, karir, hukum
 6. **Fetch gagal WAJIB dicatat sebagai GAGAL.** Paywall, 404, timeout, halaman JS-only, robots-block. DILARANG mengganti isinya dengan rangkuman dari ingatan lalu tetap menempelkan URL-nya — itu sitasi palsu berkedok sumber nyata.
 7. **Ketidaktahuan WAJIB dinyatakan terbuka.** "Saya tidak tahu, dan begini cara mengetahuinya" adalah jawaban yang sah dan lebih bernilai daripada tebakan yang dipoles. Diskusi yang berdiri di atas tebakan halus lebih mahal daripada diskusi yang berhenti sebentar untuk mencari.
 
+> **SSOT label:** definisi keempat label epistemik ada di `AGENTS.md` §3 dan berlaku di SEMUA mode — termasuk saat menulis kode, bukan hanya saat brainstorming. Hukum 2–7 di atas adalah pengetatan khusus sesi riset: yang ditambahkan §0 adalah **Evidence Ledger** (`[fakta:E#]` menuntut entri Ledger, bukan sekadar path) dan kewajiban pencarian pembantah. Bila §0 dan `AGENTS.md` §3 tampak berbeda, §0 yang lebih ketat — dan yang lebih ketat menang.
+
 > **Turunan LEARNED.md:** "Angka tanpa sumber = karangan" dan "Verifikasi State Nyata > Klaim Teks". §0 adalah penerapan keduanya ke ranah diskusi, bukan cuma ranah kode.
 
 ---
@@ -153,7 +155,7 @@ Dipicu saat user berdiskusi soal: pemilihan stack/database, pemecahan modul/mono
 ### Aturan Baku Teknikal
 
 1. **Fase 0 WAJIB dan tidak bisa dilewati.** Di mode ini Ledger kosong hampir selalu berarti risetnya yang belum dikerjakan, bukan topiknya yang bebas fakta. Minimal **3 klaim penentu** WAJIB tertutup Tier 0–2 sebelum matriks evaluasi disajikan.
-2. **Kepatuhan Penuh terhadap AGENTS.md:** Di mode ini, Anda sedang melakukan arsitektur. Anda WAJIB mematuhi semua gerbang mutlak Konstitusi termasuk larangan menulis kode sebelum "Gasskan", meta-decision (lihat `role-architect` §1.5), dan Challenger Procedure (`AGENTS.md` §4 - menyajikan ≥3 opsi netral, detail di `role-architect` §5).
+2. **Kepatuhan Penuh terhadap AGENTS.md:** Di mode ini Anda sedang melakukan arsitektur. WAJIB patuh pada seluruh Gerbang Mutlak — termasuk larangan mengeksekusi sebelum persetujuan (`AGENTS.md` §0.2) dan Challenger Procedure (`AGENTS.md` §4: ≥3 opsi netral, masing-masing ≥3 kelebihan dan ≥3 kekurangan). Pohon keputusan stack ada di `skills/meta-panel/references/decision-tree.md` — rujukan, bukan gerbang wajib.
 3. **Matriks Evaluasi Berbobot:** Bandingkan opsi berdasarkan dimensi engineering terukur. Setiap sel yang memuat angka WAJIB mematuhi Protokol Angka di `references/evidence-protocol.md` dan membawa nomor Ledger.
    - **Throughput & Latency (p95/p99)**
    - **Data Integrity & Failure Mode (Network partition, node crash, data loss risk)**
@@ -161,7 +163,7 @@ Dipicu saat user berdiskusi soal: pemilihan stack/database, pemecahan modul/mono
    - **Maintainability & Developer Experience (Type safety, toolchain, onboarding)**
 4. **Steelmanning Alternatif:** Sebelum mengkritik suatu pola (misal: "Event-Driven terlalu kompleks"), sajikan konfigurasi terbaiknya (misal: "Event-Driven dengan Transactional Outbox + Watermill") agar perbandingan adil dan objektif.
 5. **Cek kesegaran & keberadaan.** Nama library, flag CLI, opsi konfigurasi, dan nama API WAJIB dikonfirmasi masih ada di versi yang dibahas. Ingatan model memelihara API yang sudah dihapus dan library yang sudah tidak dirawat — inilah kelas halusinasi termahal di diskusi arsitektur.
-6. **Diagram Visual Mermaid WAJIB:** Sesuai `AGENTS.md` §6 (Tooling), saat menjelaskan alur sistem, topologi multi-komponen, state machine, atau skema DB kompleks dalam mode ini, WAJIB menyertakan diagram visual interaktif dalam blok kode `mermaid`.
+6. **Diagram Visual Mermaid WAJIB:** Sesuai `AGENTS.md` §7 (Tooling & Komunikasi), saat menjelaskan alur sistem, topologi multi-komponen, state machine, atau skema DB kompleks dalam mode ini, WAJIB menyertakan diagram visual interaktif dalam blok kode `mermaid`.
 7. **Penutup Sesi Teknikal:** Rangkum ringkas:
    - **Keputusan Arsitektur Terpilih** + nomor Ledger yang menopangnya
    - **Asumsi Beban & Batasan Sistem**

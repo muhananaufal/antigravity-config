@@ -87,20 +87,29 @@ function Get-CodeLines([string[]]$lines) {
     return $code
 }
 
-# --- Gate rantai kerja: templates / meta-decision / meta-git ---
-# Rantai 6 tahap sengaja diduplikasi ke tiga skill agar tiap dokumen tahu posisinya.
+# --- Gate rantai kerja: meta-git / decision-tree (Lean Constitution v2) ---
+# Rantai 6 tahap sengaja diduplikasi ke dua dokumen agar masing-masing tahu posisinya.
 # Duplikasi tanpa penjaga adalah drift yang menunggu terjadi - persis mekanisme yang
 # melahirkan temuan H7 dan H11. Dicek di sini supaya tidak bisa melenceng diam-diam.
+#
+# v1 menaruh rantai ini di tiga skill (meta-templates / meta-decision / meta-git).
+# Dua yang pertama sudah dihapus/dipindah oleh migrasi Lean v2; gate menyesuaikan
+# ke dua dokumen yang tersisa, bukan dipensiunkan - nilai anti-drift-nya tidak hilang
+# hanya karena jumlah dokumennya berkurang.
 function Test-WorkflowChain([string]$skillsRoot) {
     $chainFiles = @{
-        'meta-templates'            = Join-Path $skillsRoot 'templates\SKILL.md'
-        'meta-decision' = Join-Path $skillsRoot 'meta-decision\SKILL.md'
-        'meta-git'         = Join-Path $skillsRoot 'meta-git\SKILL.md'
+        'meta-git'      = Join-Path $skillsRoot 'meta-git\SKILL.md'
+        'decision-tree' = Join-Path $skillsRoot 'meta-panel\references\decision-tree.md'
+    }
+    # Tiap dokumen WAJIB menunjuk saudaranya lewat path ini, bukan sekadar namanya.
+    $chainRefs = @{
+        'meta-git'      = 'meta-panel/references/decision-tree.md'
+        'decision-tree' = 'meta-git/SKILL.md'
     }
     $bad = New-Object System.Collections.Generic.List[string]
     $sig = @{}
     foreach ($k in $chainFiles.Keys) {
-        if (-not (Test-Path -LiteralPath $chainFiles[$k])) { $bad.Add("RANTAI       $k/SKILL.md tidak ditemukan"); continue }
+        if (-not (Test-Path -LiteralPath $chainFiles[$k])) { $bad.Add("RANTAI       $k tidak ditemukan di $($chainFiles[$k])"); continue }
         $txt = [IO.File]::ReadAllText($chainFiles[$k])
 
         # 6 tahap, dinormalkan supaya penanda "Anda di sini" tidak dihitung beda
@@ -113,16 +122,13 @@ function Test-WorkflowChain([string]$skillsRoot) {
         if ($txt -notmatch 'GERBANG MUTLAK') { $bad.Add("RANTAI       $k  tidak menyebut GERBANG MUTLAK") }
         if ($txt -notmatch 'Gasskan')        { $bad.Add("RANTAI       $k  tidak menyebut gerbang Gasskan") }
 
-        # Empat rute AGENTS.md section 2 yang MENGGUGURKAN tahap RFC
-        foreach ($r in @('Proyek baru \*\*kecil', 'Edit \*\*.3 berkas', 'In-Flight Fix', 'Emergency Pause')) {
-            if ($txt -notmatch $r) { $bad.Add("RANTAI       $k  rute pengecualian hilang: $($r -replace '\\','')") }
-        }
+        # Rute pengecualian v2: panel nihil temuan boleh langsung jalan.
+        # Tanpa ini, dokumen terbaca seolah SETIAP perbaikan trivial wajib panel penuh.
+        if ($txt -notmatch 'Pengecualian Rute Eksekusi') { $bad.Add("RANTAI       $k  tidak menyebut Pengecualian Rute Eksekusi") }
+        if ($txt -notmatch 'nihil temuan')               { $bad.Add("RANTAI       $k  rute pengecualian tidak menyebut syarat panel nihil temuan") }
 
-        # Rujukan silang: tiap dokumen WAJIB menunjuk dua saudaranya
-        foreach ($o in $chainFiles.Keys) {
-            if ($o -eq $k) { continue }
-            if ($txt -notmatch [regex]::Escape("$o/SKILL.md")) { $bad.Add("RANTAI       $k  tidak merujuk $o/SKILL.md") }
-        }
+        # Rujukan silang: tiap dokumen WAJIB menunjuk saudaranya
+        if ($txt -notmatch [regex]::Escape($chainRefs[$k])) { $bad.Add("RANTAI       $k  tidak merujuk $($chainRefs[$k])") }
 
         # "SKILL.md section-n" ambigu: di korpus ini section selalu berarti AGENTS.md
         # U+00A7 dibangun lewat [char] agar berkas ini tetap ASCII murni (syarat baris 8).
@@ -130,7 +136,7 @@ function Test-WorkflowChain([string]$skillsRoot) {
         if ($txt -match ("SKILL\.md``?\s*" + [regex]::Escape($SECT))) { $bad.Add("RANTAI       $k  memakai tanda section untuk seksi skill lain (pakai kata 'bagian')") }
     }
     $uniq = @($sig.Values | Sort-Object -Unique)
-    if ($uniq.Count -gt 1) { $bad.Add("RANTAI       tabel 6 tahap TIDAK identik di ketiga skill") }
+    if ($uniq.Count -gt 1) { $bad.Add("RANTAI       tabel 6 tahap TIDAK identik di kedua dokumen") }
     return $bad
 }
 
@@ -235,8 +241,8 @@ foreach ($b in $bundles) {
 if (-not $Skill) {
     $chainBad = @(Test-WorkflowChain $Root)
     Write-Output ""
-    Write-Output "=== Rantai kerja (templates / meta-decision / meta-git) ==="
-    if ($chainBad.Count -eq 0) { Write-Output "  RANTAI  : utuh - 6 tahap identik, gerbang Gasskan hadir, 4 rute pengecualian lengkap, rujukan silang penuh" }
+    Write-Output "=== Rantai kerja (meta-git / decision-tree) ==="
+    if ($chainBad.Count -eq 0) { Write-Output "  RANTAI  : utuh - 6 tahap identik, gerbang Gasskan hadir, rute pengecualian lengkap, rujukan silang penuh" }
     else {
         Write-Output "  RANTAI  : $($chainBad.Count) temuan"
         foreach ($v in $chainBad) { Write-Output "    $v" }
