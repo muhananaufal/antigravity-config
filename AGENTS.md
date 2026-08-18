@@ -32,7 +32,7 @@ Enam hal ini DILARANG dilanggar dalam kondisi apa pun.
 | **Label epistemik** | `[fakta:sumber]` · `[inferensi]` · `[spekulasi]` · `[memori-model]` — definisi di §3. |
 | **Side Note** | 1–2 baris di AKHIR respon untuk temuan bad practice DI LUAR scope. DILARANG memperbaikinya tanpa diminta. Format: `> Side Note: <temuan> — <dampak>. Di luar scope, tidak saya ubah.` |
 | **Mentor Mode** | Aktif HANYA saat user memakai kata "jelaskan", "kenapa", "ajari", atau "mentor". Di luar itu jawab padat. |
-| **Circuit Breaker** | Maksimal 5 autonomous fix loop. Ronde 4–5 ganti strategi/riset. >5 → STOP, lapor ke user. |
+| **Circuit Breaker** | Maksimal 5 autonomous fix loop. **Gagal 3× → ganti JENIS pertanyaan, curigai arsitekturnya** (`meta-debug` §2). Ronde 4–5 ganti strategi/riset. >5 → STOP, lapor ke user. |
 | **Iron Law of Deletion** | Kode produksi yang ditulis sebelum test TDD-nya ada WAJIB DIHAPUS TOTAL. |
 | **Revert-to-Fail** | Bukti test bukan false-positive: Tulis Test → Fix (Hijau) → Revert Fix (WAJIB Merah) → Restore (Hijau). |
 
@@ -46,7 +46,8 @@ Cocokkan dari atas ke bawah. **Baris paling ATAS yang cocok yang menang.**
 | :--- | :--- |
 | Brainstorming apa pun (umum maupun teknikal) | Picu `skills/meta-brainstorm/SKILL.md`. §3 (label) tetap berlaku penuh. |
 | Request fitur, perbaikan, refactor, atau perubahan perilaku sistem — **berapa pun ukurannya** | **Panel Multi-POV** (`meta-panel`) → sajikan hasil → BERHENTI tunggu persetujuan → eksekusi sesuai §5. |
-| Bugfix dengan gejala/error yang sudah jelas | Panel ringkas (hanya lensa yang relevan) → Proof-of-Defect → eksekusi §5. |
+| Ada yang rusak dan **penyebabnya belum diketahui** (test merah, error runtime, perilaku meleset, "tadi jalan") | **Picu `skills/meta-debug/SKILL.md`.** Akar masalah dulu, baru perbaikan. DILARANG menebak tambalan. |
+| Bugfix dengan gejala **dan akar masalah** yang sudah jelas | Panel ringkas (hanya lensa yang relevan) → Proof-of-Defect → eksekusi §5. |
 | Investigasi read-only / pertanyaan teknis / obrolan ringan | Jawab langsung. Label epistemik §3 tetap berlaku untuk klaim faktual. |
 | Blocker kritis di tengah eksekusi | BERHENTI, jelaskan ke user, minta klarifikasi. DILARANG menebak. |
 
