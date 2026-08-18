@@ -1,7 +1,12 @@
----
-name: mastery-skills
-description: Gunakan skill ini ketika membuat, merancang, mengaudit, atau merestrukturisasi Skill Bundles baru untuk domain, bahasa programming, atau framework apa pun (misal Golang, Rust, Python, Laravel, TypeScript, DevOps, dll) di ekosistem Antigravity.
----
+# mastery-skills -- ARSIP (dinonaktifkan sebagai skill)
+
+> **Status:** korpus ini DIPENSIUNKAN dari jalur aktif pada 2026-08-18 (Lean Constitution v2).
+> Frontmatter skill-nya sengaja dicabut supaya bundle ini TIDAK lagi ditawarkan sebagai skill
+> oleh mesin discovery mana pun. Isinya tetap utuh dan boleh dikutip sebagai [fakta:path],
+> tetapi TIDAK wajib dibaca sebelum menulis kode -- kewajiban verifikasi kini menunjuk sumber
+> nyata (source library terpasang, dokumentasi resmi, kode proyek), lihat `AGENTS.md` section 0.1.
+>
+> **Cakupan asli:** Gunakan skill ini ketika membuat, merancang, mengaudit, atau merestrukturisasi Skill Bundles baru untuk domain, bahasa programming, atau framework apa pun (misal Golang, Rust, Python, Laravel, TypeScript, DevOps, dll) di ekosistem Antigravity.
 
 # Skill Engineering Mastery (Meta-Mastery Engine 2.0)
 

@@ -51,37 +51,37 @@ NODE 1.1: Apa CONSTRAINT (batasan) paling dominan dari sistem ini?
 │   │
 │   ├── Butuh Admin Panel / CMS / Dashboard internal?
 │   │   ├── YA ── 🔴 LARAVEL + Filament/Nova
-│   │   │         Ref: mastery-laravel → ecosystem_firstparty/
+│   │   │         Ref: archive/mastery-laravel → ecosystem_firstparty/
 │   │   └── TIDAK
 │   │       ├── Tim kuat di TypeScript/React?
 │   │       │   ├── YA ── 🟢 NESTJS + Prisma
-│   │       │   │         Ref: mastery-nestjs → core_arch_patterns/
+│   │       │   │         Ref: archive/mastery-nestjs → core_arch_patterns/
 │   │       │   └── TIDAK ── 🔴 LARAVEL (default tercepat)
 │   │
 ├── B) THROUGHPUT EKSTREM (> 50k req/s, < 10ms p99 latency)
 │   │
 │   ├── Butuh memory safety guarantee (finansial, medical, aerospace)?
 │   │   ├── YA ── 🦀 RUST + Axum
-│   │   │         Ref: mastery-rust → web_microservices/, high_performance_hft/
+│   │   │         Ref: archive/mastery-rust → web_microservices/, high_performance_hft/
 │   │   └── TIDAK
 │   │       └── 🔵 GOLANG (rasio performa/produktivitas terbaik)
-│   │           Ref: mastery-golang → concurrency/, microservices_grpc/
+│   │           Ref: archive/mastery-golang → concurrency/, microservices_grpc/
 │   │
 ├── C) EKOSISTEM INFRASTRUKTUR (K8s Operator, CLI Tools, DevOps Tooling)
 │   │   └── 🔵 GOLANG (bahasa ibu Kubernetes, Docker, Terraform)
-│   │       Ref: mastery-golang → cloud_native_k8s_operators/, cli_tooling/
+│   │       Ref: archive/mastery-golang → cloud_native_k8s_operators/, cli_tooling/
 │   │
 ├── D) SYSTEMS PROGRAMMING (OS-level, embedded, kernel module, game engine)
 │   │   └── 🦀 RUST (satu-satunya pilihan yang aman)
-│   │       Ref: mastery-rust → unsafe_ffi_internals/, compiler_llvm_internals/
+│   │       Ref: archive/mastery-rust → unsafe_ffi_internals/, compiler_llvm_internals/
 │   │
 ├── E) FULL-STACK MONOLITH (Backend + Frontend dalam satu repo, satu deploy)
 │   │   └── 🔴 LARAVEL + Inertia.js/Livewire
-│   │       Ref: mastery-laravel → inertia_livewire/
+│   │       Ref: archive/mastery-laravel → inertia_livewire/
 │   │
 └── F) ENTERPRISE TYPESCRIPT (Tim besar, DI/IoC wajib, standarisasi ketat)
         └── 🟢 NESTJS + Fastify
-            Ref: mastery-nestjs → core_arch_patterns/, http_engine_fastify/
+            Ref: archive/mastery-nestjs → core_arch_patterns/, http_engine_fastify/
 ```
 
 ---

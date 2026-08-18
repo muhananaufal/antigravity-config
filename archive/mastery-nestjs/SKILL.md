@@ -1,7 +1,12 @@
----
-name: mastery-nestjs
-description: Gunakan skill ini ketika merancang arsitektur Enterprise TypeScript, Dependency Injection IoC internals, Hexagonal Ports & Adapters, Fastify Engine tuning, Prisma/Drizzle ORM performance, Microservices gRPC/Kafka/NATS, Apollo GraphQL Federation v2, Multi-Tenancy RLS, AI Scout/pgvector/LangChain, Fintech ACID 2PC, atau Zero-Trust security di NestJS.
----
+# mastery-nestjs -- ARSIP (dinonaktifkan sebagai skill)
+
+> **Status:** korpus ini DIPENSIUNKAN dari jalur aktif pada 2026-08-18 (Lean Constitution v2).
+> Frontmatter skill-nya sengaja dicabut supaya bundle ini TIDAK lagi ditawarkan sebagai skill
+> oleh mesin discovery mana pun. Isinya tetap utuh dan boleh dikutip sebagai [fakta:path],
+> tetapi TIDAK wajib dibaca sebelum menulis kode -- kewajiban verifikasi kini menunjuk sumber
+> nyata (source library terpasang, dokumentasi resmi, kode proyek), lihat `AGENTS.md` section 0.1.
+>
+> **Cakupan asli:** Gunakan skill ini ketika merancang arsitektur Enterprise TypeScript, Dependency Injection IoC internals, Hexagonal Ports & Adapters, Fastify Engine tuning, Prisma/Drizzle ORM performance, Microservices gRPC/Kafka/NATS, Apollo GraphQL Federation v2, Multi-Tenancy RLS, AI Scout/pgvector/LangChain, Fintech ACID 2PC, atau Zero-Trust security di NestJS.
 
 # NestJS Enterprise Mastery (L8 Neutral Encyclopedia)
 
