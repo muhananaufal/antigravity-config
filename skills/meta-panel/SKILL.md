@@ -1,7 +1,17 @@
 ---
 name: meta-panel
-description: Gunakan skill ini SETIAP KALI user me-request fitur, perbaikan, refactor, atau perubahan perilaku sistem — berapa pun ukurannya. Panel meninjau request dari ≥5 sudut pandang role berbeda (Manager, Cost, UX, Security, Ops, Data, QA) sebelum request boleh di-acc.
+description: Gunakan saat user meminta fitur baru, perbaikan, refactor, penggantian dependency, perubahan skema, atau perubahan perilaku sistem apa pun — berapa pun kecilnya, termasuk saat request terdengar sepele atau user tampak buru-buru. Gunakan juga saat Anda tergoda menjawab "siap, saya kerjakan" tanpa memeriksa keterkaitannya, atau saat Anda hendak mengeksekusi tanpa persetujuan eksplisit.
 ---
+
+<!-- Catatan penulisan (dari superpowers/writing-skills, terverifikasi berlaku):
+     description adalah PEMICU, bukan ringkasan. Bila ia meringkas alur kerja,
+     agen bisa merasa sudah tahu isinya lalu bertindak dari description saja dan
+     tidak pernah membaca berkas ini - sehingga prosedur §2, format §3, dan
+     kewajiban "pembatal" tidak pernah terbaca. Versi sebelumnya menyebut ketujuh
+     lensa di description dan punya cacat itu. Jaga description tetap berisi
+     KONDISI PEMICU dan gejalanya saja. -->
+
+> **Selalu baca berkas ini utuh sebelum menyajikan panel.** Menyebut "tujuh lensa" dari ingatan tanpa membuka §1–§4 adalah panel palsu: verdict-nya ada, prosedurnya tidak.
 
 # 🔭 meta-panel — Panel Multi-POV (Anti-Yes-Man Gate)
 

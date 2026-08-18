@@ -94,13 +94,25 @@ Tiap butir pernah menangkap kegagalan nyata (lihat `shared/LEARNED.md`):
 
 ---
 
-## 6. SUBAGENT & RISET (batas sistem)
+## 6. SUBAGENT & RISET
 
-- Subagent READ-ONLY: hanya baca/search/test-runner. DILARANG menulis file, commit, atau install dependency. Hanya Main Agent yang menulis.
-- Di Claude Code: subagent HANYA bila user menyebut "swarm"/"gasskan riset", maksimal 3 paralel. Selain itu baca langsung (`Read`/`Grep`/`Glob`).
-- **Prinsip SDO & File-Path Handoffs:** DILARANG melampirkan diff panjang atau riwayat chat secara inline di prompt sub-agen. Tulis konteksnya ke berkas terisolasi, kirim HANYA path-nya.
-- Zero-Trust: laporan "sukses" subagent WAJIB diverifikasi independen (via `git diff` atau eksekusi test mandiri) sebelum dipakai.
+### 6.1 Aturan universal (berlaku di semua tool)
+
+- **Subagent READ-ONLY:** hanya baca/search/test-runner. DILARANG menulis file, commit, atau install dependency. Hanya Main Agent yang menulis dan mengelola Git. *(Pengecualian: pasukan QA/EngProd DIIZINKAN menulis skrip serangan/test harness secara otonom HANYA di `tests/e2e/` atau direktori scratch.)*
+- **Prinsip SDO & File-Path Handoffs:** DILARANG melampirkan diff panjang, instruksi penuh, atau riwayat chat secara inline di prompt sub-agen. Tulis konteksnya ke berkas terisolasi, kirim HANYA path-nya. Satu prompt dispatch menggambarkan **satu tugas**, bukan riwayat sesi.
+- **Zero-Trust:** laporan "sukses" subagent WAJIB diverifikasi independen (via `git diff` atau eksekusi test mandiri) sebelum dipakai. Laporan subagen BUKAN bukti (§5.5).
+- **Diskriminator paralel.** Kerahkan agen paralel HANYA bila ada **≥3 kegagalan yang benar-benar independen** di domain berbeda — tiap masalah bisa dipahami tanpa konteks dari yang lain. DILARANG paralel bila: kegagalannya saling terkait (memperbaiki satu mungkin memperbaiki yang lain), butuh konteks sistem penuh, agen akan berbagi state atau menyunting berkas yang sama, atau ruang masalahnya masih eksploratif. Partisi per **domain masalah**, bukan asal bagi.
+- **Setelah paralel, Main Agent WAJIB:** membaca tiap ringkasan, memeriksa suntingan yang bertabrakan, menjalankan test suite penuh, dan menyisir kesalahan sistematis yang berulang di beberapa agen.
 - Pencarian web hanya setelah sumber lokal (kode proyek, source library terpasang, dokumen milik user) habis dibedah.
+
+### 6.2 Batas per-tool — BUKAN aturan universal
+
+| Tool | Batas |
+| :--- | :--- |
+| **Antigravity** | **TIDAK DIBATASI.** Swarm adalah kapabilitas inti di sini: nesting subagent hingga 10 level, model default `pro` (`flash` HANYA untuk task trivial seperti grep/list direktori). Pen-test dinamis / black-box WAJIB memicu QA Pentagon Swarm (Hacker, Stress Tester, Chaos Monkey, Auditor, Gremlin) secara sekuensial setelah server menyala. |
+| **Claude Code** | Maksimal 3 paralel, hanya bila user menyebut "swarm"/"gasskan riset". Selain itu baca langsung (`Read`/`Grep`/`Glob`). |
+
+> Batas Claude Code lahir dari kuota akun shared, **bukan** dari prinsip rekayasa. DILARANG menggeneralisasikannya ke Antigravity.
 
 ---
 

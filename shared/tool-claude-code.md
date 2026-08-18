@@ -15,6 +15,10 @@
 
 Alasan: akun shared, kuota dijaga; jejak `Read` bisa diaudit baris demi baris, sedangkan ringkasan subagent tidak.
 
+**Batas ini MILIK Claude Code saja.** `AGENTS.md` §6.2 menyatakan Antigravity tidak dibatasi — swarm di sana kapabilitas inti, bukan kemewahan. DILARANG membawa batas maks-3 ini ke sana, dan DILARANG membaca §6.1 seolah ia melarang swarm.
+
+Aturan §6.1 yang tetap berlaku penuh di sini: subagent READ-ONLY, File-Path Handoff, Zero-Trust, dan **diskriminator paralel** (hanya untuk ≥3 kegagalan independen di domain berbeda). Di Claude Code, beberapa panggilan `Agent` dalam SATU respons berjalan paralel; satu per respons berjalan sekuensial.
+
 **Urutan:** Panel Multi-POV (`AGENTS.md` §0.2) berjalan **SEBELUM** riset mendalam. Riset di atas asumsi yang salah tetap sia-sia berapa pun banyaknya.
 
 ## CC-2. Penerjemah Istilah
