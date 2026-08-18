@@ -27,7 +27,7 @@ Skill ini adalah **tahap 5** — dan ia berada **SETELAH** gerbang persetujuan, 
 **Pengecualian Rute Eksekusi:** perbaikan trivial yang panelnya nihil temuan (`meta-panel` bagian 0.4) boleh langsung dikerjakan tanpa melewati tahap 3–4 — branch tetap dibuat sesuai §1 di bawah.
 
 **Dua sambungan yang WAJIB dijaga konsisten:**
-- Satu unit logis pekerjaan memetakan ke satu commit atomik (§5 di bawah); commit hanya setelah exit gate `AGENTS.md` §5.5 lulus.
+- Satu unit logis pekerjaan memetakan ke satu commit atomik (§5 di bawah); commit hanya setelah exit gate `AGENTS.md` §5.7 lulus.
 - Batch menulis maksimal 3–4 berkas per giliran (`AGENTS.md` §5.3); tiap batch: test terkait → atomic commit → lanjut.
 
 ---
@@ -171,7 +171,7 @@ develop
 ```
 
 1. **Micro-Branching per Batch:** Setiap batch yang bersifat independen dikerjakan dalam branch terisolasi yang di-stack di atas batch sebelumnya.
-2. **Atomic Verification Gate:** Setiap micro-branch wajib melewati seluruh test unit/integrasi dan exit gate (`AGENTS.md` §5.5) sebelum di-merge ke branch fitur utama.
+2. **Atomic Verification Gate:** Setiap micro-branch wajib melewati seluruh test unit/integrasi dan exit gate (`AGENTS.md` §5.7) sebelum di-merge ke branch fitur utama.
 3. **Clean Squash/Rebase:** Saat seluruh batch selesai, branch di-squash/rebase secara bersih ke `develop`.
 
 ---
@@ -429,7 +429,7 @@ git commit -m "feat(scope): deskripsi unit logis 2"
 
 ## §6. BRANCH CLEANUP & MERGE PROTOCOL
 
-Setelah task selesai dan seluruh exit gate (`AGENTS.md` §5.5) lulus:
+Setelah task selesai dan seluruh exit gate (`AGENTS.md` §5.7) lulus:
 1. Merge branch kerja ke `develop` atau `main` sesuai flow.
 2. Hapus branch lokal kerja: `git branch -d feature/<nama>`
 3. Pastikan working tree kembali bersih di branch utama (`main`/`develop`).

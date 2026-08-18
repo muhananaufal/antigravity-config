@@ -11,7 +11,7 @@ description: Gunakan saat ada yang rusak dan penyebabnya belum diketahui — tes
 
 > **Hukum tunggal skill ini: DILARANG MEMPERBAIKI SEBELUM AKAR MASALAH DITEMUKAN.**
 >
-> Diserap dari `superpowers/systematic-debugging` (2026-08-18), diselaraskan dengan `AGENTS.md` §0.4 (Proof-of-Defect) dan §5.6 (Circuit Breaker).
+> Diserap dari `superpowers/systematic-debugging` (2026-08-18), diselaraskan dengan `AGENTS.md` §0.4 (Proof-of-Defect) dan §5.8 (Circuit Breaker).
 
 Menebak perbaikan terasa lebih cepat. Ia tidak. Tebakan yang meleset meninggalkan perubahan yang tidak Anda pahami di dalam kode, dan tebakan berikutnya kini berdiri di atasnya. Prosedur di bawah lebih cepat justru saat sedang terdesak.
 
@@ -58,7 +58,7 @@ Menebak perbaikan terasa lebih cepat. Ia tidak. Tebakan yang meleset meninggalka
 
 1. **Tulis test yang gagal lebih dulu** (`AGENTS.md` §0.4). Saksikan ia MERAH.
 2. **Satu perbaikan terarah** pada akar masalah, bukan pada gejalanya.
-3. **Verifikasi sesuai `AGENTS.md` §5.5** — jalankan segar, baca output penuh, lampirkan buktinya.
+3. **Verifikasi sesuai `AGENTS.md` §5.7** — jalankan segar, baca output penuh, lampirkan buktinya.
 4. **Ragu test-nya sahih → Revert-to-Fail.**
 
 ---
@@ -73,7 +73,7 @@ Yang WAJIB dilakukan, bukan mencoba lagi:
 2. Naikkan pertanyaannya: bukan lagi "kenapa baris ini salah", melainkan **"apakah rancangan ini memang bisa benar?"**
 3. Sajikan apa yang sudah terbukti BUKAN penyebabnya — daftar itu sama berharganya dengan penyebabnya.
 
-Ini melengkapi Circuit Breaker `AGENTS.md` §5.6, tidak menggantikannya:
+Ini melengkapi Circuit Breaker `AGENTS.md` §5.8, tidak menggantikannya:
 
 | Ronde | Aksi |
 | :--- | :--- |
@@ -95,13 +95,13 @@ Circuit Breaker hanya menghitung. Gerbang 3× ini mengubah pertanyaannya — itu
 | Memperbaiki dua hal sekaligus | Hasilnya tidak akan bisa ditafsirkan |
 | "Kemungkinan besar karena X" tanpa jejak | `[spekulasi]` yang menyamar jadi diagnosis |
 | "Yang penting hijau dulu" | Anda menambal gejala; bug-nya akan kembali dengan wajah lain |
-| Menghapus test yang merah | Pelanggaran §0.3 dan §5.5 sekaligus |
+| Menghapus test yang merah | Pelanggaran §0.3 dan §5.7 sekaligus |
 
 ---
 
 ## §4. Keluaran
 
-Sebelum menyatakan selesai, laporkan empat hal ini — tanpa satu pun boleh kosong:
+Sebelum menyatakan selesai, laporkan lima hal ini — tanpa satu pun boleh kosong:
 
 ```markdown
 **Akar masalah:** <mekanismenya, berlabel [fakta:path:baris]>

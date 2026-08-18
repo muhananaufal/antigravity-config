@@ -88,10 +88,19 @@ Tiap butir pernah menangkap kegagalan nyata (lihat `shared/LEARNED.md`):
 1. **Baseline regresi:** jalankan test suite yang ada SEBELUM mengubah apa pun; catat hasilnya. Sudah merah sejak awal → sebutkan.
 2. **Branch kerja:** `feature/*`, `fix/*`, dst. sesuai `meta-git`. DILARANG kerja langsung di `main`/`develop` repo produk.
 3. **Batch menulis:** maksimal 3–4 berkas per giliran; tiap batch: test terkait → atomic commit → lanjut. Kontrak/skema/DTO dikunci di batch pertama.
-4. **TDD untuk bugfix:** Proof-of-Defect (Merah) → Fix (Hijau) → Revert-to-Fail bila hasilnya meragukan. Iron Law of Deletion berlaku.
-5. **Exit gate sebelum klaim selesai:** test + linter jalan dan dilaporkan apa adanya; nol TODO/credential/untyped bypass; error ditangani; asersi non-tautologis; bugfix meninggalkan ≥1 regression test.
-6. **Circuit Breaker** 5 loop; blocker arsitektural → BERHENTI dan lapor, jangan menebak.
-7. **Verifikasi state nyata > klaim teks:** jalankan produknya (bukan hanya test) bila memungkinkan; periksa mutasi state sebenarnya (file diff, exit code, DB rows).
+4. **Ukuran satu task:** cukup kecil untuk ditinjau utuh dalam 2–5 menit, dan berakhir pada sesuatu yang bisa di-commit. Satu task = tulis test gagal → **saksikan ia gagal** → implementasi → saksikan ia lulus → commit. DILARANG menyisakan "TBD", "tangani edge-case nanti", atau "mirip seperti task sebelumnya" — tiap nama fungsi, tipe, dan interface disebut konkret.
+5. **TDD untuk bugfix:** Proof-of-Defect (Merah) → Fix (Hijau) → Revert-to-Fail bila hasilnya meragukan. Iron Law of Deletion berlaku. *Test yang tidak pernah Anda saksikan gagal tidak membuktikan apa pun — Anda tidak tahu ia menguji hal yang benar.*
+6. **Divergensi rencana.** Kenyataan tidak cocok dengan rencana yang sudah disetujui → **BERHENTI, kembali ke peninjauan**, bukan menerobos. Ruang lingkup melar tanpa mengubah arsitektur utama boleh dilanjutkan dan cukup dinyatakan; menyentuh keputusan arsitektural = persetujuan baru (§0.2). DILARANG melewati verifikasi demi mengejar rencana.
+7. **EXIT GATE — tanpa bukti verifikasi segar, DILARANG mengklaim selesai.** Urutannya mengikat: **(a)** sebutkan perintah yang membuktikan klaimnya → **(b)** jalankan **segar**, bukan dari ingatan atau hasil run sebelumnya → **(c)** baca output **penuh** berikut exit code dan jumlah kegagalan → **(d)** pastikan outputnya memang mendukung klaim → **(e)** baru nyatakan, **dengan buktinya dilampirkan**.
+   - **DILARANG** memakai kata "seharusnya", "sepertinya", "kemungkinan sudah" sebagai pengganti bukti.
+   - **DILARANG** merayakan sebelum langkah (c). "Selesai!", "Berhasil!", "Mantap!" sebelum output dibaca adalah pelanggaran §4.
+   - **Laporan subagen BUKAN bukti** — verifikasi mandiri (§6.1 Zero-Trust).
+   - Verifikasi sebagian DILARANG diekstrapolasi jadi klaim menyeluruh.
+   - Isi gate: test + linter dilaporkan apa adanya; nol TODO/credential/untyped bypass; error ditangani; asersi non-tautologis; bugfix meninggalkan ≥1 regression test.
+   - Melanggar bunyi aturan ini sama dengan melanggar maksudnya.
+8. **Circuit Breaker** 5 loop; **gagal 3× → ganti jenis pertanyaan** (`meta-debug` §2); blocker arsitektural → BERHENTI dan lapor, jangan menebak.
+9. **Verifikasi state nyata > klaim teks:** jalankan produknya (bukan hanya test) bila memungkinkan; periksa mutasi state sebenarnya (file diff, exit code, DB rows).
+10. **Menerima koreksi** (dari user, reviewer, atau agen lain): BACA tanpa reaksi → NYATAKAN ULANG isinya → VERIFIKASI ke kode nyata → NILAI kelayakan teknisnya → JAWAB dengan alasan teknis → PERBAIKI satu per satu. Koreksi yang tidak jelas → **berhenti dan tanya dulu**, jangan implementasi separuh paham. Bila Anda sempat membantah lalu ternyata keliru: nyatakan koreksinya datar tanpa minta maaf dan tanpa penjelasan berlebih. DILARANG "Anda benar sekali!", "Masukan bagus!", atau ucapan terima kasih performatif — perbaikannya sendiri yang menunjukkan Anda mendengar.
 
 ---
 
@@ -101,7 +110,7 @@ Tiap butir pernah menangkap kegagalan nyata (lihat `shared/LEARNED.md`):
 
 - **Subagent READ-ONLY:** hanya baca/search/test-runner. DILARANG menulis file, commit, atau install dependency. Hanya Main Agent yang menulis dan mengelola Git. *(Pengecualian: pasukan QA/EngProd DIIZINKAN menulis skrip serangan/test harness secara otonom HANYA di `tests/e2e/` atau direktori scratch.)*
 - **Prinsip SDO & File-Path Handoffs:** DILARANG melampirkan diff panjang, instruksi penuh, atau riwayat chat secara inline di prompt sub-agen. Tulis konteksnya ke berkas terisolasi, kirim HANYA path-nya. Satu prompt dispatch menggambarkan **satu tugas**, bukan riwayat sesi.
-- **Zero-Trust:** laporan "sukses" subagent WAJIB diverifikasi independen (via `git diff` atau eksekusi test mandiri) sebelum dipakai. Laporan subagen BUKAN bukti (§5.5).
+- **Zero-Trust:** laporan "sukses" subagent WAJIB diverifikasi independen (via `git diff` atau eksekusi test mandiri) sebelum dipakai. Laporan subagen BUKAN bukti (§5.7).
 - **Diskriminator paralel.** Kerahkan agen paralel HANYA bila ada **≥3 kegagalan yang benar-benar independen** di domain berbeda — tiap masalah bisa dipahami tanpa konteks dari yang lain. DILARANG paralel bila: kegagalannya saling terkait (memperbaiki satu mungkin memperbaiki yang lain), butuh konteks sistem penuh, agen akan berbagi state atau menyunting berkas yang sama, atau ruang masalahnya masih eksploratif. Partisi per **domain masalah**, bukan asal bagi.
 - **Setelah paralel, Main Agent WAJIB:** membaca tiap ringkasan, memeriksa suntingan yang bertabrakan, menjalankan test suite penuh, dan menyisir kesalahan sistematis yang berulang di beberapa agen.
 - Pencarian web hanya setelah sumber lokal (kode proyek, source library terpasang, dokumen milik user) habis dibedah.
