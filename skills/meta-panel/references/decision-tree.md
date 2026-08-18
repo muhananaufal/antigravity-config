@@ -694,7 +694,7 @@ NODE 10.1: Bagaimana strategi pengujian yang tepat?
 └── ⚠️ ANTI-PATTERN:
     - Mocking SEMUA dependency → test lulus tapi production meledak.
     - Test yang bergantung pada urutan eksekusi → flaky test nightmare.
-    - Test tautologis tanpa asersi memadai (pelanggaran exit gate `AGENTS.md` §5.5).
+    - Test tautologis tanpa asersi memadai (pelanggaran exit gate `AGENTS.md` §5.7).
 ```
 
 ---

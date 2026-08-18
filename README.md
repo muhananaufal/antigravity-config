@@ -50,9 +50,10 @@
 │   ├── LEARNED.md              # Living Brain — pelajaran yang sudah dibayar mahal
 │   └── tool-claude-code.md     # Adaptor Claude Code (terjemahan mekanisme tool)
 │
-├── skills/                     # Tiga skill aktif. Itu saja.
-│   ├── meta-panel/             # ★ GERBANG UTAMA — Panel Multi-POV 7 lensa
+├── skills/                     # Empat skill aktif. Itu saja.
+│   ├── meta-panel/             # ★ GERBANG UTAMA — klasifikasi + Panel 7 lensa
 │   │   └── references/decision-tree.md   # Pohon keputusan stack & arsitektur
+│   ├── meta-debug/             # Debugging sistematis — akar masalah sebelum perbaikan
 │   ├── meta-brainstorm/        # Brainstorming umum & teknikal + Gerbang Bukti
 │   └── meta-git/               # Git Flow, Conventional Commits, atribusi
 │
@@ -117,6 +118,14 @@ Leburan lima role v1 (`architect`, `swe`, `devops`, `dba`, `qa`) menjadi **tujuh
 Output **proporsional**: request kecil dapat panel ringkas beberapa baris; request besar dapat tabel penuh + rekomendasi + alternatif ditolak + **pembatal** + utang bukti. Yang wajib adalah *menyapu* semua lensa — yang dilaporkan hanya lensa yang menemukan sesuatu.
 
 `references/decision-tree.md` — pohon keputusan stack & arsitektur (compute model, persistence, async, API, auth, observability, deployment, scaling, security, testing). Berstatus **rujukan**, bukan gerbang wajib.
+
+Kedalamannya ditentukan **gerbang klasifikasi** (§0b), bukan perasaan: **Sondir** (kelayakan, keluarannya jawaban bukan kode) · **Terbatas** (panel ringkas) · **Arsitektural** (tabel penuh + alternatif + pembatal) · **Trivial** (sapu kilat). Kelas tidak boleh diturunkan di tengah jalan — kompleksitas tersembunyi hanya boleh menaikkannya.
+
+### `meta-debug`
+
+Debugging sistematis. Hukum tunggal: **DILARANG MEMPERBAIKI SEBELUM AKAR MASALAH DITEMUKAN.**
+
+Empat fase — Investigasi Akar → **Analisis Pola** (cari kode serupa yang jalan, bandingkan tuntas, catat setiap beda) → Hipotesis tertulis → Implementasi. Gagal 3× bukan tanda kurang teliti melainkan tanda asumsi arsitekturalnya keliru: pertanyaannya berganti jenis, bukan diulang lebih keras.
 
 ### `meta-brainstorm`
 
