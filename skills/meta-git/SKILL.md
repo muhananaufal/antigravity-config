@@ -9,22 +9,22 @@ Dokumen ini adalah SSOT perilaku AI agent terhadap Git. Setiap operasi yang meny
 
 ## 🔗 Posisi dalam Rantai Kerja
 
-Skill ini adalah **tahap 4** — dan ia berada **SETELAH** gerbang persetujuan, bukan sebelumnya.
+Skill ini adalah **tahap 5** — dan ia berada **SETELAH** gerbang persetujuan, bukan sebelumnya.
 
 | # | Tahap | Dokumen |
 | :-: | :--- | :--- |
 | 1 | Routing task | `AGENTS.md` §2 |
-| 2 | Sapu 7 lensa Panel Multi-POV | `skills/meta-panel/SKILL.md` |
-| 3 | **BERHENTI — tunggu persetujuan user ("Gasskan")** | `AGENTS.md` §0.2 · **GERBANG MUTLAK** |
-| 4 | **Branch, atomic commit, merge** | **`meta-git/SKILL.md` — Anda di sini** |
-| 5 | Disiplin eksekusi + exit gate | `AGENTS.md` §5 |
+| 2 | Sapu 7 lensa Panel Multi-POV | `skills/meta-panel/SKILL.md` bagian 1–2 |
+| 3 | Pilih stack & arsitektur | `skills/meta-panel/references/decision-tree.md` |
+| 4 | **BERHENTI — tunggu persetujuan user ("Gasskan")** | `AGENTS.md` §0.2 · **GERBANG MUTLAK** |
+| 5 | **Branch, atomic commit, merge** | **`meta-git/SKILL.md` — Anda di sini** |
+| 6 | Disiplin eksekusi + exit gate | `AGENTS.md` §5 |
 
 > Nomor **§** selalu merujuk `AGENTS.md`. Untuk seksi milik skill lain dipakai kata "bagian"; seksi dokumen ini sendiri ditulis §1–§10 tanpa nama berkas.
 
-**DILARANG membuat feature branch untuk eksekusi sebelum tahap 3 (persetujuan) terlewati.** Panel disajikan di dalam percakapan, bukan sebagai dokumen ter-commit — jadi sebelum "Gasskan" tidak ada berkas yang perlu masuk ke `main`/`develop`, dan working tree tetap bersih (`AGENTS.md` §8). Pembuatan branch `feature/*` dilakukan setelah persetujuan.
+**DILARANG membuat feature branch untuk eksekusi sebelum tahap 4 (persetujuan) terlewati.** Panel disajikan di dalam percakapan, bukan sebagai dokumen ter-commit — jadi sebelum "Gasskan" tidak ada berkas yang perlu masuk ke `main`/`develop`, dan working tree tetap bersih (`AGENTS.md` §8). Pembuatan branch `feature/*` dilakukan setelah persetujuan.
 
-**Pengecualian Rute Eksekusi:**
-Semua rute tunduk pada tabel Routing Task `AGENTS.md` §2. Perbaikan trivial yang panelnya nihil temuan (`meta-panel` §0.4) boleh langsung dikerjakan — branch tetap dibuat sesuai §1 di bawah.
+**Pengecualian Rute Eksekusi:** perbaikan trivial yang panelnya nihil temuan (`meta-panel` bagian 0.4) boleh langsung dikerjakan tanpa melewati tahap 3–4 — branch tetap dibuat sesuai §1 di bawah.
 
 **Dua sambungan yang WAJIB dijaga konsisten:**
 - Satu unit logis pekerjaan memetakan ke satu commit atomik (§5 di bawah); commit hanya setelah exit gate `AGENTS.md` §5.5 lulus.

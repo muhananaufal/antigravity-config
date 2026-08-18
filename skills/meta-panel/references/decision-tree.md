@@ -714,9 +714,11 @@ Pohon ini dibuka **di dalam** Panel, bukan sebelum atau sesudahnya. Keputusannya
 | # | Tahap | Dokumen |
 | :-: | :--- | :--- |
 | 1 | Routing task | `AGENTS.md` §2 |
-| 2 | Sapu 7 lensa panel | `skills/meta-panel/SKILL.md` §1–§2 |
-| 3 | **Pilih stack & arsitektur (bila panel mengeskalasi)** | **dokumen ini — Anda di sini** |
-| 4 | Eksplorasi opsi besar bila perlu | `skills/meta-brainstorm/SKILL.md` Mode 2 |
-| 5 | **BERHENTI — tunggu persetujuan user** | `AGENTS.md` §0.2 · **GERBANG MUTLAK** |
-| 6 | Eksekusi: baseline, branch, batch, TDD, exit gate | `AGENTS.md` §5 + `skills/meta-git/SKILL.md` |
+| 2 | Sapu 7 lensa Panel Multi-POV | `skills/meta-panel/SKILL.md` bagian 1–2 |
+| 3 | **Pilih stack & arsitektur** | **dokumen ini — Anda di sini** |
+| 4 | **BERHENTI — tunggu persetujuan user ("Gasskan")** | `AGENTS.md` §0.2 · **GERBANG MUTLAK** |
+| 5 | Branch, atomic commit, merge | `skills/meta-git/SKILL.md` |
+| 6 | Disiplin eksekusi + exit gate | `AGENTS.md` §5 |
+
+**Pengecualian Rute Eksekusi:** perbaikan trivial yang panelnya nihil temuan (`meta-panel` bagian 0.4) boleh langsung dikerjakan tanpa melewati tahap 3–4.
 
