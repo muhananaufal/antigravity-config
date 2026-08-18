@@ -43,7 +43,7 @@ Alasan: akun shared, kuota dijaga; jejak `Read` bisa diaudit baris demi baris, s
 | :--- | :--- |
 | `/audit` | TETAP — audit forensik & OWASP tidak bergantung mesin role. |
 | `/test-harness` | TETAP — pembuatan suite pengujian tidak bergantung mesin role. |
-| `/greenfield` | DIPENSIUNKAN — mesin Day-0 Quintet v1 sudah dihapus. Proyek baru masuk lewat Panel Multi-POV seperti request lain. |
+| `/greenfield` | DITULIS ULANG LEAN — mesin Day-0 wajib + jalur `implementation_plan.md` dicabut. Proyek baru masuk lewat Panel Multi-POV seperti request lain; macro ini kini hanya checklist fondasi kondisional. |
 
 ## CC-5. Git Workflow
 
