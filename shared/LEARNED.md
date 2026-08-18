@@ -1,6 +1,6 @@
 # Learned
 
-Pelajaran yang sudah dibayar mahal. WAJIB dibaca sebelum task teknis (§3.1 `AGENTS.md`), WAJIB ditambah saat user mengoreksi atau saat mekanisme meleset dari dugaan (§9).
+Pelajaran yang sudah dibayar mahal. WAJIB dibaca setiap sesi baru (`AGENTS.md` §7), WAJIB ditambah saat user mengoreksi atau saat mekanisme meleset dari dugaan (`AGENTS.md` §8).
 
 **Aturan menulis:** satu baris per pelajaran — fakta, lalu konsekuensinya. DILARANG naratif. Lewat 80 baris → konsolidasikan yang serupa, jangan biarkan tumbuh liar.
 

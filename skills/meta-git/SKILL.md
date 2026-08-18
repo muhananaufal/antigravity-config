@@ -429,10 +429,20 @@ git commit -m "feat(scope): deskripsi unit logis 2"
 
 ## §6. BRANCH CLEANUP & MERGE PROTOCOL
 
-Setelah task selesai dan seluruh exit gate (`AGENTS.md` §5.7) lulus:
-1. Merge branch kerja ke `develop` atau `main` sesuai flow.
-2. Hapus branch lokal kerja: `git branch -d feature/<nama>`
-3. Pastikan working tree kembali bersih di branch utama (`main`/`develop`).
+**Urutannya mengikat — menu integrasi datang SETELAH suite hijau, bukan sebelumnya.**
+
+1. **Jalankan test suite penuh.** Ada yang merah → BERHENTI di sini. DILARANG menyodorkan opsi integrasi di atas suite yang belum hijau; menawarkan pilihan seolah pekerjaannya sudah selesai adalah bentuk halus dari klaim palsu.
+2. **Lolos exit gate** `AGENTS.md` §5.7 — bukti segar, output penuh, exit code.
+3. **Kenali lingkungannya:** repo biasa, worktree, atau detached HEAD. Ketiganya butuh penanganan berbeda.
+4. **Pastikan base branch-nya** — dari mana pekerjaan ini bercabang.
+5. **Sajikan opsi, JANGAN pilih sendiri:** merge lokal · push untuk PR · biarkan apa adanya. Keputusan integrasi milik user; menebaknya adalah tindakan tak-terbalik yang diambil tanpa izin.
+6. **Eksekusi pilihannya.**
+7. **Bersihkan — dengan pagar:**
+   - Hapus branch/worktree **hanya** setelah pekerjaannya benar-benar terintegrasi.
+   - **Membuang pekerjaan butuh kata persis `discard` dari user.** "ya", "oke", "hapus saja" TIDAK cukup. Penghapusan yang tidak bisa dibatalkan menuntut kata yang tidak bisa disalahartikan.
+   - Menemukan berkas belum ter-commit saat bersih-bersih → **tunjukkan dulu ke user**, jangan hapus. Berkas untracked yang hilang tidak punya riwayat untuk memulihkannya.
+
+**Worktree** (`AGENTS.md` §5.2): bila harness menyediakan tool native (`EnterWorktree` / `/worktree`), **pakai itu lebih dulu** — ia menangani penempatan dan pembersihan sendiri. `git worktree add` mentah di atas harness yang punya tool sendiri melahirkan state hantu yang tidak bisa dilacak lingkungannya. Jangan melawan harness.
 
 ---
 
