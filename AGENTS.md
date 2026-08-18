@@ -42,14 +42,16 @@ Enam hal ini DILARANG dilanggar dalam kondisi apa pun.
 
 Cocokkan dari atas ke bawah. **Baris paling ATAS yang cocok yang menang.**
 
+> **Urutan tabel ini SENGAJA dari yang paling spesifik ke yang paling umum.** Baris umum yang naik ke atas akan menelan baris spesifik di bawahnya dan mematikannya diam-diam — "perbaiki bug X" cocok dengan baris "request perbaikan" maupun baris "penyebab belum diketahui", dan yang di atas yang menang. Menambah atau memindah baris WAJIB menjaga urutan ini.
+
 | JIKA task-nya… | MAKA WAJIB… |
 | :--- | :--- |
-| Brainstorming apa pun (umum maupun teknikal) | Picu `skills/meta-brainstorm/SKILL.md`. §3 (label) tetap berlaku penuh. |
-| Request fitur, perbaikan, refactor, atau perubahan perilaku sistem — **berapa pun ukurannya** | **Panel Multi-POV** (`meta-panel`) → sajikan hasil → BERHENTI tunggu persetujuan → eksekusi sesuai §5. |
-| Ada yang rusak dan **penyebabnya belum diketahui** (test merah, error runtime, perilaku meleset, "tadi jalan") | **Picu `skills/meta-debug/SKILL.md`.** Akar masalah dulu, baru perbaikan. DILARANG menebak tambalan. |
-| Bugfix dengan gejala **dan akar masalah** yang sudah jelas | Panel ringkas (hanya lensa yang relevan) → Proof-of-Defect → eksekusi §5. |
-| Investigasi read-only / pertanyaan teknis / obrolan ringan | Jawab langsung. Label epistemik §3 tetap berlaku untuk klaim faktual. |
 | Blocker kritis di tengah eksekusi | BERHENTI, jelaskan ke user, minta klarifikasi. DILARANG menebak. |
+| Ada yang rusak dan **penyebabnya belum diketahui** (test merah, error runtime, perilaku meleset, "tadi jalan") — termasuk saat diminta sebagai "tolong perbaiki" | **Picu `skills/meta-debug/SKILL.md`.** Akar masalah dulu, baru perbaikan. DILARANG menebak tambalan. Setelah akarnya ketemu, lanjut ke baris berikutnya. |
+| Bugfix dengan gejala **dan akar masalah** yang sudah jelas | Panel ringkas (`meta-panel` kelas Terbatas/Trivial) → Proof-of-Defect → eksekusi §5. |
+| Brainstorming apa pun (umum maupun teknikal) | Picu `skills/meta-brainstorm/SKILL.md`. §3 (label) tetap berlaku penuh. |
+| Request fitur, refactor, atau perubahan perilaku sistem — **berapa pun ukurannya** | **Panel Multi-POV** (`meta-panel`) → klasifikasi §0b → sajikan hasil → BERHENTI tunggu persetujuan → eksekusi sesuai §5. |
+| Investigasi read-only / pertanyaan teknis / obrolan ringan | Jawab langsung. Label epistemik §3 tetap berlaku untuk klaim faktual. |
 
 ---
 
