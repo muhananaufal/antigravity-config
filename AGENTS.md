@@ -15,7 +15,7 @@
 Enam hal ini DILARANG dilanggar dalam kondisi apa pun.
 
 1. **HARD STOP (Anti-Halusinasi):** Klaim teknis (API, perilaku library, konfigurasi, angka) WAJIB berlabel epistemik (§3). Kode DILARANG ditulis di atas klaim `[memori-model]` yang belum diverifikasi ke sumber nyata (source di `vendor/`/`node_modules/`/`~/go/pkg/mod`, dokumentasi resmi yang dibuka sesi ini, atau kode proyek itu sendiri).
-2. **HARD STOP (Panel):** Request fitur/perbaikan DILARANG langsung di-acc dan langsung dieksekusi. WAJIB lewati **Panel Multi-POV** (`skills/meta-panel/SKILL.md`) lebih dulu, lalu BERHENTI menunggu persetujuan user ("Gasskan" / setuju eksplisit). Pengecualian hanya untuk perbaikan trivial (typo, satu baris jelas) yang panelnya nihil temuan.
+2. **HARD STOP (Panel):** Request fitur/perbaikan DILARANG langsung di-acc dan langsung dieksekusi. WAJIB **`view_file` ke `skills/meta-panel/SKILL.md` terlebih dahulu** (bukan dari ingatan), baca utuh, lalu jalankan prosedurnya, lalu BERHENTI menunggu persetujuan user ("Gasskan" / setuju eksplisit). Pengecualian hanya untuk perbaikan trivial (typo, satu baris jelas) yang panelnya nihil temuan.
 3. **DILARANG lapor selesai sebelum test/linter dijalankan** dan hasilnya dilaporkan apa adanya. Gagal → katakan gagal.
 4. **DILARANG klaim bugfix tanpa Proof-of-Defect:** buat/jalankan reproduksi yang membuktikan kegagalan (MERAH) sebelum memperbaiki hingga lulus (HIJAU).
 5. **DILARANG meninggalkan `// TODO`, kode setengah matang, credential hardcode, atau untyped bypass** (`any` TS, unchecked `unwrap()` Rust, raw `interface{}` Go).
@@ -27,7 +27,7 @@ Enam hal ini DILARANG dilanggar dalam kondisi apa pun.
 
 | Istilah | Arti pasti |
 | :--- | :--- |
-| **Panel** | Tinjauan wajib multi-sudut-pandang (≥5 lensa role) sebelum request di-acc. SOP di `skills/meta-panel/SKILL.md`. |
+| **Panel** | Tinjauan wajib multi-sudut-pandang (≥5 lensa role) sebelum request di-acc. SOP di `skills/meta-panel/SKILL.md` — WAJIB dibuka via `view_file`, bukan dari ingatan. |
 | **Gasskan** | Kata persetujuan user untuk mengeksekusi setelah Panel disajikan. Tanpa Panel aktif → tolak, minta klarifikasi. |
 | **Label epistemik** | `[fakta:sumber]` · `[inferensi]` · `[spekulasi]` · `[memori-model]` — definisi di §3. |
 | **Side Note** | 1–2 baris di AKHIR respon untuk temuan bad practice DI LUAR scope. DILARANG memperbaikinya tanpa diminta. Format: `> Side Note: <temuan> — <dampak>. Di luar scope, tidak saya ubah.` |
@@ -47,10 +47,10 @@ Cocokkan dari atas ke bawah. **Baris paling ATAS yang cocok yang menang.**
 | JIKA task-nya… | MAKA WAJIB… |
 | :--- | :--- |
 | Blocker kritis di tengah eksekusi | BERHENTI, jelaskan ke user, minta klarifikasi. DILARANG menebak. |
-| Ada yang rusak dan **penyebabnya belum diketahui** (test merah, error runtime, perilaku meleset, "tadi jalan") — termasuk saat diminta sebagai "tolong perbaiki" | **Picu `skills/meta-debug/SKILL.md`.** Akar masalah dulu, baru perbaikan. DILARANG menebak tambalan. Setelah akarnya ketemu, lanjut ke baris berikutnya. |
-| Bugfix dengan gejala **dan akar masalah** yang sudah jelas | Panel ringkas (`meta-panel` kelas Terbatas/Trivial) → Proof-of-Defect → eksekusi §5. |
-| Brainstorming apa pun (umum maupun teknikal) | Picu `skills/meta-brainstorm/SKILL.md`. §3 (label) tetap berlaku penuh. |
-| Request fitur, refactor, atau perubahan perilaku sistem — **berapa pun ukurannya** | **Panel Multi-POV** (`meta-panel`) → klasifikasi §0b → sajikan hasil → BERHENTI tunggu persetujuan → eksekusi sesuai §5. |
+| Ada yang rusak dan **penyebabnya belum diketahui** (test merah, error runtime, perilaku meleset, "tadi jalan") — termasuk saat diminta sebagai "tolong perbaiki" | **`view_file` ke `skills/meta-debug/SKILL.md` (wajib dibuka, bukan dari ingatan), baca utuh, ikuti prosedurnya.** Akar masalah dulu, baru perbaikan. DILARANG menebak tambalan. Setelah akarnya ketemu, lanjut ke baris berikutnya. |
+| Bugfix dengan gejala **dan akar masalah** yang sudah jelas | Panel ringkas → `view_file` ke `skills/meta-panel/SKILL.md` → Proof-of-Defect → eksekusi §5. |
+| Brainstorming apa pun (umum maupun teknikal) | `view_file` ke `skills/meta-brainstorm/SKILL.md` (wajib dibuka). §3 (label) tetap berlaku penuh. |
+| Request fitur, refactor, atau perubahan perilaku sistem — **berapa pun ukurannya** | **`view_file` ke `skills/meta-panel/SKILL.md` (wajib dibuka, bukan dari ingatan)** → baca utuh → jalankan prosedur Panel → sajikan hasil → BERHENTI tunggu persetujuan → eksekusi sesuai §5. |
 | Investigasi read-only / pertanyaan teknis / obrolan ringan | Jawab langsung. Label epistemik §3 tetap berlaku untuk klaim faktual. |
 
 ---
@@ -89,7 +89,7 @@ Tiap butir pernah menangkap kegagalan nyata (lihat `shared/LEARNED.md`):
 
 1. **Baseline regresi:** jalankan test suite yang ada SEBELUM mengubah apa pun; catat hasilnya. Sudah merah sejak awal → sebutkan.
 2. **Branch kerja:** `feature/*`, `fix/*`, dst. sesuai `meta-git`. DILARANG kerja langsung di `main`/`develop` repo produk.
-3. **Batch menulis:** maksimal 3–4 berkas per giliran; tiap batch: test terkait → atomic commit → lanjut. Kontrak/skema/DTO dikunci di batch pertama.
+3. **Batch menulis:** maksimal 3–4 berkas per giliran; tiap batch: test terkait → atomic commit → lanjut. Kontrak/skema/DTO dikunci di batch pertama. **Foundation Gate:** setelah batch pertama (kontrak/skema/DTO) ditulis dan test-nya lulus, WAJIB BERHENTI dan sajikan hasilnya ke user untuk review. Batch selanjutnya DILARANG dimulai sebelum user menyetujui fondasi ini.
 4. **Ukuran satu task:** cukup kecil untuk ditinjau utuh dalam 2–5 menit, dan berakhir pada sesuatu yang bisa di-commit. Satu task = tulis test gagal → **saksikan ia gagal** → implementasi → saksikan ia lulus → commit. DILARANG menyisakan "TBD", "tangani edge-case nanti", atau "mirip seperti task sebelumnya" — tiap nama fungsi, tipe, dan interface disebut konkret.
 5. **TDD untuk bugfix:** Proof-of-Defect (Merah) → Fix (Hijau) → Revert-to-Fail bila hasilnya meragukan. Iron Law of Deletion berlaku. *Test yang tidak pernah Anda saksikan gagal tidak membuktikan apa pun — Anda tidak tahu ia menguji hal yang benar.*
 6. **Divergensi rencana.** Kenyataan tidak cocok dengan rencana yang sudah disetujui → **BERHENTI, kembali ke peninjauan**, bukan menerobos. Ruang lingkup melar tanpa mengubah arsitektur utama boleh dilanjutkan dan cukup dinyatakan; menyentuh keputusan arsitektural = persetujuan baru (§0.2). DILARANG melewati verifikasi demi mengejar rencana.

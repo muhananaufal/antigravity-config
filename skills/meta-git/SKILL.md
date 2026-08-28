@@ -392,8 +392,8 @@ Co-authored-by: aetheris <agents.aetheris@gmail.com>
 ```
 
 > **Catatan Platform:**
-> - Saat berjalan di **Google Antigravity (AETHERIS):** gunakan `Co-authored-by: aetheris <agents.aetheris@gmail.com>`
-> - Saat berjalan di **Claude Code:** gunakan `Co-authored-by: Claude <noreply@anthropic.com>`
+> - **Di SEMUA platform:** `Co-authored-by: aetheris <agents.aetheris@gmail.com>` WAJIB hadir. Ini Gerbang Mutlak `AGENTS.md` §0.6 dan DILARANG digantikan trailer lain.
+> - **Saat berjalan di Claude Code:** trailer `Co-Authored-By: Claude <noreply@anthropic.com>` boleh DITAMBAHKAN di bawahnya — menambah, bukan mengganti.
 > - Trailer diletakkan di **baris paling akhir** setelah 1 baris kosong (*blank line*) pemisah.
 
 ### Rollback Protocol — Jika Quality Gate Gagal Mid-Atomic
