@@ -65,6 +65,8 @@ Satu kelas test **di luar testsuite biasa** (mis. `tests/Postman/`), dijalankan 
 | Multipart dengan `PUT` | File/field tidak terbaca | Kirim `POST` + `_method=PUT`, sama seperti klien sungguhan |
 | Endpoint unduhan (XLSX/PDF) | Body biner merusak collection | Simpan status + `Content-Type` + `Content-Disposition`, body kosong |
 | Skrip suntingan dengan regex | `preg_replace` gagal → `null` → berkas tertulis kosong, lint/test "lulus" karena tak ada isinya | Suntingan lewat `str_replace` dengan jumlah kemunculan dicek; `php -l`/`wc -l` setelah menulis |
+| Throttle rute (`throttle:api`) dengan waktu dibekukan | Makin banyak example, request ke-N dijawab 429 "Too Many Attempts" dan status meleset | Kosongkan penghitungnya saat ganti aktor (store cache `array` milik test), jangan menaikkan limit produksi |
+| Endpoint daftar dengan filter | Example hanya "200 OK" polos, filter tidak terdokumentasi dan tak pernah dibuktikan | Minimal satu example 200 dengan filter gabungan + satu 422 nilai tidak dikenal; buka body-nya (§0.5) |
 
 ---
 
