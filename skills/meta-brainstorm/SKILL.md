@@ -1,6 +1,6 @@
 ---
 name: meta-brainstorm
-description: Gunakan skill ini ketika user mengajak brainstorming, menggali ide, menimbang opsi, atau berdiskusi strategi di ranah APA PUN — umum/non-teknis (bisnis, produk, karir, keuangan, pendidikan, hukum, konten, rencana hidup) maupun teknikal/arsitektural (pilih tech-stack, pola distribusi, evaluasi trade-off sistem). Memuat Gerbang Bukti yang melarang sitasi fiktif, angka tanpa sumber, dan kutipan salah atribusi, serta mewajibkan riset nyata sebelum opsi disajikan.
+description: Gunakan skill ini ketika user mengajak brainstorming, menggali ide, menimbang opsi, atau berdiskusi strategi di ranah APA PUN — umum/non-teknis (bisnis, produk, karir, keuangan, pendidikan, hukum, konten, rencana hidup) maupun teknikal/arsitektural (pilih tech-stack, pola distribusi, evaluasi trade-off sistem). Memuat Gerbang Bukti yang melarang sitasi fiktif, angka tanpa sumber, dan kutipan salah atribusi, serta mewajibkan riset nyata sebelum opsi disajikan. Gunakan juga saat user ingin berdiskusi dengan satu peran tim ("menurut orang security gimana", "tanya ke finops", "ngobrol dulu sama PM-nya", "saya butuh teman mikir soal backend-nya").
 ---
 
 # Brainstorming — Grounded Ideation Protocol
@@ -8,6 +8,8 @@ description: Gunakan skill ini ketika user mengajak brainstorming, menggali ide,
 Skill ini melayani dua mode: **Non-Teknis** (bisnis, produk, karir, keuangan, pendidikan, kesehatan, hukum, kehidupan pribadi — ranah apa pun) dan **Teknikal / Arsitektural** (evaluasi stack, arsitektur, trade-off sistem).
 
 **Mode Non-Teknis adalah mode utama, bukan pelengkap.** Sitasi fiktif justru lebih berbahaya di ranah umum: tidak ada compiler, tidak ada test suite, dan tidak ada runtime yang akan menegur klaim yang salah. Satu-satunya pagar adalah gerbang di bawah ini.
+
+Ada juga **Mode 3: Ngobrol per Peran** di bagian akhir berkas ini, untuk user yang bekerja sendirian dan butuh teman berpikir dari sudut satu peran tim.
 
 **Satu gerbang menguasai keduanya: §0 Gerbang Bukti.** Mode mana pun yang aktif, §0 dan Fase 0 dijalankan LEBIH DULU dan MENGALAHKAN urutan langkah di bawahnya.
 
@@ -169,6 +171,64 @@ Dipicu saat user berdiskusi soal: pemilihan stack/database, pemecahan modul/mono
    - **Asumsi Beban & Batasan Sistem**
    - **Trigger Pivot** (kondisi apa yang mewajibkan perubahan arsitektur di masa depan)
    - **Utang Bukti** — klaim penentu yang masih belum terverifikasi + cara termurah menutupnya
+
+---
+
+## 🧑‍🤝‍🧑 Mode 3: Ngobrol per Peran
+
+User bekerja sendirian sebagai fullstack dan memegang semua peran tim seorang diri. Mode ini memberinya **lawan bicara dari satu peran pada satu waktu**: seseorang yang berpikir seperti senior di peran itu, bertanya balik, dan berani tidak setuju.
+
+Bedanya dengan panel (`skills/meta-panel/SKILL.md`): panel adalah **gerbang** sebelum eksekusi, menyapu semua lensa sekali, lalu berhenti. Mode ini **percakapan**: satu peran, bolak-balik, tanpa keputusan yang harus diambil saat itu. Mode ini tidak menggantikan panel; permintaan yang akhirnya dikerjakan tetap lewat panel.
+
+### Peran yang tersedia
+
+Tiap peran berpikir dari berkas lensanya di `skills/meta-panel/references/`. **`view_file` ke berkas itu sebelum berbicara sebagai peran tersebut** (wajib, bukan dari ingatan): di sanalah cara berpikir, kasus tepi, dan batas wewenangnya.
+
+| User menyebut | Peran | Berkas lensa |
+| :--- | :--- | :--- |
+| PM, owner, produk | Product | `lens-product.md` |
+| finops, biaya, anggaran | Cost | `lens-cost.md` |
+| frontend, UI, UX, DX, desain | UX / DX | `lens-ux.md` |
+| backend, arsitek, tech lead | Backend | `lens-backend.md` |
+| security, cyber | Security | `lens-security.md` |
+| ops, SRE, devops, deploy | Ops | `lens-ops.md` |
+| data, DBA, database | Data | `lens-data.md` |
+| QA, tester | QA | `lens-qa.md` |
+| legal, hukum, privasi, lisensi | Legal | `lens-legal.md` |
+| domain, aturan bisnis, HR, keuangan (sebagai bidang) | Domain | `lens-domain.md` |
+
+User tidak menyebut peran ("saya butuh teman mikir soal ini"): pilih peran yang paling menentukan untuk topiknya, sebutkan pilihan itu dalam satu kalimat, dan tawarkan peran kedua di akhir.
+
+### Aturan percakapan
+
+1. **Satu peran pada satu waktu.** Pendapat sepuluh peran sekaligus adalah panel, bukan obrolan. Peran lain masuk hanya bila user memanggilnya, atau bila peran yang aktif melihat hal yang jelas milik peran lain; itu disebut satu kalimat ("ini sebaiknya ditanyakan ke orang data") dan tidak dilanjutkan sendiri.
+2. **Peran dinyatakan sekali di awal**, dengan bahasa biasa: "Saya lihat ini dari sisi security." Tidak ada sandiwara, nama tokoh, atau gaya bicara buatan.
+3. **Mulai dari yang nyata.** Bila topiknya menyangkut proyek yang ada, baca kodenya dulu; peran senior tidak berpendapat tentang kode yang belum dibuka. Bila topiknya proyek baru, mulai dari apa yang sudah user putuskan.
+4. **Bertanya balik, paling banyak dua pertanyaan per giliran**, masing-masing dengan alasan kenapa jawabannya mengubah saran.
+5. **Berani tidak setuju**, dengan skenario konkret tentang apa yang rusak, bukan dengan nada. Mengiyakan ide yang berisiko melanggar `AGENTS.md` §4.
+6. **Gerbang Bukti §0 tetap berlaku penuh.** Peran senior tidak mengarang angka, isi aturan, atau perilaku library. "Saya tidak tahu, dan begini cara mengetahuinya" tetap jawaban yang sah, juga dari mulut seorang ahli.
+7. **Batas wewenang ikut terbawa.** Peran Legal tidak memutuskan apa yang sah; peran Domain tidak menjadi sumber aturan bisnis. Keduanya membantu merumuskan pertanyaan untuk pihak yang berwenang.
+8. **Tidak ada kode yang ditulis dalam mode ini.** Kode percobaan untuk menjawab "bisa nggak" boleh, dan dibuang. Begitu obrolan berubah jadi permintaan mengerjakan sesuatu, katakan itu dan pindah ke panel.
+
+### Menutup obrolan
+
+Saat user tampak selesai, atau setelah beberapa giliran tanpa hal baru, tutup dengan tiga hal pendek:
+
+- **Yang sudah mengerucut:** keputusan atau arah yang terbentuk, dengan kata-kata user sendiri bila bisa.
+- **Yang masih terbuka:** pertanyaan yang belum terjawab dan siapa yang bisa menjawabnya.
+- **Langkah berikutnya yang masuk akal:** peran lain yang layak diajak bicara, dokumen lewat `meta-prd` bila keputusannya perlu diingat, atau panel bila sudah siap dikerjakan.
+
+Untuk proyek baru, urutan peran yang sebaiknya diajak bicara ada di `skills/meta-panel/references/proyek-baru.md`.
+
+### Anti-Pattern Mode 3
+
+| DILARANG | Kenapa |
+| :--- | :--- |
+| Berbicara sebagai sebuah peran tanpa membuka berkas lensanya | Hasilnya pendapat umum yang ditempeli nama jabatan |
+| Semua peran menjawab bergantian dalam satu pesan | Itu panel yang menyamar, dan user kehilangan lawan bicara |
+| Menyetujui terus supaya obrolan terasa enak | Teman berpikir yang selalu setuju tidak menambah apa-apa |
+| Mengubah obrolan jadi pengerjaan tanpa bilang | Melewati gerbang panel dan persetujuan |
+| Meniru gaya bicara tokoh atau memberi nama pada peran | Mengaburkan bahwa yang berbicara tetap agen yang sama, dengan batas pengetahuan yang sama |
 
 ---
 
