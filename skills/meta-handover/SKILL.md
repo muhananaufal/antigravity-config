@@ -1,236 +1,228 @@
 ---
 name: meta-handover
 description: >-
-  Gunakan skill ini di akhir sesi panjang — baik itu brainstorming fitur,
-  investigasi bug, perencanaan arsitektur, atau sesi belajar mendalam.
-  Skill ini menghasilkan dokumen serah terima (handover) terstruktur yang
-  memungkinkan sesi berikutnya (atau agent baru) melanjutkan pekerjaan
-  tanpa membaca ulang riwayat percakapan. Dipicu saat user menyebut kata
-  "handover", "serah terima", "rangkum sesi", "ringkasan kerja", atau
-  saat percakapan teknis panjang akan berakhir.
+  Gunakan di akhir sesi panjang (brainstorming fitur, investigasi bug,
+  perencanaan arsitektur, sesi belajar) atau saat user menyebut "handover",
+  "serah terima", "rangkum sesi", "ringkasan kerja". Menghasilkan dokumen
+  serah terima yang membuat sesi berikutnya bisa melanjutkan tanpa membaca
+  riwayat percakapan. Keluaran bawaan HTML bergaya meta-prd; Markdown hanya
+  bila diminta atau bila pembacanya agen lain. Gunakan juga saat Anda
+  tergoda menulis handover dari ingatan tanpa membuka transcript, atau
+  menulis CSS sendiri untuk dokumennya.
 ---
 
-# 📋 meta-handover — Dokumen Serah Terima Sesi Kerja
+# meta-handover — Dokumen Serah Terima Sesi Kerja
 
-> **Prinsip Inti:** Dokumen ini bukan ringkasan hemat token. Ia adalah rekonstruksi konteks penuh yang **padat tanpa redundansi** — setiap kalimat membawa informasi unik. Agent penerima harus bisa melanjutkan pekerjaan hanya dengan membaca dokumen ini, tanpa melihat riwayat chat sedikit pun.
-
----
-
-## §0. Hukum Dokumen Ini
-
-1. **DILARANG memotong informasi** dengan alasan menghemat panjang dokumen. Jika suatu detail berdampak pada keputusan teknis, ia wajib ada.
-2. **DILARANG kata redundan.** Setiap kalimat harus unik secara informasi. "Kami memutuskan untuk menggunakan X karena Y" cukup satu kali — tidak perlu diulang di bagian lain.
-3. **WAJIB ada minimal satu diagram** per dokumen (Mermaid flowchart, sequence diagram, atau architecture diagram). Tidak ada pengecualian.
-4. **Format adaptif, urutan prioritas:**
-   - 🥇 **Tabel** → untuk perbandingan, keputusan, daftar item berstruktur
-   - 🥈 **Kode / Markdown spesifik** → untuk contoh teknis, konfigurasi, perintah
-   - 🥉 **Paragraf** → untuk narasi kausal yang tidak bisa dibuat tabular
-5. **Dokumen disimpan sebagai artefak** di direktori sesi yang sedang aktif.
+> **Prinsip inti:** dokumen ini bukan ringkasan hemat token. Ia rekonstruksi konteks penuh yang padat tanpa pengulangan. Penerimanya, orang atau agen, harus bisa melanjutkan pekerjaan hanya dari dokumen ini.
 
 ---
 
-## §1. Prosedur Pembuatan
+## §0. Hukum
 
-> ⚠️ **LANGKAH 0 ADALAH GERBANG WAJIB.** Membuat handover dari konteks yang sudah terpotong di memori = membuat dokumen berlubang. Baca transcript penuh terlebih dahulu tanpa pengecualian.
+1. **DILARANG memotong informasi** demi panjang dokumen. Detail yang memengaruhi keputusan teknis wajib ada.
+2. **DILARANG mengulang.** Satu keputusan ditulis sekali, di satu tempat.
+3. **WAJIB membuka transcript sesi sebelum menulis** (§2). Handover dari konteks yang sudah terpotong adalah dokumen berlubang.
+4. **WAJIB minimal satu diagram Mermaid** per dokumen (§5).
+5. **Keluaran bawaan HTML, lewat `meta-prd`.** Gaya diambil dari `doc-tools` milik skill itu. DILARANG menulis atau menyalin CSS ke sini. Markdown hanya menurut §1.
+6. **Label epistemik tetap berlaku** (`AGENTS.md` §3). Yang tidak diverifikasi di sesi ini ditulis sebagai belum diverifikasi, dengan cara memverifikasinya.
+7. **Rahasia tidak ditulis.** Password, token, dan isi `.env` tidak masuk dokumen; cukup sebut di mana ia disimpan.
+
+---
+
+## §1. Memilih Format
+
+| Keadaan | Format |
+| :--- | :--- |
+| User tidak menyebut format, pembacanya user atau orang lain | **HTML** |
+| User meminta Markdown ("md saja", "untuk ditempel ke chat") | Markdown |
+| Pembacanya agen lain (prompt sesi berikut, berkas handoff sub-agen) | Markdown |
+| Dua pembaca: user membaca, agen melanjutkan | HTML untuk user; tawarkan versi Markdown dalam satu baris, jangan buat dua tanpa diminta |
+
+Agen membaca Markdown lebih murah daripada HTML; orang membaca HTML lebih enak. Itu satu-satunya alasan pemisahan ini. Isi dan susunan kedua format sama.
+
+---
+
+## §2. Langkah 0: Baca Transcript
+
+Lokasi transcript berbeda per alat. Pakai baris yang sesuai dengan alat tempat Anda berjalan.
+
+| Alat | Lokasi | Status |
+| :--- | :--- | :--- |
+| Claude Code | `~/.claude/projects/<slug-folder-kerja>/<session-id>.jsonl`. Slug adalah path folder kerja dengan pemisah diganti `-` (contoh `C--Projects-devivace-altrms`). | Diverifikasi 2026-11-10: folder itu ada dan memuat berkas sesi. |
+| Antigravity | `<AppDataDir>\brain\<conversation-id>\.system_generated\logs\transcript_full.jsonl` | Dari versi lama skill ini; belum diverifikasi ulang. |
+
+Cara membacanya:
+
+1. **Cari path-nya dari konteks dulu.** Bila sesi pernah diringkas otomatis, ringkasannya menyebut path transcript penuh; pakai itu. Bila tidak, cari berkas `.jsonl` yang paling baru diubah di folder proyeknya.
+2. **Jangan dibaca utuh bila besar.** Transcript sesi panjang bisa melebihi konteks. Cari dulu (`grep_search`) pesan user, kata "setuju", "tolak", "jangan", nama berkas, dan pesan commit; lalu baca potongan di sekitarnya.
+3. **Yang wajib ditemukan:** semua pesan user, tiap keputusan berikut yang ditolak dan alasannya, tiap koreksi dari user, perintah verifikasi dan hasilnya, pekerjaan yang masih berjalan.
+4. **Cocokkan dengan keadaan nyata.** Jalankan `git status`, `git log` secukupnya, dan lihat berkas yang disebut. Transcript mengatakan apa yang dimaksudkan; repo mengatakan apa yang terjadi.
+
+Transcript tidak ditemukan atau tidak terbaca: lanjutkan dari konteks yang ada, dan **tulis peringatan di kepala dokumen** bahwa ia dibuat tanpa transcript dan bagian mana yang paling mungkin berlubang. DILARANG diam-diam melanjutkan.
+
+---
+
+## §3. Prosedur
 
 ```mermaid
 flowchart TD
-    A[Sesi panjang berakhir / user minta handover] --> B
-
-    B["[LANGKAH 0 — WAJIB]\nBaca transcript_full.jsonl sesi ini\nuntuk mendapatkan konteks penuh\nyang tidak dipotong"] --> C
-
-    C{Transcript berhasil dibaca?} -->|Tidak / File tidak ditemukan| C2
-    C -->|Ya| D
-
-    C2["Lanjut dengan konteks memori saja\nTANDAI dokumen dengan peringatan:\n⚠️ Dibuat dari memori — mungkin tidak lengkap"] --> D
-
-    D{Tipe sesi apa?}
-    D -->|Debugging| E[Pakai Template A: Bug Handover]
-    D -->|Fitur / Brainstorming| F[Pakai Template B: Feature Handover]
-    D -->|Belajar / Eksplorasi| G[Pakai Template C: Learning Handover]
-    D -->|Campuran| H[Gabungkan template yang relevan\ngunakan pemisah Titik Pergeseran Sesi]
-
-    E & F & G & H --> I[Isi §2 Header Wajib]
-    I --> J[Gambar diagram wajib §3]
-    J --> K[Isi bagian spesifik per template §4]
-    K --> L[Isi §5 Langkah Berikutnya]
-    L --> M[Simpan sebagai artefak .md]
-    M --> N[Laporkan path file ke user]
+    A["User minta handover /<br/>sesi panjang berakhir"] --> B["Langkah 0: baca transcript<br/>dan keadaan repo (§2)"]
+    B --> C{"Terbaca?"}
+    C -- tidak --> C2["Lanjut dari konteks,<br/>peringatan di kepala dokumen"]
+    C -- ya --> D{"Tipe sesi"}
+    C2 --> D
+    D -- debugging --> E["Susunan A"]
+    D -- fitur / rancangan --> F["Susunan B"]
+    D -- belajar --> G["Susunan C"]
+    D -- campuran --> H["Gabung, dengan<br/>Titik Pergeseran Sesi"]
+    E & F & G & H --> I["Gambar diagram dulu (§5)"]
+    I --> J{"Format (§1)"}
+    J -- HTML --> K["doc-tools new, tulis isi,<br/>check, render"]
+    J -- Markdown --> L["Tulis .md"]
+    K & L --> M["Lapor: path, yang belum<br/>terverifikasi, langkah pertama"]
 ```
 
-**Langkah-langkah:**
-
-1. **[WAJIB] Baca transcript penuh sesi ini** sebelum menulis apapun.
-   Transcript tersimpan di:
-   ```
-   <AppDataDir>\brain\<conversation-id>\.system_generated\logs\transcript_full.jsonl
-   ```
-   Conversation ID sesi aktif tersedia di konteks sistem. Baca file ini dengan `view_file` atau `grep` untuk menemukan semua keputusan teknis, pertanyaan, dan jawaban yang mungkin sudah terpotong dari memori aktif.
-
-2. **Identifikasi tipe sesi** dari transcript (debug, feature, learning, architecture, atau campuran).
-
-3. **Kumpulkan semua keputusan teknis** dari transcript — termasuk keputusan yang ditolak beserta alasannya.
-
-4. **Gambar diagram terlebih dahulu** — diagram memaksa Anda memetakan hubungan antar bagian sebelum menuliskan narasinya.
-
-5. **Isi template yang sesuai** (lihat §4).
-
-6. **Simpan dan laporkan** path artefak ke user.
+1. **Langkah 0** (§2).
+2. **Tentukan tipe sesi** dari transcript, bukan dari kesan terakhir.
+3. **Gambar diagram dulu.** Diagram memaksa hubungan antarbagian dipetakan sebelum narasinya ditulis.
+4. **Tentukan lokasi dan nama.** Lokasi yang disebut user menang. Bila tidak disebut, ikuti folder dokumen proyek (`.docs/<proyek>/`, `docs/`); bila tidak ada, tanya. Nama: `<proyek>-handover-<YYYY-MM-DD>-<topik>.html` (atau `.md`), huruf kecil dan tanda hubung, sesuai tabel nama di `meta-prd` §2.
+5. **Jalur HTML:** `view_file` ke `skills/meta-prd/SKILL.md` (wajib dibuka, bukan dari ingatan), lalu ikuti langkah 4 sampai 7 di sana: `doc-tools.mjs new`, tulis isi dengan komponen dari `references/components.md`, `doc-tools.mjs check`, render terang, gelap, dan layar sempit.
+6. **Jalur Markdown:** tulis langsung dengan susunan §4. Judul bagian tanpa emoji; tabel untuk hal yang berstruktur; blok kode untuk perintah.
+7. **Lapor** ke user: path lengkap, apa yang belum terverifikasi, dan satu langkah pertama untuk sesi berikutnya.
 
 ---
 
-## §2. Header Wajib (Semua Template)
+## §4. Susunan Isi
 
-Setiap dokumen handover WAJIB dibuka dengan blok ini:
+Susunan ini acuan, bukan cetakan: bagian yang tidak punya isi dibuang, bukan diisi basa-basi. Kolom "Komponen" menunjuk kelompok cuplikan di `skills/meta-prd/references/components.md`; untuk Markdown pakai padanan polosnya.
 
-```markdown
-# 📋 Handover: [Judul Deskriptif Sesi]
+### Kepala (semua tipe)
 
-| Field | Detail |
+| Isi | Komponen |
 | :--- | :--- |
-| **Tanggal Sesi** | [Tanggal & Waktu] |
-| **Tipe Sesi** | Debugging / Feature Planning / Learning / Architecture |
-| **Status Akhir** | ✅ Selesai / 🔄 Berlanjut / ⛔ Diblokir |
-| **Teknologi / Stack** | [Bahasa, Framework, Tools yang relevan] |
-| **File Utama yang Disentuh** | [Daftar file dengan path relatif] |
-| **Bisa Dilanjutkan Tanpa Konteks Tambahan?** | Ya / Tidak — [Alasan jika Tidak] |
-```
+| Judul yang menyebut hasil sesi, bukan "Handover sesi" | Kepala dokumen |
+| Tanggal dan jam absolut, tipe sesi, status akhir (selesai, berlanjut, terblokir), stack | Pilihan, keputusan, kunci-nilai (kunci-nilai) |
+| Berkas utama yang disentuh, dengan path | Tabel |
+| Branch, commit terakhir, apakah working tree bersih, apa yang belum di-push | Kunci-nilai |
+| Bisa dilanjutkan tanpa konteks tambahan? Kalau tidak, apa yang kurang | Callout |
 
----
+### Susunan A: debugging
 
-## §3. Diagram Wajib
+| # | Bagian | Isi | Komponen |
+| :-- | :--- | :--- | :--- |
+| 01 | Gejala awal | Yang terlihat atau terbaca, apa adanya; bukan tafsiran | Kode, kutipan |
+| 02 | Peta investigasi | Dari gejala ke hipotesis ke bukti ke akar masalah | Diagram |
+| 03 | Temuan per hipotesis | Hipotesis, cara membuktikan, hasil, terbukti atau dibantah | Tabel dengan pill status |
+| 04 | Akar masalah | Mengapa terjadi, bukan hanya apa | Callout |
+| 05 | Perbaikan | Perubahan dan potongan kodenya | Kode |
+| 06 | Bukti | Perintah yang dijalankan dan keluarannya, merah lalu hijau | Kode |
+| 07 | Risiko sisa | Area terkait yang belum diperiksa | Daftar periksa |
 
-Pilih tipe diagram yang paling relevan dengan sesi yang terjadi. Gunakan Mermaid.
+### Susunan B: fitur atau rancangan
 
-| Tipe Sesi | Diagram yang Direkomendasikan |
-| :--- | :--- |
-| **Debugging** | `flowchart` — alur investigasi dari gejala ke akar masalah |
-| **Feature / Brainstorming** | `flowchart` atau `sequenceDiagram` — alur data atau interaksi sistem |
-| **Arsitektur** | `graph` atau `flowchart TD` — hubungan antar komponen |
-| **Learning** | `flowchart TD` — peta konsep yang dipelajari (mindmap tidak didukung renderer) |
-| **Database / Schema** | `erDiagram` — relasi antar entitas |
+| # | Bagian | Isi | Komponen |
+| :-- | :--- | :--- | :--- |
+| 01 | Masalah | Masalah nyata, siapa yang terdampak, kenapa sekarang | Paragraf |
+| 02 | Alur atau arsitektur | Alur data, hubungan komponen, atau pohon keputusan | Diagram |
+| 03 | Keputusan | Yang dipilih, yang ditolak, alasannya, siapa yang memutuskan | Pilihan, keputusan |
+| 04 | Rancangan teknis | Struktur folder, skema, kontrak yang sudah disepakati | Kode, tabel |
+| 05 | Yang sudah dikerjakan | Komponen, status, catatan | Tabel dengan pill status |
+| 06 | Hambatan dan risiko | Blocker dan hal yang belum terjawab | Matriks risiko atau callout |
 
-> **Aturan:** Jika tidak ada diagram tipe spesifik yang cocok, gunakan `flowchart TD` sebagai fallback. Tipe `mindmap` **tidak didukung** oleh renderer Antigravity — jangan gunakan.
+### Susunan C: belajar atau eksplorasi
 
----
+| # | Bagian | Isi | Komponen |
+| :-- | :--- | :--- | :--- |
+| 01 | Tujuan belajar | Yang ingin dipahami di awal sesi | Paragraf |
+| 02 | Peta konsep | Hubungan antar konsep | Diagram |
+| 03 | Konsep | Inti, contoh konkret, jebakan | Tabel atau kartu |
+| 04 | Hubungan antar konsep | Narasi yang tidak bisa ditabelkan | Paragraf |
+| 05 | Temuan penting | Tiga sampai lima hal yang tidak tertulis di dokumentasi resmi | Callout |
+| 06 | Belum terjawab | Pertanyaan untuk sesi berikutnya | Daftar periksa |
 
-## §4. Template per Tipe Sesi
+### Sesi campuran
 
-> **Sesi Campuran:** Jika sesi dimulai sebagai satu tipe lalu bergeser ke tipe lain (contoh: debugging yang berakhir jadi feature planning setelah root cause ditemukan), **gabungkan template yang relevan** dalam satu dokumen. Gunakan sub-judul `## 🔀 Titik Pergeseran Sesi` sebagai penanda batas antara dua fase. Urutan penulisan mengikuti kronologi sesi — fase pertama ditulis lebih dulu. **DILARANG memilih hanya satu template dan membuang konteks fase lainnya.**
+Sesi yang bergeser tipe (debugging yang berakhir jadi perancangan fitur) memakai **kedua susunan dalam satu dokumen**, urut kronologis, dipisah bagian berjudul "Titik Pergeseran Sesi" yang menyebut apa yang memicu pergeserannya. DILARANG memilih satu susunan dan membuang konteks fase lainnya.
 
-### Template A: Bug / Debugging Handover
+### Penutup (semua tipe)
 
-```markdown
-## 🔴 Gejala Awal
-[Deskripsi tepat dari perilaku yang salah. Bukan interpretasi — fakta mentah apa yang terlihat/terbaca.]
-
-## 🗺️ Peta Investigasi
-[DIAGRAM WAJIB — flowchart dari gejala → hipotesis → pembuktian → akar masalah]
-
-## 🔬 Temuan per Hipotesis
-
-| Hipotesis | Metode Pembuktian | Hasil | Status |
-| :--- | :--- | :--- | :--- |
-| [Hipotesis 1] | [Cara kita membuktikan/membantahnya] | [Apa yang ditemukan] | ✅ Terbukti / ❌ Dibantah |
-| [Hipotesis 2] | ... | ... | ... |
-
-## 🎯 Akar Masalah (Root Cause)
-[Satu paragraf padat. Jelaskan MENGAPA terjadi, bukan hanya APA yang terjadi.]
-
-## 🔧 Solusi yang Diterapkan
-[Kode atau deskripsi perubahan. Sertakan potongan kode jika relevan.]
-
-## 🧪 Bukti Perbaikan
-[Perintah yang dijalankan dan output yang membuktikan bug sudah hilang.]
-
-## ⚠️ Risiko Sisa / Hal yang Belum Diperiksa
-[Jika ada area terkait yang belum diverifikasi.]
-```
-
----
-
-### Template B: Feature / Brainstorming Handover
-
-```markdown
-## 🎯 Masalah yang Dipecahkan
-[Satu paragraf: Masalah nyata apa, siapa yang terdampak, mengapa perlu diselesaikan sekarang.]
-
-## 🗺️ Arsitektur / Alur Keputusan
-[DIAGRAM WAJIB — alur data, component diagram, atau decision tree]
-
-## ⚖️ Keputusan Teknis yang Dibuat
-
-| Keputusan | Opsi yang Dipilih | Opsi yang Ditolak | Alasan |
-| :--- | :--- | :--- | :--- |
-| [Keputusan 1] | [Opsi terpilih] | [Opsi lain yang dipertimbangkan] | [Mengapa opsi terpilih lebih baik] |
-
-## 📐 Rancangan Teknis
-[Struktur folder, skema data, interface/contract yang sudah disepakati. Gunakan kode jika ada.]
-
-## ✅ Yang Sudah Dikerjakan
-
-| Komponen | Status | Keterangan |
+| Bagian | Isi | Komponen |
 | :--- | :--- | :--- |
-| [Nama komponen] | ✅ Selesai / 🔄 Sebagian / ⬜ Belum | [Catatan penting] |
-
-## 🚧 Hambatan & Risiko yang Diketahui
-[Daftar blocker teknis atau ketidakpastian yang belum terjawab.]
-```
-
----
-
-### Template C: Learning / Eksplorasi Handover
-
-```markdown
-## 🎯 Tujuan Belajar
-[Apa yang ingin dipahami di awal sesi ini.]
-
-## 🗺️ Peta Konsep
-[DIAGRAM WAJIB — mindmap atau flowchart hubungan antar konsep yang dipelajari]
-
-## 📚 Konsep yang Dipelajari
-
-| Konsep | Penjelasan Inti (1–2 kalimat) | Contoh Konkret | Gotcha / Jebakan |
-| :--- | :--- | :--- | :--- |
-| [Nama Konsep] | [Inti sarinya] | [Kode atau analogi] | [Hal yang sering disalahpahami] |
-
-## 🔗 Hubungan Antar Konsep
-[Paragraf yang menjelaskan bagaimana konsep-konsep di atas saling berkaitan. Tidak bisa ditabularkan.]
-
-## 💡 Insight Kritis
-[Maksimal 3–5 poin. Hal-hal yang TIDAK tertulis di dokumentasi resmi tapi ditemukan lewat diskusi ini.]
-
-## ❓ Pertanyaan yang Belum Terjawab
-[Daftar hal yang masih penasaran dan perlu dieksplorasi di sesi berikutnya.]
-```
+| Langkah berikutnya | Aksi, prasyarat, ukuran (kecil, sedang, besar), urut prioritas. Aksi pertama cukup rinci untuk langsung dikerjakan. | Urutan dan waktu, atau tabel |
+| Keputusan yang menunggu user | Pertanyaan, dua pilihan konkret, bawaan bila tidak dijawab | Pilihan, keputusan |
+| Koreksi dari user di sesi ini | Apa yang dikoreksi dan aturan yang lahir darinya | Callout |
+| Rujukan | Berkas, dokumen, dan perintah penting | Daftar sumber |
 
 ---
 
-## §5. Penutup Wajib (Semua Template)
+## §5. Diagram
 
-Setiap dokumen handover WAJIB ditutup dengan blok ini:
+| Tipe sesi | Diagram |
+| :--- | :--- |
+| Debugging | `flowchart`: gejala ke akar masalah |
+| Fitur, rancangan | `flowchart` atau `sequenceDiagram`: alur data atau interaksi |
+| Arsitektur | `flowchart TD`: hubungan komponen |
+| Belajar | `flowchart TD`: peta konsep |
+| Skema data | `erDiagram` |
 
-```markdown
-## 🚀 Langkah Berikutnya
-
-| Prioritas | Aksi | Prasyarat | Estimasi Kompleksitas |
-| :---: | :--- | :--- | :--- |
-| 🔴 Tinggi | [Aksi yang harus dilakukan pertama] | [Apa yang harus ada dulu] | Kecil / Sedang / Besar |
-| 🟡 Sedang | [Aksi berikutnya] | ... | ... |
-| 🟢 Rendah | [Nice-to-have] | ... | ... |
-
-## 📎 Referensi & Artefak Terkait
-- [Link ke file kode yang disentuh]
-- [Link ke dokumen lain yang relevan]
-- [Perintah penting yang perlu diingat]
-```
+Ragu memilih: `flowchart TD`. Tipe `mindmap` tidak dipakai (catatan versi lama skill ini: renderer Antigravity tidak mendukungnya). Di HTML, diagram ditulis dengan komponen diagram `meta-prd` dan **wajib dilihat hasil render-nya**; diagram yang gagal di-render tampil sebagai teks mentah.
 
 ---
 
-## §6. Aturan Tambahan
+## §6. Aturan Menulis
 
-- **Jangan tulis "kita membahas X"** — tulis langsung konten dari X. Dokumen ini bukan catatan rapat, tapi rekonstruksi pengetahuan.
-- **Jangan tulis tanggal relatif** ("kemarin", "tadi"). Gunakan tanggal dan waktu absolut.
-- **Jika ada kode yang relevan**, sertakan potongan langsung di dokumen (bukan hanya link), agar agent penerima tidak perlu membuka file terpisah untuk memahami konteks.
-- **Asumsikan agent penerima tidak tahu apa-apa** — tulislah seolah dokumen ini adalah satu-satunya informasi yang diterima.
-- **Gunakan contoh nyata sebagai acuan** — lihat [`examples/learning-golang-kalkulator-suhu.md`](./examples/learning-golang-kalkulator-suhu.md) untuk melihat bagaimana Template C diterapkan pada sesi belajar nyata, dan [`examples/mixed-debug-to-feature.md`](./examples/mixed-debug-to-feature.md) untuk contoh sesi campuran.
+- **Tulis isinya, bukan bahwa ia dibahas.** "Kita membahas cache" tidak membawa apa-apa; tulis keputusan cache-nya.
+- **Tanggal absolut.** Tidak ada "kemarin" atau "tadi".
+- **Potongan kode disertakan langsung** bila diperlukan untuk memahami keputusan; tautan saja tidak cukup.
+- **Anggap penerima tidak tahu apa-apa** tentang sesi ini.
+- **Bedakan yang dikerjakan dari yang direncanakan.** "Sudah" berarti ada commit atau keluaran perintah yang bisa ditunjuk.
+- **Status kerja ditulis apa adanya**, termasuk test yang merah, langkah yang dilewati, dan proses latar yang masih berjalan.
+
+---
+
+## §7. Anti-Pattern
+
+**Anti-Pattern 1: handover dari ingatan.** Menulis tanpa membuka transcript setelah konteks pernah diringkas. Keputusan yang ditolak dan koreksi user adalah yang pertama hilang.
+
+**Anti-Pattern 2: catatan rapat.** Kronologi "lalu kami mencoba X" tanpa hasil akhirnya. Yang ditulis keadaan sekarang dan alasannya.
+
+**Anti-Pattern 3: CSS sendiri.** Menyalin blok gaya dari dokumen lain atau menulis yang baru. Gaya hanya datang dari `doc-tools new`.
+
+**Anti-Pattern 4: "selesai" tanpa bukti.** Status selesai untuk pekerjaan yang test-nya tidak dijalankan di sesi ini.
+
+**Anti-Pattern 5: dua format tanpa diminta.** HTML dan Markdown sekaligus menggandakan yang harus dirawat. Buat satu, tawarkan yang lain.
+
+---
+
+## §8. Edge Case
+
+**Edge Case 1: transcript terlalu besar.** Cari per kata kunci dan baca potongan; sebut di dokumen bagian mana yang hanya dibaca lewat pencarian.
+
+**Edge Case 2: beberapa sesi untuk satu pekerjaan.** Handover hanya mencakup sesi ini; rujuk handover sebelumnya dengan path-nya, jangan disalin.
+
+**Edge Case 3: pekerjaan di beberapa repo.** Satu dokumen, dengan keadaan git ditulis per repo.
+
+**Edge Case 4: sub-agen masih berjalan.** Tulis apa yang ditugaskan, ke mana keluarannya, dan bahwa hasilnya belum ada. Jangan menulis perkiraan hasilnya.
+
+**Edge Case 5: sesi tanpa kode.** Brainstorming atau keputusan karir. Bagian keadaan git dibuang; diagram tetap wajib.
+
+**Edge Case 6: `doc-tools` tidak bisa dijalankan** (Node tidak ada). Laporkan ke user dan tawarkan Markdown; jangan menulis HTML tangan.
+
+---
+
+## §9. Contoh
+
+Dua contoh di `examples/` ditulis dalam Markdown dengan gaya lama (judul ber-emoji). Yang diacu dari sana adalah **kepadatan dan kelengkapan isinya**, bukan tampilannya:
+
+- `examples/learning-golang-kalkulator-suhu.md`: susunan C pada sesi belajar nyata.
+- `examples/mixed-debug-to-feature.md`: sesi campuran dengan titik pergeseran.
+
+## §10. Daftar Periksa Sebelum Lapor
+
+- [ ] Transcript dibuka, atau peringatan tertulis di kepala dokumen.
+- [ ] Keadaan git dicek dengan perintah, bukan diingat.
+- [ ] Ada diagram, dan di HTML sudah dilihat hasil render-nya.
+- [ ] Keputusan yang ditolak dan koreksi user tercatat.
+- [ ] Tidak ada rahasia, tanggal relatif, atau klaim selesai tanpa bukti.
+- [ ] HTML: `doc-tools check` lulus dan keluarannya dibaca.
+- [ ] Nama berkas sesuai pola.
