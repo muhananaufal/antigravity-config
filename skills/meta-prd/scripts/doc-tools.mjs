@@ -88,6 +88,11 @@ function checkOne(file, source) {
   const html = readFile(file);
   const body = stripBlocks(html);
 
+  const base = path.basename(file);
+  if (!/^[a-z0-9]+(-[a-z0-9]+)*\.html$/.test(base)) {
+    problems.push(`file name "${base}" is not lowercase kebab-case ending in .html (see the naming table in SKILL.md)`);
+  }
+
   for (const spec of BLOCKS) {
     const match = spec.re.exec(html);
     if (!match) { problems.push(`missing <${spec.name} id="doc-${spec.name}"> block`); continue; }

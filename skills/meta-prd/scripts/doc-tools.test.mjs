@@ -70,6 +70,14 @@ for (const [name, mutate, expected] of MUTATIONS) {
   if (ok) caught++; else { problems++; console.log(result.out.split("\n").slice(0, 6).join("\n")); }
 }
 
+// File name rule: the same passing content under a bad name must fail.
+const badName = path.join(dir, "PRD Reimbursement.html");
+fs.writeFileSync(badName, base);
+const named = run(badName);
+const namedOk = named.code === 1 && /not lowercase kebab-case/.test(named.out);
+console.log(`${namedOk ? "ok    " : "FAIL  "} mutation caught: bad file name (exit ${named.code})`);
+if (namedOk) caught++; else { problems++; console.log(named.out.split("\n").slice(0, 4).join("\n")); }
+
 fs.rmSync(dir, { recursive: true, force: true });
-console.log(`mutations ${MUTATIONS.length}, caught ${caught}, problems ${problems}`);
+console.log(`mutations ${MUTATIONS.length + 1}, caught ${caught}, problems ${problems}`);
 process.exit(problems ? 1 : 0);
