@@ -96,6 +96,7 @@
   .lbl { font-family: var(--mono); font-size: 11px; color: var(--muted); white-space: nowrap; }
   p.lbl, .lbl.wrap-ok, .toolbar > .lbl { white-space: normal; }
   code, .mono { font-family: var(--mono); font-size: .85em; background: var(--code); padding: 1px 5px; border-radius: 5px; word-break: break-word; }
+  code, .mono, pre, kbd, .lbl, .eyebrow, td.id { font-variant-ligatures: none; }
   kbd { font-family: var(--mono); font-size: .8em; background: var(--surface); border: 1px solid var(--line-strong); border-bottom-width: 2px; border-radius: 6px; padding: 1px 6px; }
   footer.doc { margin-top: 56px; font-size: 13px; color: var(--muted); }
 
@@ -201,6 +202,10 @@
   .option .killer { font-size: 13.5px; color: var(--muted); border-top: 1px dashed var(--line); padding-top: 8px; margin-top: 4px; }
   .decision { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; align-items: center; }
   @media (max-width: 620px) { .decision { grid-template-columns: minmax(0, 1fr); } }
+  .decision > .pill { justify-self: start; }
+  .stack { display: grid; gap: 12px; margin: 12px 0; }
+  .card + .card { margin-top: 12px; }
+  .grid-2 > .card + .card, .grid-3 > .card + .card, .grid-4 > .card + .card, .stack > .card + .card, .tabs > .card + .card { margin-top: 0; }
   .persona { display: grid; grid-template-columns: 48px minmax(0, 1fr); gap: 14px; align-items: start; }
   .persona .avatar { width: 48px; height: 48px; border-radius: 16px; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; font-family: var(--display); font-weight: 700; font-size: 20px; }
 
@@ -223,6 +228,71 @@
 
   /* Tabs */
   .tabs > [role="tablist"] { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+
+  /* Stories and acceptance criteria */
+  .story { display: grid; gap: 10px; align-content: start; }
+  .story .as { margin: 0; font-size: 17px; }
+  .story .as b { color: var(--accent); font-weight: 600; }
+  .gwt { display: grid; gap: 6px; margin: 0; }
+  .gwt > div { display: grid; grid-template-columns: 74px minmax(0, 1fr); gap: 10px; align-items: baseline; }
+  .gwt dt { font-family: var(--mono); font-size: 11px; font-weight: 600; text-transform: uppercase; color: var(--muted); background: var(--canvas); border-radius: 999px; padding: 2px 8px; text-align: center; }
+  .gwt dd { margin: 0; font-size: 14.5px; }
+
+  /* Matrices */
+  table.matrix th:not(:first-child), table.matrix td:not(:first-child) { text-align: center; }
+  table.matrix td:first-child { font-weight: 600; }
+  table.matrix .pick { background: var(--accent-soft); }
+  table.matrix td.yes::before { content: "\2713"; color: var(--on-success); font-weight: 700; }
+  table.matrix td.no::before { content: "\2212"; color: var(--on-danger); font-weight: 700; }
+  table.matrix td.part::before { content: "~"; color: var(--on-warning); font-weight: 700; }
+  table.matrix td.yes:not(:empty)::before, table.matrix td.no:not(:empty)::before, table.matrix td.part:not(:empty)::before { margin-right: 6px; }
+  table.risk { min-width: 520px; table-layout: fixed; }
+  table.risk th, table.risk td { text-align: center; vertical-align: middle; }
+  table.risk th[scope="row"] { position: static; text-align: left; width: 150px; }
+  table.risk td { height: 64px; font-family: var(--mono); font-size: 12.5px; font-weight: 600; border-left: 1px solid var(--line); }
+  table.risk td.low { background: var(--success); color: var(--on-success); }
+  table.risk td.mid { background: var(--warning); color: var(--on-warning); }
+  table.risk td.high { background: var(--danger); color: var(--on-danger); }
+
+  /* Dated timeline and change log */
+  .timeline { list-style: none; padding: 0; margin: 12px 0; display: grid; gap: 10px; }
+  .timeline > li { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 14px; align-items: start; max-width: none; }
+  .timeline time { font-family: var(--mono); font-size: 12.5px; color: var(--muted); padding-top: 14px; text-align: right; }
+  .timeline > li > div { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 12px 16px; }
+  .timeline h4 { margin: 0 0 2px; } .timeline p { margin: 0; }
+  .timeline > li.now > div { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .timeline > li.done time { color: var(--on-success); }
+  @media (max-width: 620px) { .timeline > li { grid-template-columns: minmax(0, 1fr); gap: 2px; } .timeline time { text-align: left; padding-top: 0; } }
+  .changelog { list-style: none; padding: 0; margin: 10px 0; display: grid; }
+  .changelog li { display: grid; grid-template-columns: 64px 110px minmax(0, 1fr); gap: 12px; align-items: baseline; padding: 8px 0; border-bottom: 1px dashed var(--line); max-width: none; font-size: 14.5px; }
+  .changelog li:last-child { border-bottom: 0; }
+  .changelog li > .pill { justify-self: start; }
+  .changelog time { font-family: var(--mono); font-size: 12.5px; color: var(--muted); }
+  @media (max-width: 620px) { .changelog li { grid-template-columns: 64px minmax(0, 1fr); } .changelog time { grid-column: 2; } .changelog li > span:last-child { grid-column: 1 / -1; } }
+
+  /* Frames, wireframes, column chart, glossary */
+  .screen { border: 2px solid var(--line-strong); background: var(--surface); overflow: hidden; display: grid; align-content: start; }
+  .screen.phone { width: 100%; max-width: 280px; aspect-ratio: 9 / 18; border-radius: 30px; padding: 18px 14px; gap: 10px; }
+  .screen.browser { border-radius: 16px; }
+  .screen.browser > .address { font-family: var(--mono); font-size: 12px; color: var(--muted); background: var(--canvas); border-bottom: 1px solid var(--line); padding: 8px 14px; }
+  .screen.browser > .view { padding: 16px; display: grid; gap: 10px; }
+  .screen img { display: block; width: 100%; border: 0; border-radius: 0; }
+  .wire { display: grid; gap: 8px; }
+  .wire > i { display: block; height: 12px; border-radius: 999px; background: var(--canvas); }
+  .wire > i.short { width: 45%; } .wire > i.mid { width: 70%; }
+  .wire > i.block { height: 72px; border-radius: 12px; }
+  .wire > i.button { height: 36px; width: 50%; border-radius: 999px; background: var(--accent-soft); }
+  .columns { display: flex; align-items: flex-end; gap: 10px; height: 180px; padding: 22px 4px 0; margin: 10px 0 0; }
+  .columns > div { flex: 1 1 0; min-width: 0; height: calc(var(--v, 0) * 1%); background: var(--accent); border-radius: 8px 8px 0 0; position: relative; }
+  .columns > div.soft { background: var(--line-strong); }
+  .columns > div > b { position: absolute; top: -20px; left: 0; right: 0; text-align: center; font-family: var(--mono); font-size: 11px; font-weight: 600; color: var(--ink); }
+  .columns-labels { display: flex; gap: 10px; padding: 6px 4px 0; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); text-align: center; }
+  .columns-labels > span { flex: 1 1 0; min-width: 0; }
+  .glossary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 10px 0; }
+  .glossary > div { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 12px 16px; }
+  .glossary dt { font-family: var(--display); font-weight: 600; }
+  .glossary dd { margin: 2px 0 0; color: var(--muted); font-size: 14.5px; }
+  @media (max-width: 720px) { .glossary { grid-template-columns: minmax(0, 1fr); } }
 
   /* Print */
   @media print {
@@ -409,9 +479,15 @@
           <p class="killer"><b>Batal kalau</b> hanya ada satu consumer.</p></div>
       </div>
       <h3>Keputusan yang dibutuhkan</h3>
-      <div class="card decision">
-        <div><h4>K1 · Apakah lampiran wajib untuk semua jenis pengajuan?</h4><p>Bawaan yang diusulkan: wajib di atas Rp500.000. Dampaknya ke validasi form dan ke laporan audit.</p></div>
-        <span class="pill warn">Menunggu jawaban</span>
+      <div class="stack">
+        <div class="card decision">
+          <div><h4>K1 · Apakah lampiran wajib untuk semua jenis pengajuan?</h4><p>Bawaan yang diusulkan: wajib di atas Rp500.000, karena nota kecil sering hilang. Akibatnya: validasi form bercabang menurut nominal.</p></div>
+          <span class="pill warn">Menunggu jawaban</span>
+        </div>
+        <div class="card decision">
+          <div><h4>K2 · Siapa yang boleh membatalkan pengajuan yang sudah disetujui?</h4><p>Bawaan yang diusulkan: hanya HRD. Akibatnya: perlu satu permission baru.</p></div>
+          <span class="pill ok">Dijawab: hanya HRD</span>
+        </div>
       </div>
       <h3>Pasangan kunci dan nilai</h3>
       <dl class="kv">
@@ -463,8 +539,104 @@
       </div>
     </section>
 
+    <section id="cerita">
+      <h2><span class="num">09</span>Cerita pengguna dan kriteria penerimaan</h2>
+      <p class="sub">Satu kartu per cerita. Kriteria ditulis sebagai keadaan awal, tindakan, dan hasil yang bisa diperiksa.</p>
+      <div class="grid-2">
+        <div class="card story">
+          <h4>U1 · Mengajukan dari HP <span class="pill p0">P0</span></h4>
+          <p class="as">Sebagai <b>karyawan lapangan</b>, saya ingin <b>mengajukan reimbursement dari HP</b> supaya <b>tidak perlu ke kantor membawa nota</b>.</p>
+          <dl class="gwt">
+            <div><dt>Kalau</dt><dd>saya sudah login dan punya foto nota.</dd></div>
+            <div><dt>Ketika</dt><dd>saya mengisi nominal, memilih jenis, dan menekan Kirim.</dd></div>
+            <div><dt>Maka</dt><dd>pengajuan tersimpan berstatus "Menunggu" dan atasan saya mendapat notifikasi.</dd></div>
+          </dl>
+        </div>
+        <div class="card story">
+          <h4>U2 · Menolak dengan alasan <span class="pill p1">P1</span></h4>
+          <p class="as">Sebagai <b>HRD</b>, saya ingin <b>menolak pengajuan dengan alasan tertulis</b> supaya <b>karyawan tahu apa yang harus diperbaiki</b>.</p>
+          <dl class="gwt">
+            <div><dt>Kalau</dt><dd>ada pengajuan berstatus "Menunggu".</dd></div>
+            <div><dt>Ketika</dt><dd>saya menekan Tolak tanpa mengisi alasan.</dd></div>
+            <div><dt>Maka</dt><dd>form menolak disimpan dan meminta alasan.</dd></div>
+          </dl>
+        </div>
+      </div>
+    </section>
+
+    <section id="matriks">
+      <h2><span class="num">10</span>Matriks perbandingan dan risiko</h2>
+      <p class="sub">Matriks perbandingan untuk opsi melawan kriteria. Matriks risiko untuk menempatkan risiko menurut kemungkinan dan dampaknya.</p>
+      <div class="table-scroll"><table class="matrix">
+        <thead><tr><th>Kriteria</th><th class="pick">A · Tabel antrian</th><th>B · Redis</th><th>C · Broker</th></tr></thead>
+        <tbody>
+          <tr><td>Job tidak hilang saat restart</td><td class="yes pick"></td><td class="part">dengan persistensi</td><td class="yes"></td></tr>
+          <tr><td>Tanpa komponen baru</td><td class="yes pick"></td><td class="yes"></td><td class="no"></td></tr>
+          <tr><td>Ribuan job per menit</td><td class="no pick"></td><td class="yes"></td><td class="yes"></td></tr>
+        </tbody>
+      </table></div>
+      <p class="note">Sel <code>yes</code>, <code>no</code>, dan <code>part</code> menggambar tandanya sendiri. Kolom yang direkomendasikan diberi kelas <code>pick</code>.</p>
+      <h3>Matriks risiko</h3>
+      <div class="table-scroll"><table class="risk">
+        <thead><tr><th></th><th>Dampak kecil</th><th>Dampak sedang</th><th>Dampak besar</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">Sering</th><td class="mid"></td><td class="high">R2</td><td class="high"></td></tr>
+          <tr><th scope="row">Kadang</th><td class="low"></td><td class="mid">R1 · R4</td><td class="high"></td></tr>
+          <tr><th scope="row">Jarang</th><td class="low">R3</td><td class="low"></td><td class="mid"></td></tr>
+        </tbody>
+      </table></div>
+      <p class="note">ID di dalam sel merujuk ke tabel risiko yang memuat skenario lengkapnya: input apa, komponen mana, apa akibatnya.</p>
+    </section>
+
+    <section id="waktu">
+      <h2><span class="num">11</span>Garis waktu dan riwayat dokumen</h2>
+      <p class="sub">Garis waktu untuk kejadian atau tenggat bertanggal. Riwayat untuk mencatat perubahan dokumen itu sendiri.</p>
+      <ol class="timeline">
+        <li class="done"><time datetime="2026-10-28">28 Okt 2026</time><div><h4>Data lowongan diambil</h4><p>881 lowongan dari 23 sumber.</p></div></li>
+        <li class="now"><time datetime="2026-11-10">10 Nov 2026</time><div><h4>Peta disusun <span class="pill solid">Sekarang</span></h4><p>117 topik di tiga level.</p></div></li>
+        <li><time datetime="2027-01-10">10 Jan 2027</time><div><h4>Fase 1 selesai</h4><p>Ujian dari folder kosong.</p></div></li>
+      </ol>
+      <h3>Riwayat dokumen</h3>
+      <ul class="changelog">
+        <li><span class="pill accent">v1.1</span><time datetime="2026-11-10">10 Nov 2026</time><span>Menambah kolom prioritas dan bagian pasar Indonesia.</span></li>
+        <li><span class="pill muted">v1.0</span><time datetime="2026-11-09">9 Nov 2026</time><span>Versi pertama.</span></li>
+      </ul>
+    </section>
+
+    <section id="layar">
+      <h2><span class="num">12</span>Layar, grafik, dan glosarium</h2>
+      <p class="sub">Bingkai layar untuk tangkapan layar atau sketsa kasar. Grafik kolom untuk beberapa angka yang dibandingkan. Glosarium untuk istilah yang dipakai berulang.</p>
+      <div class="grid-2">
+        <figure>
+          <div class="screen browser">
+            <div class="address">hrd.localhost/reimbursements</div>
+            <div class="view wire"><i class="short"></i><i class="block"></i><i></i><i class="mid"></i><i class="button"></i></div>
+          </div>
+          <figcaption>Bingkai browser. Isi <code>.view</code> boleh gambar tangkapan layar atau sketsa <code>.wire</code>.</figcaption>
+        </figure>
+        <figure>
+          <div class="screen phone wire"><i class="short"></i><i class="block"></i><i></i><i class="mid"></i><i></i><i class="button"></i></div>
+          <figcaption>Bingkai HP.</figcaption>
+        </figure>
+      </div>
+      <h3>Grafik kolom</h3>
+      <div class="card">
+        <h4>Lowongan menurut syarat tahun, Indonesia</h4>
+        <div class="columns" role="img" aria-label="Lowongan menurut syarat tahun: 0 sampai 1 tahun 3, 2 tahun 5, 3 tahun 9, 4 tahun 1, 5 tahun ke atas 2">
+          <div style="--v: 33"><b>3</b></div><div style="--v: 56"><b>5</b></div><div style="--v: 100"><b>9</b></div><div style="--v: 11"><b>1</b></div><div class="soft" style="--v: 22"><b>2</b></div>
+        </div>
+        <div class="columns-labels"><span>0–1 th</span><span>2 th</span><span>3 th</span><span>4 th</span><span>5+ th</span></div>
+        <p class="note">Tinggi kolom diisi lewat <code>--v</code> (0 sampai 100, relatif terhadap nilai terbesar). Angka aslinya ditulis di atas kolom dan di <code>aria-label</code>.</p>
+      </div>
+      <h3>Glosarium</h3>
+      <dl class="glossary">
+        <div><dt>Idempoten</dt><dd>Operasi yang hasilnya sama walau dipanggil lebih dari sekali.</dd></div>
+        <div><dt>Outbox</dt><dd>Tabel tempat pesan ditulis dalam transaksi yang sama dengan datanya, lalu dikirim oleh proses terpisah.</dd></div>
+      </dl>
+    </section>
+
     <section id="bukti">
-      <h2><span class="num">09</span>Daftar sumber</h2>
+      <h2><span class="num">13</span>Daftar sumber</h2>
       <p class="sub">Tabel bukti di akhir dokumen. Tiap klaim di badan dokumen merujuk ke ID di sini.</p>
       <div class="table-scroll"><table>
         <thead><tr><th>ID</th><th>Klaim</th><th>Tier</th><th>Sumber</th><th>Status</th></tr></thead>
@@ -503,8 +675,12 @@
       write("theme", value);
     });
   });
+  /* ?theme=light or ?theme=dark in the address forces a theme for that visit without storing it. */
+  var forcedTheme = null;
+  try { forcedTheme = new URLSearchParams(location.search).get("theme"); } catch (e) { forcedTheme = null; }
   var savedTheme = read("theme");
-  if (savedTheme === "light" || savedTheme === "dark") setTheme(savedTheme);
+  if (forcedTheme === "light" || forcedTheme === "dark") setTheme(forcedTheme);
+  else if (savedTheme === "light" || savedTheme === "dark") setTheme(savedTheme);
 
   /* Table of contents built from the sections, plus current-section highlight */
   var sections = all("main section[id]").filter(function (s) { return s.querySelector("h2"); });

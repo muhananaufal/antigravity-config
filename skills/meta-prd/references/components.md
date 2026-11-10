@@ -48,6 +48,14 @@ Tiga hal yang diurus skrip, jadi jangan ditulis tangan: isi `ol[data-toc]`, soro
 | Kutipan sumber | `blockquote` + `footer` | Parafrase |
 | Alur atau arsitektur | `.diagram` + `pre.mermaid` | Alur dua langkah |
 | Status dan prioritas | `.pill` | Kalimat; pill maksimal dua sampai tiga kata |
+| Kebutuhan dari sudut pengguna | `.card.story` + `dl.gwt` | Kebutuhan teknis internal; pakai tabel ber-ID |
+| Opsi melawan kriteria | `table.matrix` | Menggantikan kartu opsi; matriks tidak memuat alasan |
+| Risiko menurut kemungkinan dan dampak | `table.risk` | Daftar risiko itu sendiri; skenarionya tetap di tabel |
+| Kejadian atau tenggat bertanggal | `ol.timeline` | Rentang antar-jalur; pakai `.roadmap` |
+| Perubahan dokumen | `ul.changelog` | Riwayat keputusan; itu ADR |
+| Tangkapan layar atau sketsa layar | `.screen.browser` / `.screen.phone` | Menggambar desain final; sketsa `.wire` hanya menunjukkan susunan |
+| Beberapa angka dibandingkan | `.columns` | Lebih dari sekitar delapan kolom, atau angka tanpa sumber |
+| Istilah yang dipakai berulang | `dl.glossary` | Istilah yang cukup dijelaskan sekali di kalimatnya |
 
 ---
 
@@ -195,9 +203,15 @@ Saringan baris:
   </div>
 </div>
 
-<div class="card decision">
-  <div><h4>K1 · Pertanyaannya?</h4><p>Bawaan yang diusulkan dan dampaknya.</p></div>
-  <span class="pill warn">Menunggu jawaban</span>
+<div class="stack">
+  <div class="card decision">
+    <div><h4>K1 · Pertanyaannya?</h4><p>Bawaan yang diusulkan: ..., karena .... Akibatnya: ....</p></div>
+    <span class="pill warn">Menunggu jawaban</span>
+  </div>
+  <div class="card decision">
+    <div><h4>K2 · Pertanyaan berikutnya?</h4><p>Bawaan yang diusulkan: ..., karena .... Akibatnya: ....</p></div>
+    <span class="pill ok">Dijawab: ...</span>
+  </div>
 </div>
 
 <dl class="kv">
@@ -207,6 +221,28 @@ Saringan baris:
 ```
 
 `AGENTS.md` §4 mewajibkan tiga kelebihan dan tiga kekurangan per opsi serta pembatalnya. Komponen `.option` disusun untuk itu.
+
+Beberapa kartu berurutan di luar kisi dibungkus `div.stack` supaya berjarak. Kartu keputusan yang sudah dijawab tidak dihapus: pill-nya diganti `ok` dengan jawabannya, supaya riwayatnya terbaca.
+
+### Tabel tujuan dan tabel asumsi
+
+```html
+<div class="table-scroll"><table>
+  <thead><tr><th>ID</th><th>Tujuan</th><th>Ukuran berhasil</th><th>Cara mengukur</th></tr></thead>
+  <tbody>
+    <tr><td class="id">T1</td><td>Pengajuan tidak perlu kertas.</td><td>Semua pengajuan bulan berjalan masuk lewat aplikasi.</td><td>Hitung baris tabel pengajuan dibanding arsip kertas HRD.</td></tr>
+  </tbody>
+</table></div>
+
+<div class="table-scroll"><table>
+  <thead><tr><th>ID</th><th>Asumsi</th><th>Akibat bila salah</th><th>Cara termurah memverifikasi</th></tr></thead>
+  <tbody>
+    <tr><td class="id">A1</td><td>Karyawan lapangan punya HP dengan kamera.</td><td>Lampiran foto tidak bisa diwajibkan.</td><td>Tanya lima kepala regu.</td></tr>
+  </tbody>
+</table></div>
+```
+
+Tujuan tanpa cara mengukur bukan tujuan; tulis sebagai harapan di paragraf atau buang.
 
 ### Daftar periksa, tab, buka-tutup
 
@@ -246,6 +282,86 @@ Saringan baris:
 ```
 
 Mermaid dimuat dari CDN hanya bila halaman punya `pre.mermaid`, dan digambar ulang saat tema berganti. Tanpa internet, teks sumbernya tetap tampil.
+
+### Cerita pengguna dan kriteria penerimaan
+
+```html
+<div class="card story">
+  <h4>U1 · Mengajukan dari HP <span class="pill p0">P0</span></h4>
+  <p class="as">Sebagai <b>karyawan lapangan</b>, saya ingin <b>mengajukan dari HP</b> supaya <b>tidak perlu ke kantor</b>.</p>
+  <dl class="gwt">
+    <div><dt>Kalau</dt><dd>keadaan awal.</dd></div>
+    <div><dt>Ketika</dt><dd>tindakan pengguna.</dd></div>
+    <div><dt>Maka</dt><dd>hasil yang bisa diperiksa.</dd></div>
+  </dl>
+</div>
+```
+
+Satu `dl.gwt` per skenario. Skenario gagal (input salah, tanpa izin) ditulis sebagai `dl.gwt` kedua di kartu yang sama, bukan dilewati.
+
+### Matriks perbandingan dan matriks risiko
+
+```html
+<div class="table-scroll"><table class="matrix">
+  <thead><tr><th>Kriteria</th><th class="pick">A</th><th>B</th></tr></thead>
+  <tbody>
+    <tr><td>Job tidak hilang saat restart</td><td class="yes pick"></td><td class="part">dengan persistensi</td></tr>
+    <tr><td>Tanpa komponen baru</td><td class="yes pick"></td><td class="no"></td></tr>
+  </tbody>
+</table></div>
+
+<div class="table-scroll"><table class="risk">
+  <thead><tr><th></th><th>Dampak kecil</th><th>Dampak sedang</th><th>Dampak besar</th></tr></thead>
+  <tbody>
+    <tr><th scope="row">Sering</th><td class="mid"></td><td class="high">R2</td><td class="high"></td></tr>
+    <tr><th scope="row">Kadang</th><td class="low"></td><td class="mid">R1</td><td class="high"></td></tr>
+    <tr><th scope="row">Jarang</th><td class="low">R3</td><td class="low"></td><td class="mid"></td></tr>
+  </tbody>
+</table></div>
+```
+
+Sel `yes`, `no`, `part` menggambar tandanya sendiri; teks di dalam sel jadi keterangan tambahan. Warna sel matriks risiko (`low`, `mid`, `high`) ditentukan posisinya, bukan isi selnya.
+
+### Garis waktu dan riwayat dokumen
+
+```html
+<ol class="timeline">
+  <li class="done"><time datetime="2026-10-28">28 Okt 2026</time><div><h4>Kejadian</h4><p>Keterangan.</p></div></li>
+  <li class="now"><time datetime="2026-11-10">10 Nov 2026</time><div><h4>Kejadian <span class="pill solid">Sekarang</span></h4><p>Keterangan.</p></div></li>
+  <li><time datetime="2027-01-10">10 Jan 2027</time><div><h4>Tenggat</h4><p>Keterangan.</p></div></li>
+</ol>
+
+<ul class="changelog">
+  <li><span class="pill accent">v1.1</span><time datetime="2026-11-10">10 Nov 2026</time><span>Apa yang berubah.</span></li>
+</ul>
+```
+
+Tanggal selalu absolut, dengan atribut `datetime` berformat `YYYY-MM-DD`.
+
+### Bingkai layar, grafik kolom, glosarium
+
+```html
+<figure>
+  <div class="screen browser">
+    <div class="address">hrd.localhost/reimbursements</div>
+    <div class="view"><img src="tangkapan.png" alt="Daftar pengajuan dengan tiga baris berstatus Menunggu"></div>
+  </div>
+  <figcaption>Keterangan.</figcaption>
+</figure>
+
+<div class="screen phone wire"><i class="short"></i><i class="block"></i><i></i><i class="mid"></i><i class="button"></i></div>
+
+<div class="columns" role="img" aria-label="Lowongan per syarat tahun: 0-1 tahun 3, 2 tahun 5, 3 tahun 9">
+  <div style="--v: 33"><b>3</b></div><div style="--v: 56"><b>5</b></div><div style="--v: 100"><b>9</b></div>
+</div>
+<div class="columns-labels"><span>0–1 th</span><span>2 th</span><span>3 th</span></div>
+
+<dl class="glossary">
+  <div><dt>Idempoten</dt><dd>Operasi yang hasilnya sama walau dipanggil lebih dari sekali.</dd></div>
+</dl>
+```
+
+`.wire` menggambar sketsa dari balok abu: `i` garis penuh, `i.short` dan `i.mid` garis pendek, `i.block` kotak isi, `i.button` tombol. `--v` pada `.columns` bernilai 0 sampai 100 relatif terhadap nilai terbesar; angka aslinya WAJIB ditulis di `<b>` dan di `aria-label`.
 
 ### Daftar sumber
 
