@@ -19,6 +19,8 @@ const CANDIDATES = [
 
 export const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+const CALL_TIMEOUT_MS = 30000;
+
 /** Returns the browser executable path, or null when none is installed. DOC_BROWSER overrides detection. */
 export function findBrowser() {
   const list = [process.env.DOC_BROWSER, ...CANDIDATES].filter(Boolean);
@@ -80,7 +82,18 @@ export async function launch() {
     const payload = { id, method, params };
     if (sessionId) payload.sessionId = sessionId;
     socket.send(JSON.stringify(payload));
-    return new Promise((resolve, reject) => pending.set(id, { resolve, reject }));
+    // A browser call that never answers must fail, not hang the whole run. Seen on 2026-11-10: one render
+    // stopped mid-way for more than six minutes, and a requestAnimationFrame wait never resolved in a headless page.
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        pending.delete(id);
+        reject(new Error(`${method} did not answer within ${CALL_TIMEOUT_MS / 1000}s`));
+      }, CALL_TIMEOUT_MS);
+      pending.set(id, {
+        resolve: (value) => { clearTimeout(timer); resolve(value); },
+        reject: (error) => { clearTimeout(timer); reject(error); },
+      });
+    });
   };
 
   const { targetId } = await send("Target.createTarget", { url: "about:blank" });
