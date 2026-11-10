@@ -220,7 +220,7 @@ Saringan baris:
 </dl>
 ```
 
-`AGENTS.md` §4 mewajibkan tiga kelebihan dan tiga kekurangan per opsi serta pembatalnya. Komponen `.option` disusun untuk itu.
+`AGENTS.md` §4 mewajibkan tiga kelebihan dan tiga kekurangan per opsi serta pembatalnya. Komponen `.option` disusun untuk itu. Label `.lbl` di dalam butir `ul.pros` atau `ul.cons` jatuh ke baris sendiri di luar indentasi (diketahui, belum diperbaiki di galeri): taruh labelnya di paragraf pembuka bagian atau di `p.note` di bawah kisi kartu.
 
 Beberapa kartu berurutan di luar kisi dibungkus `div.stack` supaya berjarak. Kartu keputusan yang sudah dijawab tidak dihapus: pill-nya diganti `ok` dengan jawabannya, supaya riwayatnya terbaca.
 
@@ -285,6 +285,8 @@ Mermaid dimuat dari CDN hanya bila halaman punya `pre.mermaid`, dan digambar ula
 
 Ganti baris di dalam label node ditulis `&lt;br/&gt;`, bukan `<br/>`. Di dalam `pre`, `<br/>` mentah dibaca browser sebagai elemen dan hilang dari teks yang diterima Mermaid, sehingga dua baris label menyatu tanpa spasi ("Peta belajar Goselesai"). `check` dan `doc-render` tidak menangkap ini; hanya terlihat di gambarnya.
 
+Diagram dengan lebih dari sekitar delapan node mengecil di layar sempit sampai hurufnya sulit dibaca: pecah jadi dua diagram, atau pindahkan rinciannya ke `ol.steps` di bawahnya. Yang diketahui dan belum diperbaiki di galeri: label garis Mermaid di tema gelap berlatar gelap pekat, tidak mengikuti warna kartu.
+
 ### Cerita pengguna dan kriteria penerimaan
 
 ```html
@@ -322,7 +324,7 @@ Satu `dl.gwt` per skenario. Skenario gagal (input salah, tanpa izin) ditulis seb
 </table></div>
 ```
 
-Sel `yes`, `no`, `part` menggambar tandanya sendiri; teks di dalam sel jadi keterangan tambahan. Warna sel matriks risiko (`low`, `mid`, `high`) ditentukan posisinya, bukan isi selnya.
+Sel `yes`, `no`, `part` menggambar tandanya sendiri; teks di dalam sel jadi keterangan tambahan. Kolom terpilih (`.pick`) ditaruh tepat setelah kolom kriteria: di layar sempit kolom paling kanan tersembunyi di balik geseran. Warna sel matriks risiko (`low`, `mid`, `high`) ditentukan posisinya, bukan isi selnya.
 
 ### Garis waktu dan riwayat dokumen
 
@@ -366,6 +368,8 @@ Tanggal selalu absolut, dengan atribut `datetime` berformat `YYYY-MM-DD`.
 `.wire` menggambar sketsa dari balok abu: `i` garis penuh, `i.short` dan `i.mid` garis pendek, `i.block` kotak isi, `i.button` tombol. `--v` pada `.columns` bernilai 0 sampai 100 relatif terhadap nilai terbesar; angka aslinya WAJIB ditulis di `<b>` dan di `aria-label`.
 
 ### Daftar sumber
+
+Sumber yang sengaja tidak dibuka (tidak tersedia, atau dilarang di tugas itu) tetap dicatat dengan tier `—` dan `<span class="pill muted">Tidak dibuka</span>`, dengan sebabnya; `pill danger` hanya untuk yang dicoba dan gagal.
 
 ```html
 <div class="table-scroll"><table>

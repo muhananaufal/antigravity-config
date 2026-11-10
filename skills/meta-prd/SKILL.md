@@ -26,7 +26,7 @@ Skill ini menulis dokumen untuk dibaca manusia dan menyimpannya sebagai satu ber
 1. **Gaya datang dari berkas, bukan dari ingatan.** Dokumen WAJIB dimulai dari `doc-tools.mjs new`. DILARANG mengetik ulang, meringkas, atau menyunting isi blok `<style id="doc-style">` dan `<script id="doc-script">`. `check` membandingkan keduanya dengan galeri dan gagal bila berbeda satu karakter pun.
 2. **Fakta dulu, bentuk kemudian.** Baca kode, data, dan dokumen milik user sebelum menulis. Label epistemik `AGENTS.md` §3 berlaku penuh di dalam dokumen: angka tanpa sumber DILARANG, kutipan WAJIB verbatim dan bersumber, sumber yang gagal dibuka dicatat gagal.
 3. **Struktur mengikuti isi.** Susunan di `references/structures.md` adalah acuan. Bagian yang tidak punya isi nyata dibuang, bukan diisi kalimat pengisi.
-4. **Dokumen bukan gerbang.** Menulis PRD atau RFC tidak menggantikan panel dan tidak menggantikan persetujuan user. Dokumen yang mengusulkan perubahan berakhir dengan keputusan yang diminta, lalu berhenti (`AGENTS.md` §0.2).
+4. **Dokumen bukan gerbang.** Menulis PRD atau RFC tidak menggantikan panel dan tidak menggantikan persetujuan user. Dokumen yang mengusulkan perubahan berakhir dengan keputusan yang diminta, lalu berhenti (`AGENTS.md` §0.2). Agen suruhan yang ditugasi menulis sebuah dokumen memperlakukan tugasnya sebagai persetujuan atas dokumen itu saja, bukan atas perubahan yang diusulkan di dalamnya.
 5. **Selesai berarti `check` lulus DAN halamannya sudah dirender.** Exit code 0 dari `check` membuktikan kerangkanya utuh; ia tidak membuktikan halamannya terbaca. Dua-duanya wajib sebelum melapor (`AGENTS.md` §5.7).
 
 ---
@@ -90,12 +90,12 @@ flowchart TD
    ```bash
    node ~/.gemini/config/skills/meta-prd/scripts/doc-tools.mjs check <lokasi>/<nama>.html
    ```
-   Baca keluarannya penuh. `sections 0` atau `ids 0` berarti pemeriksa tidak membaca apa-apa, bukan dokumennya bersih. `internal links 0` itu wajar: daftar isi dibangun otomatis, jadi dokumen tanpa tautan `#` di badannya sah.
+   Baca keluarannya penuh. `sections 0` atau `ids 0` berarti pemeriksa tidak membaca apa-apa, bukan dokumennya bersih. `internal links 0` itu wajar: daftar isi dibangun otomatis, jadi dokumen tanpa tautan `#` di badannya sah. `check` juga menolak placeholder `{{...}}` yang tertinggal, jadi tidak perlu dicari sendiri.
 7. **Render dan baca gambarnya:**
    ```bash
    node ~/.gemini/config/skills/meta-prd/scripts/doc-render.mjs <lokasi>/<nama>.html --out <folder scratch>
    ```
-   Skrip ini membuka dokumen di Edge atau Chrome headless untuk empat kombinasi (terang dan gelap, lebar 1280 dan 390), memotongnya jadi gambar setinggi layar, dan melaporkan halaman yang meluber ke samping, error skrip, serta diagram yang tidak selesai. Exit 0 hanya berarti pemeriksaan otomatisnya bersih; **gambarnya tetap WAJIB dibaca**, minimal potongan pertama dan terakhir tiap kombinasi plus potongan yang memuat tabel lebar dan diagram. Arahkan `--out` ke folder scratch, bukan ke folder dokumen proyek. Exit 3 berarti tidak ada browser: katakan di laporan bahwa dokumen belum dirender, jangan menyiratkan sudah dilihat. DILARANG merender dengan `--window-size` di bawah 500: jendela headless tidak bisa lebih sempit dari itu dan gambarnya terpotong seolah-olah halamannya meluber. Untuk melihat satu tema lewat browser biasa, tambahkan `?theme=light` atau `?theme=dark` di alamatnya.
+   Skrip ini membuka dokumen di Edge atau Chrome headless untuk empat kombinasi (terang dan gelap, lebar 1280 dan 390), memotongnya jadi gambar setinggi layar, dan melaporkan halaman yang meluber ke samping, error skrip, serta diagram yang tidak selesai. Exit 0 hanya berarti pemeriksaan otomatisnya bersih; **gambarnya tetap WAJIB dibaca**, minimal potongan pertama dan terakhir tiap kombinasi plus potongan yang memuat tabel lebar dan diagram. Arahkan `--out` ke folder scratch, bukan ke folder dokumen proyek. Exit 3 berarti tidak ada browser: katakan di laporan bahwa dokumen belum dirender, jangan menyiratkan sudah dilihat. DILARANG merender dengan `--window-size` di bawah 500: jendela headless tidak bisa lebih sempit dari itu dan gambarnya terpotong seolah-olah halamannya meluber. Untuk melihat satu tema lewat browser biasa, tambahkan `?theme=light` atau `?theme=dark` di alamatnya. Dua hal yang pernah terjadi: potongan terakhir bisa kosong (hanya latar), maka yang dibaca adalah potongan terakhir yang berisi; dan satu gambar bisa rusak (isi berulang atau terpotong) walau exit 0 dan halamannya benar, maka render ulang sekali dan bandingkan dengan tema lainnya sebelum menyimpulkan halamannya yang rusak.
 8. **Lapor** path lengkap berkasnya, apa yang belum terverifikasi, dan keputusan yang ditunggu dari user.
 
 ---
@@ -111,7 +111,7 @@ flowchart TD
 - `footer.doc`: satu sampai dua kalimat. Siapa menyusun, kapan, untuk keputusan apa, dan satu batas terpenting dokumen ini.
 
 **Badan**
-- Bagian `00` selalu **Ringkasan**: dua kartu dan, bila ada batas atau risiko yang harus dibaca dulu, satu `callout warn`. Judul kartu mengikuti isinya, mis. "Yang diusulkan" dan "Batas dan yang belum diputuskan", atau "Yang ditemukan" dan "Yang direkomendasikan". Tiga sampai enam butir per kartu, tiap butir dibuka frasa tebal.
+- Bagian `00` selalu **Ringkasan** (bila `references/structures.md` menulis lain untuk satu jenis dokumen, berkas ini yang menang): dua kartu dan, bila ada batas atau risiko yang harus dibaca dulu, satu `callout warn`. Judul kartu mengikuti isinya, mis. "Yang diusulkan" dan "Batas dan yang belum diputuskan", atau "Yang ditemukan" dan "Yang direkomendasikan". Tiga sampai enam butir per kartu, tiap butir dibuka frasa tebal.
 - Satu bagian menjawab satu pertanyaan. Dibuka `p.sub` satu sampai dua kalimat, lalu isi.
 - Nomor bagian dua digit, berurutan dari `00`. Daftar isi dibangun otomatis dari bagian; jangan ditulis tangan.
 - Pilih komponen dari fungsinya: perbandingan setara memakai kartu, daftar berkolom memakai tabel, urutan memakai `.steps`, pilihan memakai `.option` dengan kelebihan, kekurangan, dan pembatal. Rincian di `references/components.md`.
@@ -122,7 +122,7 @@ flowchart TD
 
 **Label dan sumber**
 - Label ditulis `<span class="lbl">[fakta:E2]</span>` di ujung klaimnya. Bentuk yang dipakai: `[fakta:E#]`, `[inferensi dari E#]`, `[spekulasi]`, `[memori-model]`.
-- Yang WAJIB berlabel: angka, kutipan, klaim tentang perilaku sistem atau pihak luar, dan semua usulan penyusun yang tidak diminta peminta. Bila satu bagian seluruhnya bersumber satu berkas, cukup satu label di kalimat pembukanya; jangan menabur label di tiap kalimat.
+- Yang WAJIB berlabel: angka, kutipan, klaim tentang perilaku sistem atau pihak luar, dan semua usulan penyusun yang tidak diminta peminta. Bila satu bagian seluruhnya bersumber satu berkas, cukup satu label di kalimat pembukanya; jangan menabur label di tiap kalimat. Usulan penyusun tidak punya label sendiri: sebut "usulan penyusun" di kalimatnya, lalu beri `[inferensi dari E#]` bila diturunkan dari sumber atau `[spekulasi]` bila tebakan (angka selang waktu, ukuran, batas).
 - Tier sumber di tabel bukti (definisi lengkap di `skills/meta-brainstorm/references/evidence-protocol.md`):
 
   | Tier | Artinya | Contoh |
