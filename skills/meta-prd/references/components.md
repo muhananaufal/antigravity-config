@@ -95,7 +95,7 @@ Kolom kanan opsional. Hapus `div.progress` bila tidak ada angka yang layak ditam
 </section>
 ```
 
-`id` huruf kecil tanpa spasi. Nomor dua digit berurutan dari `00`. Label daftar isi yang lebih pendek dari judul: tambahkan `data-toc-label="Masalah"` pada `section`.
+`id` huruf kecil tanpa spasi. Nomor dua digit berurutan dari `00`. Judul `h2` berisi teks polos saja: `<code>` di dalam `h2` menjadi kolom sendiri dan di layar sempit hurufnya tersusun ke bawah satu per satu. Label daftar isi yang lebih pendek dari judul: tambahkan `data-toc-label="Masalah"` pada `section`.
 
 ### Kartu, kisi, persona
 
@@ -282,6 +282,8 @@ Tujuan tanpa cara mengukur bukan tujuan; tulis sebagai harapan di paragraf atau 
 ```
 
 Mermaid dimuat dari CDN hanya bila halaman punya `pre.mermaid`, dan digambar ulang saat tema berganti. Tanpa internet, teks sumbernya tetap tampil.
+
+Ganti baris di dalam label node ditulis `&lt;br/&gt;`, bukan `<br/>`. Di dalam `pre`, `<br/>` mentah dibaca browser sebagai elemen dan hilang dari teks yang diterima Mermaid, sehingga dua baris label menyatu tanpa spasi ("Peta belajar Goselesai"). `check` dan `doc-render` tidak menangkap ini; hanya terlihat di gambarnya.
 
 ### Cerita pengguna dan kriteria penerimaan
 
