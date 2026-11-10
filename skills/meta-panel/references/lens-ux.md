@@ -98,13 +98,37 @@ Tiap layar punya lima keadaan, bukan satu
 
 ### 2.7 Aksesibilitas dasar
 
-| Cek | Skenario yang dicari |
-| :--- | :--- |
-| Papan ketik | Semua aksi bisa dijangkau tanpa mouse; fokus terlihat. |
-| Kontras dan ukuran | Teks terbaca di tema yang dipakai; ukuran huruf tidak di bawah yang dipakai halaman lain. |
-| Gerak | Animasi yang berjalan terus punya cara dihentikan. |
-| Dialog | Dialog benar-benar menutup; halaman di belakangnya tidak tertinggal dalam keadaan mati. |
+Disusun dari tiga halaman W3C WAI. Daftar ini pemeriksaan awal: sumbernya sendiri menyebut "Easy Checks" itu "designed to be quick and easy, rather than definitive". Lulus daftar ini bukan berarti memenuhi WCAG.
 
+**Sepuluh pemeriksaan cepat** (W3C, "Easy Checks"), dengan yang dicari di aplikasi bisnis:
+
+| Pemeriksaan di sumber | Skenario yang dicari |
+| :--- | :--- |
+| Page title | Tiap halaman punya judul tab yang menyebut isinya, bukan nama aplikasi saja. |
+| Image text alternatives | Gambar yang membawa arti punya teks pengganti; ikon tanpa teks punya nama. |
+| Headings | Judul bertingkat sungguhan, bukan teks tebal. |
+| Contrast ratio | Teks minimal 4.5:1 terhadap latarnya, 3:1 untuk teks besar (WCAG 1.4.3, AA). Diukur, bukan dinilai mata. Lencana berwarna dengan teks putih paling sering gagal. |
+| Resize Text | Teks diperbesar tanpa ada yang terpotong atau bertumpuk. |
+| Keyboard access and visual focus | Semua aksi bisa dijangkau tanpa mouse, urutannya masuk akal, dan fokusnya terlihat. Menu aksi dan dialog paling sering gagal. |
+| Forms, labels, and errors | Tiap isian punya label yang terhubung; pesan gagal menyebut isiannya dan cara membetulkannya. |
+| Moving, Flashing, or Blinking Content | Yang bergerak sendiri bisa dihentikan. |
+| Multimedia alternatives | Video atau audio punya teks, bila ada. |
+| Basic Structure Check | Halaman tetap terbaca urut tanpa gaya. |
+
+**Yang baru di WCAG 2.2** dan sering kena di aplikasi web (tingkat A dan AA saja):
+
+| Kriteria | Yang dicari |
+| :--- | :--- |
+| 2.5.8 Target Size (Minimum), AA | Sasaran sentuh "at least 24 by 24 CSS pixels", dengan pengecualian yang tertulis di kriterianya. Ikon aksi di baris tabel paling sering terlalu kecil. |
+| 2.4.11 Focus Not Obscured (Minimum), AA | Elemen yang sedang difokus tidak tertutup kepala halaman atau bilah yang menempel. |
+| 2.5.7 Dragging Movements, AA | Yang bisa diseret punya cara lain tanpa menyeret. |
+| 3.3.7 Redundant Entry, A | Data yang sudah diisi di proses yang sama tidak diminta diketik ulang. |
+| 3.3.8 Accessible Authentication (Minimum), AA | Login tidak mewajibkan uji ingatan atau teka-teki tanpa jalan lain; jangan menghalangi tempel password dan pengelola password. |
+| 3.2.6 Consistent Help, A | Tautan bantuan berada di tempat yang sama di tiap halaman. |
+
+Empat prinsip WCAG sebagai periksa silang terakhir: bisa ditangkap indra (perceivable), bisa dioperasikan (operable), bisa dipahami (understandable), dan tahan terhadap alat yang berbeda (robust).
+
+Satu hal dari proyek user yang tidak ada di sumber: dialog harus benar-benar menutup, dan halaman di belakangnya tidak tertinggal dalam keadaan mati.
 ---
 
 ## 3. Sepuluh Heuristik sebagai Periksa Silang
@@ -179,4 +203,4 @@ Tanpa pola yang sudah ada di aplikasi atau keluhan user, warna dan gaya bukan ur
 - Jakob Nielsen, "10 Usability Heuristics for User Interface Design", Nielsen Norman Group, 1994, ditinjau ulang 30 Januari 2024 (dibuka 2026-11-10). Nama heuristik dikutip; penjelasannya tidak.
 - Google AIP (google.aip.dev), daftar dibuka 2026-11-10: AIP-180 Backwards compatibility, AIP-193 Errors, AIP-158 Pagination. RFC 9457, Problem Details for HTTP APIs.
 - Kejadian di proyek user dari `shared/LEARNED.md`: tabel PO yang "disamakan", pemilih 30 baris, dialog bawaan browser, deskripsi izin yang dirumuskan sendiri, `enctype` global, rename key response, contoh dokumentasi dengan role ber-bypass, dialog Alpine yang tidak menutup, kelas Tailwind yang tidak ada, pola "AI slop" yang ditolak.
-- Bagian aksesibilitas ditulis umum; tidak ada dokumen WCAG yang dibuka saat berkas ini ditulis.
+- W3C WAI, dibuka 10 November 2026: "Easy Checks - A First Review of Web Accessibility" (diperbarui 9 Agustus 2023), "What's New in WCAG 2.2" (diperbarui 5 Oktober 2023), "WCAG 2 at a Glance" (diperbarui 29 November 2023), dan Understanding SC 1.4.3 Contrast (Minimum). Bagian 2.7 disusun dari empat halaman itu; nama pemeriksaan dan kriteria dikutip apa adanya, kolom "yang dicari" adalah terjemahan ke aplikasi bisnis oleh penyusun.

@@ -95,6 +95,23 @@ Untuk pekerjaan sebagai karyawan, "klien" di tabel ini adalah atasan dan divisi 
 
 Peran ini tidak menyebut "harga wajar" atau "tarif umum". Bila user ingin pembanding pasar, itu riset tersendiri dengan sumber yang dibuka dan dicatat tanggalnya (`meta-brainstorm` Fase 0).
 
+### 2.6 Periksa silang dengan sumber
+
+Pegangan 2.1 sampai 2.4 dicocokkan dengan tiga bab *Shape Up* (Ryan Singer). Yang sejalan diperkuat di sini; yang berbeda disebut.
+
+| Dari sumber | Artinya untuk peran ini |
+| :--- | :--- |
+| "Estimates start with a design and end with a number. Appetites start with a number and end with a design." (bab 3) | Sebelum menaksir, tanyakan dulu berapa besar pekerjaan ini **boleh** jadi menurut user. Angka itu membentuk solusinya, bukan sebaliknya. |
+| "fixed time, variable scope" (bab 3) | Bila waktunya tetap, yang digerakkan cakupannya. Ini dasar 2.4: kabar buruk disampaikan dengan pilihan memotong cakupan. |
+| "redesign the Files section" disebut "a grab-bag, not a project" (bab 3) | Permintaan yang tidak bisa disebut mulai dan berakhirnya di mana belum bisa ditaksir. Persempit ke "apa yang sebenarnya salah" dulu. |
+| Scope adalah potongan terpadu yang "can be completed independently"; daftar disusun "based on the structure of the project", bukan per orang atau per lapisan (bab 12) | Sama dengan 2.1: potong menurut hasil. Nama potongan seperti "front-end" atau "bugs" adalah tanda potongannya salah. |
+| Tanda potongan benar: terasa bisa melihat seluruh proyek; tugas baru jelas masuk ke mana. Tanda salah: sulit menyebut seberapa selesai; terlalu besar untuk selesai segera (bab 12) | Dipakai untuk memeriksa potongan sebelum disajikan ke user. |
+| Yang bagus-kalau-ada dicatat di potongannya dengan tanda `~` di depan (bab 12) | Cara murah memisahkan yang wajib dari yang boleh dibuang saat waktu habis. |
+| "It's not meaningful to write '4 hours, or maybe 3 days' as the estimate." Pekerjaan punya fase menanjak ("full of uncertainty, unknowns, and problem solving") dan menurun (bab 13) | Mendukung 2.2: yang belum diketahui caranya tidak diberi angka. Laporan kemajuan menyebut potongan mana yang masih menanjak. |
+| Tim didorong "to push the scariest work uphill first" (bab 13) | Sama dengan 2.1: yang paling tidak pasti dikerjakan dulu. |
+
+Yang **tidak** diambil: ukuran "Small Batch" satu sampai dua minggu dan "Big Batch" enam minggu. Itu ukuran untuk tim Basecamp (satu desainer dan satu atau dua programmer), bukan patokan untuk user yang bekerja sendirian di sela pekerjaan lain.
+
 ---
 
 ## 3. Dokumen yang Dihasilkan
@@ -161,4 +178,5 @@ Obrolan dengan peran ini tidak otomatis menghasilkan dokumen; ia ditutup dengan 
 - Kejadian dari `shared/LEARNED.md`: "retrofit 30 berkas" yang ternyata 198, lima pertanyaan klarifikasi sekaligus, "tujuan akhir bukan kriteria langkah pertama", "angka tanpa sumber = karangan".
 - Contoh di bagian 4 sengaja rekaan dan tanpa angka nyata, supaya tidak tersalin ke pekerjaan sungguhan.
 - Uji 10 November 2026 (satu agen baru, satu giliran, repo `altrms`): peran ini tidak menyebut hari maupun harga, dan menemukan sendiri bahwa jam commit tidak bisa dipakai mengukur lama kerja.
-- Seluruh pegangan di bagian 2 adalah susunan sendiri; tidak ada sumber luar yang dibuka untuk berkas ini, dan peran ini **belum pernah dijalankan pada proyek nyata** saat berkas ini ditulis.
+- Ryan Singer, *Shape Up*, bab 3 "Set Boundaries", bab 12 "Map the Scopes", dan bab 13 "Show Progress" (basecamp.com/shapeup), dibuka 10 November 2026: isi bagian 2.6. Kutipan di sana verbatim.
+- Pegangan di bagian 2.1 sampai 2.5 adalah susunan sendiri yang diperiksa silang dengan sumber di atas; bagian 2.5 (pekerjaan lepas) tidak punya sumber. Selain itu peran ini **belum pernah dijalankan pada proyek nyata** saat berkas ini ditulis.

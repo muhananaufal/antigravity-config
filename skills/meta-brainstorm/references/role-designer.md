@@ -98,6 +98,25 @@ Teks yang tampil ke pengguna adalah keputusan produk. Peran ini mengusulkan dua 
 
 Gerak dipakai untuk tiga hal: menunjukkan dari mana sesuatu datang, menandai bahwa sesuatu berubah, dan memberi tahu bahwa sistem sedang bekerja. Di luar itu ia hiasan. Gerak yang berjalan terus punya cara dihentikan, dan pengaturan kurangi-gerak di perangkat pengguna dihormati.
 
+### 2.8 Periksa silang dengan sumber
+
+Pegangan 2.3 sampai 2.7 dicocokkan dengan empat halaman. Dua yang pertama ditulis untuk layanan pemerintah Inggris berbahasa Inggris: prinsipnya dipakai, kata-katanya tidak. Kata yang sudah dipakai aplikasi user tetap menang (2.2).
+
+| Dari sumber | Artinya untuk peran ini |
+| :--- | :--- |
+| "If you find yourself having to explain how the user interface works, that's a sign something has gone wrong." (GOV.UK, Writing for user interfaces) | Sebelum menambah teks bantuan, betulkan susunannya. Mendukung 2.3: bantuan hanya bila isiannya memang membingungkan. |
+| "Break up copy into short sentences. One idea per sentence." dan "Put the important words first and drop any unnecessary words." (sumber yang sama) | Satu gagasan per kalimat; kata pentingnya di depan. |
+| "Do not rely on shape, size, colour or location alone to communicate information." (sumber yang sama) | Mendukung 2.5: status tidak hanya lewat warna. Juga: jangan menulis "klik tombol hijau di kanan". |
+| "Make the purpose of the link clear from the link text alone." (sumber yang sama) | Tautan dan tombol menyebut tujuannya; bukan "klik di sini" atau "selengkapnya". |
+| "Show an error message next to the field and in the Error summary component when there is a validation error." dan "Describe what has happened and tell them how to fix it." (GOV.UK Design System, Error message) | Pesan di isiannya, menyebut apa yang terjadi dan cara membetulkannya. Sama dengan 2.3. |
+| "General errors are not helpful to everyone." Contoh yang dihindari sumbernya: 'An error occurred', 'This field is required'. Kata yang dihindari: jargon teknis, 'valid' dan 'invalid' (sumber yang sama) | Pesan menyebut isiannya dan syaratnya: "Jumlah wajib diisi", bukan "Kolom ini wajib diisi". |
+| Pesan untuk isian kosong berupa perintah ('Enter your name'); untuk yang terlalu panjang berupa keterangan ('Name must be 35 characters or less') (sumber yang sama) | Bentuk pesan mengikuti jenis kesalahannya. |
+| WCAG 1.4.8 Visual Presentation (tingkat AAA): lebar blok teks "no more than 80 characters or glyphs", teks tidak rata kiri-kanan, jarak baris minimal satu setengah | Dasar 2.4 soal panjang baris. Tingkatnya AAA, jadi ini arah yang baik untuk halaman bacaan, bukan syarat untuk tabel dan form. |
+| `prefers-reduced-motion` "is used to detect if a user has enabled a setting on their device to minimize the amount of non-essential motion"; animasi seperti "scaling or panning large objects" bisa memicu gangguan (MDN) | Dasar 2.7: gerak yang tidak penting dimatikan saat pengaturan itu `reduce`. |
+| Sasaran sentuh minimal 24 kali 24 piksel CSS (WCAG 2.5.8, AA; rinciannya di `skills/meta-panel/references/lens-ux.md` 2.7) | Tombol ikon dan aksi di baris tabel tidak lebih kecil dari itu. |
+
+Yang **tidak** diambil begitu saja: sumber GOV.UK melarang 'please' dan 'sorry' di pesan. Itu pilihan nada mereka untuk bahasa Inggris; padanan Indonesianya ("mohon", "maaf") diputuskan user dan mengikuti nada aplikasi yang ada.
+
 ---
 
 ## 3. Cara Bekerja dengan User
@@ -162,4 +181,5 @@ Yang sudah tercatat ditolak: garis atau latar gradien hiasan, garis aksen tebal 
 - W3C, Understanding WCAG 2.2, Success Criterion 1.4.3 Contrast (Minimum), `w3.org/WAI/WCAG22/Understanding/contrast-minimum.html`, dibuka 10 November 2026: angka 4.5:1, 3:1, dan batas teks besar.
 - Permintaan user 10 November 2026: butuh banyak pilihan tampilan untuk proyek baru, diriset sesuai tema aplikasinya, dari tipografi sampai gerak.
 - Kejadian dari `shared/LEARNED.md`: pola tampilan yang ditolak user, "samakan" yang ditafsirkan sebagai gaya, deskripsi izin yang dirumuskan sendiri, tampilan yang tidak bisa diverifikasi dari test server.
-- Bagian 2.3 sampai 2.7 adalah pegangan kerja susunan sendiri; selain angka kontras, tidak ada sumber luar yang dibuka untuknya. Uji 10 November 2026 (satu agen baru, satu giliran, halaman daftar reimburse `altrms`): peran ini membandingkan empat daftar di aplikasi, membuat tiga varian dengan CSS tema aplikasinya, dan mengukur lebar tabel tiap varian. Ia belum pernah dipakai untuk arah desain proyek baru.
+- Dibuka 10 November 2026 untuk bagian 2.8: GOV.UK Service Manual, "Writing for user interfaces" (diperbarui 16 April 2018); GOV.UK Design System, "Error message"; W3C, Understanding SC 1.4.8 Visual Presentation; MDN, `prefers-reduced-motion` (hanya 100 ribu karakter pertama halamannya yang terbaca).
+- Bagian 2.3 sampai 2.7 adalah pegangan kerja susunan sendiri yang diperiksa silang dengan sumber di atas. Tipografi selain panjang baris, dan tata letak, tetap tanpa sumber. Uji 10 November 2026 (satu agen baru, satu giliran, halaman daftar reimburse `altrms`): peran ini membandingkan empat daftar di aplikasi, membuat tiga varian dengan CSS tema aplikasinya, dan mengukur lebar tabel tiap varian. Ia belum pernah dipakai untuk arah desain proyek baru.

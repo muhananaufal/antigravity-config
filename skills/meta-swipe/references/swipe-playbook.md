@@ -121,6 +121,27 @@ Untuk tiap hal yang hanya boleh bagi sebagian peran:
 2. Buka alamatnya langsung. Harapannya ditolak dengan halaman yang jelas, bukan halaman kosong atau error server.
 3. Catat status jawaban jaringannya (403, 404, atau pengalihan). Jawaban 500 pada akses yang ditolak adalah temuan.
 
+### 2.6 Periksa silang dengan OWASP Web Security Testing Guide
+
+Daftar 2.1 sampai 2.5 dicocokkan dengan daftar uji OWASP WSTG. Yang diambil hanya uji yang bisa dilakukan sebagai **pengguna biasa dengan langkah yang wajar**; itu masih wilayah swipe. Uji yang menyerang (seluruh kelompok 4.7 Injection, pemalsuan permintaan, unggah berkas berbahaya) **bukan** swipe: itu pengujian keamanan yang hanya dijalankan bila user memintanya secara khusus, pada aplikasinya sendiri.
+
+| Uji di sumber | Padanannya sebagai pemeriksaan swipe |
+| :--- | :--- |
+| 4.3.1 Role Definitions | Tiap peran melihat menu dan aksi yang memang miliknya (2.5). |
+| 4.5.2 Bypassing Authorization Schema, 4.5.3 Privilege Escalation | Peran yang tidak berhak membuka alamat aksi langsung: ditolak dengan halaman yang jelas (2.5). |
+| 4.5.4 Insecure Direct Object References | Mengganti angka ID di alamat detail dengan milik orang lain: ditolak (2.2 dan 2.4). |
+| 4.6.6 Logout Functionality | Setelah Keluar, tombol kembali browser dan alamat halaman dalam tidak menampilkan data lagi. |
+| 4.6.7 Session Timeout | Sesi yang habis di tengah form: apa yang terjadi pada isiannya, dan pesannya apa. |
+| 4.6.11 Concurrent Sessions | Akun yang sama terbuka di dua tab atau dua browser: perilakunya sesuai yang diharapkan pemilik. |
+| 4.8.1 Improper Error Handling, 4.8.2 Stack Traces | Halaman gagal tidak menampilkan jejak kode, kueri, atau path server. Yang tampil dicatat apa adanya. |
+| 4.10.1 Business Logic Data Validation | Nilai yang sah bentuknya tetapi salah artinya: jumlah nol atau negatif, tanggal selesai sebelum mulai (2.2). |
+| 4.10.4 Process Timing | Menekan simpan dua kali cepat; membuka form lama lalu mengirimnya setelah datanya berubah di tab lain. |
+| 4.10.5 Number of Times a Function Can Be Used Limits | Aksi yang seharusnya sekali (menyetujui, mengklaim, memakai jatah) dicoba dua kali. |
+| 4.10.6 Circumvention of Work Flows | Melompati langkah lewat alamat: membuka langkah tiga tanpa langkah dua; memutuskan yang sudah diputuskan (2.3). |
+| 4.10.8 Upload of Unexpected File Types | Mengunggah berkas berjenis lain yang **tidak berbahaya** (teks biasa berakhiran lain): ditolak dengan pesan (2.2). |
+
+Pemeriksaan dari tabel ini yang mengubah data diberi `kind` yang sesuai; yang bisa merusak (unggah, aksi berulang pada data sungguhan) diperlakukan sebagai `irreversible` dan ditanyakan dulu.
+
 ---
 
 ## 3. Perilaku Alat Browser
@@ -206,4 +227,5 @@ Temuan ditulis sebagai yang terlihat. Dugaan penyebabnya boleh disertakan bila k
 - Uji coba swipe 10 November 2026: aplikasi contoh lokal dua peran di `karyawan.localhost:8765` dan `hrd.localhost:8765`, sembilan pemeriksaan, lewat ekstensi Claude in Chrome. Bagian 3 seluruhnya dari uji ini.
 - Struktur proyek user yang dibuka 10 November 2026: `altrms` (Laravel: `routes/web.php`, `routes/master.php`, `app/Policies/`, `Gate::before` di `AuthServiceProvider`, `resources/views/layouts/`) dan `manunggal-purchasing` (CodeIgniter 3: `application/config/routes.php`, `application/controllers/`, `check_permission` di `application/helpers/global_helper.php`, `application/views/template*.php`).
 - Kejadian dari `shared/LEARNED.md`: dialog bawaan browser, tampilan HP yang tidak bisa direproduksi, contoh dokumentasi yang dibuat dengan peran ber-bypass, modul kembaran yang terlewat.
-- Bagian 2 adalah daftar kerja susunan sendiri; tidak ada sumber luar yang dibuka untuknya.
+- OWASP Web Security Testing Guide, versi "Latest", daftar isi bagian 4 (wstg.owasp.org/latest/4-Web_Application_Security_Testing), dibuka 10 November 2026: nomor dan nama uji di bagian 2.6. Yang dibuka hanya daftar isinya, bukan halaman tiap uji; padanan swipe-nya adalah susunan sendiri.
+- Bagian 2.1 sampai 2.5 adalah daftar kerja susunan sendiri yang diperiksa silang dengan daftar itu.

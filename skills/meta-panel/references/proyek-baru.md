@@ -33,6 +33,22 @@ Putaran boleh dilewati bila jawabannya sudah ada di permintaan user; sebutkan ba
 
 Putaran 1 dan 2 menentukan semua yang sesudahnya. Bila user belum bisa menjawabnya, berhenti di sana: proyek tanpa masalah dan aturan yang jelas tidak diselamatkan oleh stack yang bagus.
 
+### Periksa silang dengan tahap discovery dan alpha
+
+Urutan di atas dicocokkan dengan dua halaman GOV.UK Service Manual. Sumber itu ditulis untuk tim layanan pemerintah, jadi yang diambil prinsipnya, bukan lamanya (ia menyebut discovery "around 4 to 8 weeks is typical"; itu bukan target di sini).
+
+| Dari sumber | Padanannya di alur ini |
+| :--- | :--- |
+| "Before you commit to building a service, you need to understand the problem that needs to be solved." | Putaran 1 sampai 3 mendahului semua keputusan teknis. |
+| "You should not start building your service in discovery." | Tidak ada kode sebelum fondasi disetujui (aturan 3). |
+| Yang dicari saat discovery: pengguna dan apa yang ingin mereka capai, batasan (teknologi, peraturan), dan peluang memperbaiki | Putaran 1 (pengguna), putaran 3 (batasan, termasuk hukum), putaran 2 (aturan). |
+| "It's not a failure to stop at the end of the discovery phase if your research shows that's the best thing to do." | "Tidak dikerjakan" tetap pilihan yang sah setelah putaran 3. Sebutkan itu ke user. |
+| "Alpha is where you try out different solutions to the problems you learnt about during discovery." | Putaran 5 dan 6: beberapa opsi arsitektur, tiga arah desain. |
+| "A crucial part of alpha is identifying your riskiest assumptions and testing them." | Asumsi paling berisiko dari putaran 1 sampai 4 diuji dengan kode percobaan sebelum fondasi ditulis. |
+| "Expect to throw away any code - and lots of the ideas you test - at the end of alpha." | Halaman contoh arah desain dan kode percobaan dibuang; yang dibawa hanya keputusan dan tokennya. |
+
+Satu hal yang sumbernya tekankan dan alur ini lemah: discovery bertumpu pada **riset ke pengguna sungguhan**, sedangkan putaran di sini bertanya ke user (pemilik proyek). Di putaran 1, tanyakan apakah ada satu calon pengguna yang bisa diajak bicara sebelum putaran 3; jawaban dari satu pengguna nyata mengalahkan dugaan pemilik dan agen.
+
 ---
 
 ## 3. Cara Bertanya di Tiap Putaran
@@ -145,4 +161,5 @@ Tiga titik berhenti yang menunggu persetujuan user: setelah PRD, setelah arah de
 - Permintaan user 10 November 2026: bekerja sendirian sebagai fullstack, butuh teman berpikir per peran, dan untuk proyek baru butuh banyak pilihan tampilan yang diriset sesuai tema aplikasinya.
 - `AGENTS.md` §0.2, §4, §5.3; macro `/greenfield` (daftar fondasi); `references/decision-tree.md` (pemilihan stack).
 - Kejadian dari `shared/LEARNED.md`: pola tampilan yang ditolak user (bagian 4.3), "tujuan akhir bukan kriteria langkah pertama", lima pertanyaan klarifikasi sekaligus, tampilan tidak bisa diverifikasi dari test server.
-- Urutan delapan putaran dan langkah arah desain adalah susunan sendiri dan **belum pernah dijalankan pada proyek nyata** saat berkas ini ditulis. Perbaiki dari pemakaian pertama.
+- GOV.UK Service Manual, "How the discovery phase works" (diperbarui 21 Juni 2021) dan "How the alpha phase works" (diperbarui 8 Mei 2019), dibuka 10 November 2026: tabel periksa silang di bagian 2. Kutipan di sana verbatim.
+- Urutan delapan putaran dan langkah arah desain adalah susunan sendiri yang diperiksa silang dengan sumber di atas. Uji 10 November 2026 hanya menjalankan putaran 1 (satu agen baru, satu giliran); putaran 2 sampai 8 dan arah desain **belum pernah dijalankan**. Perbaiki dari pemakaian pertama.

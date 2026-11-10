@@ -74,6 +74,20 @@ Tarif dan aturan pajak adalah wilayah lensa domain juga: sumbernya user atau bag
 | Kode dari jawaban forum atau AI | Potongan panjang yang disalin apa adanya dari sumber berlisensi. |
 | Merek | Nama dan logo pihak lain di tampilan atau dokumen. |
 
+**Ringkasan syarat tujuh lisensi yang sering ditemui** (choosealicense.com, dikurasi GitHub dan kontributornya). Ini untuk tahu **apa yang perlu ditanyakan**, bukan kesimpulan tentang kewajiban user. Ringkasan bukan teks lisensinya; lisensi yang berlaku adalah berkas `LICENSE` di paket versi yang terpasang.
+
+| Lisensi | Syarat menurut ringkasan sumber | Pertanyaan yang muncul |
+| :--- | :--- | :--- |
+| MIT, BSD-3-Clause | License and copyright notice | Di mana pemberitahuan lisensi disertakan saat produknya dibagikan? |
+| Apache-2.0 | License and copyright notice; State changes | Sama, ditambah: apakah paketnya diubah, dan perubahan itu dicatat? |
+| MPL-2.0 | Disclose source; License and copyright notice; Same license (file) | Berkas paket mana yang diubah? (Baris ini kurang pasti: tabel sumbernya terbaca rata.) |
+| LGPL-3.0 | Disclose source; License and copyright notice; Same license (library); State changes | Dipakai sebagai library atau diubah isinya? (Baris ini juga kurang pasti.) |
+| GPL-3.0 | Disclose source; License and copyright notice; Same license; State changes | Apakah produknya **didistribusikan** ke pihak lain? Bila ya, user perlu memutuskan sebelum memasang. |
+| AGPL-3.0 | Semua syarat GPL-3.0, ditambah Network use is distribution | Apakah produknya dipakai orang lain lewat jaringan (aplikasi web)? Bila ya, user perlu memutuskan sebelum memasang. |
+
+Arti syarat menurut sumbernya, dikutip apa adanya: Disclose source, "Source code must be made available when the licensed material is distributed." Same license, "Modifications must be released under the same license when distributing the licensed material." Network use is distribution, "Users who interact with the licensed material via network are given the right to receive a copy of the source code." State changes, "Changes made to the licensed material must be documented."
+
+Sumber itu menyebut GPL-3.0 "strong copyleft", AGPL-3.0 "strongest copyleft", dan MPL-2.0 "weak copyleft". Apa artinya untuk satu produk tertentu tetap bukan wewenang agen.
 ### 2.4 Peluncuran ke publik
 
 | Cek | Skenario yang dicari |
@@ -159,4 +173,5 @@ Tanpa teks pasal yang dibuka di sesi itu, kalimat ini karangan yang terdengar re
 - Temuan panel uji 10 November 2026 pada repo `altrms`: `OffResource` mengirim `reason`, `attachment`, dan `foto_url` untuk cuti milik orang lain.
 - Kejadian dari `shared/LEARNED.md`: periksa `robots.txt` sebelum permintaan pertama; angka tanpa sumber adalah karangan.
 - `meta-brainstorm` §0 hukum 5: atribusi ke aturan wajib berbukti.
-- Bagian lisensi, kontrak, dan peluncuran publik disusun sendiri sebagai daftar pertanyaan; tidak ada dokumen lisensi atau aturan toko aplikasi yang dibuka untuk berkas ini.
+- choosealicense.com (dikurasi GitHub, Inc. dan kontributornya), halaman "Appendix" dan "Licenses", dibuka 10 November 2026: tabel ringkasan syarat di bagian 2.3. Itu ringkasan pihak ketiga; teks lisensi masing-masing tidak dibuka. Baris MPL-2.0 dan LGPL-3.0 kurang pasti karena tabel sumbernya terbaca tanpa kolom.
+- Bagian kontrak dan peluncuran publik disusun sendiri sebagai daftar pertanyaan; tidak ada aturan toko aplikasi yang dibuka untuk berkas ini.
