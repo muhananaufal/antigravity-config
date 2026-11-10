@@ -9,11 +9,11 @@ description: Gunakan saat user meminta fitur baru, perbaikan, refactor, penggant
      tidak pernah membaca berkas ini. Jaga description tetap berisi KONDISI
      PEMICU dan gejalanya saja. -->
 
-> **Selalu baca berkas ini utuh sebelum menyajikan panel.** Menyebut "tujuh lensa" dari ingatan tanpa membuka §0–§5 adalah panel palsu: verdict-nya ada, prosedurnya tidak.
+> **Selalu baca berkas ini utuh sebelum menyajikan panel.** Menyebut "sepuluh lensa" dari ingatan tanpa membuka §0–§5 adalah panel palsu: verdict-nya ada, prosedurnya tidak.
 
 # meta-panel — Panel Multi-POV (Anti-Yes-Man Gate)
 
-Satu request, tujuh pasang mata, masing-masing setara orang senior atau lead di perannya. Panel ini leburan lima role v1 (`architect`, `swe`, `devops`, `dba`, `qa`): alih-alih satu role aktif per task, semua lensa menyala bersamaan pada setiap request.
+Satu request, sepuluh pasang mata, masing-masing setara orang senior atau lead di perannya. Panel ini leburan lima role v1 (`architect`, `swe`, `devops`, `dba`, `qa`): alih-alih satu role aktif per task, semua lensa menyala bersamaan pada setiap request.
 
 **Tujuan:** menemukan keterkaitan dan kegagalan yang tidak terpikirkan SEBELUM eksekusi.
 
@@ -22,7 +22,8 @@ Satu request, tujuh pasang mata, masing-masing setara orang senior atau lead di 
 | Berkas | Isi | Dibuka saat |
 | :--- | :--- | :--- |
 | `references/peta-keterkaitan.md` | Cara menelusuri apa saja yang ikut tersentuh sebuah perubahan | Setiap panel kelas Terbatas ke atas |
-| `references/lens-product.md` … `lens-qa.md` | Satu berkas per lensa: cara berpikir senior di peran itu, kasus tepi per kategori, cara mengeceknya di kode | Lensa itu terpicu (§1) |
+| `references/lens-product.md` … `lens-domain.md` | Satu berkas per lensa: cara berpikir senior di peran itu, kasus tepi per kategori, cara mengeceknya di kode | Lensa itu terpicu (§1) |
+| `references/proyek-baru.md` | Alur proyek dari nol: urutan pertanyaan tiap peran, arah desain, dokumen yang dihasilkan | Proyek baru (§5) |
 | `references/decision-tree.md` | Pohon keputusan stack dan arsitektur | Eskalasi §5 |
 
 ---
@@ -47,7 +48,7 @@ Satu request, tujuh pasang mata, masing-masing setara orang senior atau lead di 
 | **Sondir** | Pertanyaan kelayakan. "Bisa nggak sih X?" Keluarannya **jawaban**, bukan kode yang disimpan. | Sebutkan pertanyaan + rencana penyelidikan, 2–3 kalimat | Persetujuan untuk **menyelidiki**. Kode hasil sondir WAJIB dibuang; menyimpannya = klasifikasi ulang dari nol |
 | **Trivial** | Typo, satu baris yang jelas, rename lokal | Sapu kilat §0c butir 1 saja. Nihil → boleh langsung jalan **sambil menyebut panelnya nihil dan apa yang dicek** | Tidak perlu menunggu |
 | **Terbatas** | Perubahan kecil bercakupan jelas di kode yang sudah ada | Peta keterkaitan §0c penuh + lensa yang terpicu (§1), dengan berkas acuannya | Persetujuan eksplisit sebelum eksekusi |
-| **Arsitektural** | Sistem baru, perubahan struktur, skema DB, breaking API, ganti dependency inti | Peta keterkaitan + ketujuh lensa dengan berkas acuannya + ≥2 alternatif ditolak + pembatal + utang bukti | Persetujuan eksplisit. Keputusan besar → `meta-brainstorm` Mode 2 dulu; perlu dibaca orang lain → dokumen lewat `meta-prd` (§5) |
+| **Arsitektural** | Sistem baru, perubahan struktur, skema DB, breaking API, ganti dependency inti | Peta keterkaitan + semua lensa dengan berkas acuannya + ≥2 alternatif ditolak + pembatal + utang bukti | Persetujuan eksplisit. Keputusan besar → `meta-brainstorm` Mode 2 dulu; perlu dibaca orang lain → dokumen lewat `meta-prd` (§5) |
 
 **Aturan gerbang ini:**
 
@@ -77,9 +78,9 @@ Hasilnya ditulis di panel sebagai **"Yang ikut tersentuh"**: dua sampai enam bar
 
 ---
 
-## §1. Tujuh Lensa
+## §1. Sepuluh Lensa
 
-Tiap lensa berpikir sebagai orang senior atau lead di perannya: bukan "apakah ini bekerja", melainkan "bagaimana ini gagal enam bulan lagi, dan siapa yang menanggungnya". Berkas acuan dibuka **bila pemicunya ada**; membuka ketujuhnya untuk perubahan satu label hanya membakar konteks.
+Tiap lensa berpikir sebagai orang senior atau lead di perannya: bukan "apakah ini bekerja", melainkan "bagaimana ini gagal enam bulan lagi, dan siapa yang menanggungnya". Berkas acuan dibuka **bila pemicunya ada**; membuka semuanya untuk perubahan satu label hanya membakar konteks.
 
 | # | Lensa | Setara | Pertanyaan inti | Pemicu membuka berkasnya | Berkas |
 | :-- | :--- | :--- | :--- | :--- | :--- |
@@ -90,10 +91,15 @@ Tiap lensa berpikir sebagai orang senior atau lead di perannya: bukan "apakah in
 | 5 | **Ops / SRE** | Senior SRE yang memegang on-call | Bagaimana ini mati, siapa yang tahu duluan, dan bagaimana mundurnya? | Deploy, migrasi, job, antrian, integrasi pihak ketiga, cron, config, cache, apa pun yang jalan tanpa ditonton | `lens-ops.md` |
 | 6 | **Data** | Senior DBA, data engineer | Apakah perubahan skema aman dan bisa dibalik? Query-nya lewat index? Data lama bagaimana? | Migrasi, query baru atau berubah, laporan, impor/ekspor, perubahan makna kolom, hapus data | `lens-data.md` |
 | 7 | **QA / Edge-case** | Senior QA, SDET | Bagaimana saya merusaknya? Urutan, waktu, jumlah, peran, dan keadaan setengah jadi mana yang belum dipikirkan? | Selalu, untuk kelas Terbatas ke atas | `lens-qa.md` |
+| 8 | **Backend / Arsitektur** | Senior backend engineer, tech lead | Di mana kode ini seharusnya tinggal menurut pola repo ini? Pintu masuk lain mana yang berujung di kode yang sama? Apa yang tersisa saat separuh pekerjaannya gagal atau dipanggil dua kali? | Logika bisnis di server, lapisan baru (service, helper, job, event), transaksi, integrasi antarbagian atau pihak luar, proyek lama yang polanya belum dikenali | `lens-backend.md` |
+| 9 | **Legal dan kepatuhan** (bersyarat) | Orang yang tahu kapan harus bertanya ke bagian hukum | Adakah kewajiban di luar kode yang tersentuh, dan siapa yang berwenang memutuskannya? | HANYA bila ada: data pribadi, uang atau pajak, library, font, gambar, atau data milik pihak lain, peluncuran ke publik, kontrak klien | `lens-legal.md` |
+| 10 | **Domain / aturan bisnis** | Analis bisnis senior yang paham bidangnya | Aturan bisnis mana yang disentuh, dari mana asalnya, dan apakah masih sejalan dengan aturan yang sudah berjalan? | Batas, jatah, tarif, rumus, periode, status dan alurnya, persetujuan, apa pun yang berbunyi "maksimal", "wajib", "otomatis", "per bulan" | `lens-domain.md` |
 
 > Lima POV serangan dinamis v1 (Hacker, Stress Tester, Chaos Monkey, Auditor, Gremlin) tetap sah sebagai **checklist serangan** di dalam lensa 4, 5, dan 7 — dipakai saat fitur HTTP/API benar-benar diuji, bukan sebagai swarm terpisah.
 
-**Menyapu tetap wajib untuk ketujuhnya.** Yang ditentukan pemicu hanya apakah berkas acuannya dibuka. Lensa yang tidak terpicu tetap dijawab satu baris di panel: apa yang dilihat dan kenapa tidak relevan.
+**Menyapu tetap wajib untuk semuanya.** Yang ditentukan pemicu hanya apakah berkas acuannya dibuka. Lensa yang tidak terpicu tetap dijawab satu baris di panel: apa yang dilihat dan kenapa tidak relevan. Lensa 9 satu-satunya yang boleh dijawab "tidak ada pemicunya" tanpa keterangan lain.
+
+**Dua lensa punya batas wewenang.** Lensa 9 tidak memutuskan apa yang sah dan DILARANG menulis isi pasal, tarif, atau tenggat dari ingatan. Lensa 10 tidak menjadi sumber aturan bisnis: aturan datang dari user, dokumen perusahaan, atau kode yang sudah berjalan. Temuan keduanya hampir selalu berbentuk "perlu keputusanmu" atau "tanyakan ke siapa".
 
 ---
 
@@ -137,7 +143,7 @@ flowchart TD
     K --> M["Peta keterkaitan §0c<br/>dari kode dan data nyata"]
     M --> N{Peta menaikkan kelas?}
     N -- Ya --> K
-    N -- Tidak --> L["Sapu tujuh lensa; buka berkas<br/>acuan lensa yang terpicu §1"]
+    N -- Tidak --> L["Sapu semua lensa; buka berkas<br/>acuan lensa yang terpicu §1"]
     L --> T["Saring tiap temuan lewat §2"]
     T --> F{Ada yang menghalangi?}
     F -- Ya --> G["Tantang: paparkan skenarionya<br/>+ ≥2 jalan lain yang lebih aman"]
@@ -150,10 +156,11 @@ flowchart TD
 1. **Pahami masalah dulu.** Request tanpa masalah yang jelas ditolak halus (`AGENTS.md` §4). Kalimat ambigu soal cakupan (global atau per user, semua peran atau satu) ditanyakan balik dengan dua contoh konkret, bukan ditafsirkan.
 2. **Klasifikasikan (§0b)** dan nyatakan kelasnya beserta alasannya.
 3. **Buat peta keterkaitan (§0c).** Baca kode yang tersentuh, modul kembarannya, `LEARNED.md`, dan riwayatnya. Panel di atas tebakan adalah teater.
-4. **Sapu ketujuh lensa.** Buka berkas acuan lensa yang terpicu dan jalankan katalog kasus tepinya terhadap request ini. Katalog itu daftar hal untuk **dicek**, bukan daftar untuk disalin ke panel.
+4. **Sapu semua lensa.** Buka berkas acuan lensa yang terpicu dan jalankan katalog kasus tepinya terhadap request ini. Katalog itu daftar hal untuk **dicek**, bukan daftar untuk disalin ke panel.
 5. **Saring (§2).** Yang lolos hanya temuan dengan skenario, akibat, bukti, dan usul.
-6. **Sajikan (§4)**, tutup dengan rekomendasi + **pembatal** — kondisi yang, bila benar, membatalkan rekomendasi itu.
-7. **BERHENTI.** Eksekusi hanya setelah persetujuan user.
+6. **Tulis kriteria selesai** untuk kelas Terbatas ke atas: tiga sampai lima hal yang bisa diamati dan membuktikan permintaannya terpenuhi (§4).
+7. **Sajikan (§4)**, tutup dengan rekomendasi + **pembatal** — kondisi yang, bila benar, membatalkan rekomendasi itu.
+8. **BERHENTI.** Eksekusi hanya setelah persetujuan user.
 
 ---
 
@@ -184,12 +191,16 @@ Panel dibaca manusia di percakapan. Bahasa sehari-hari, tanpa istilah internal s
 - <Lensa atau hal>: <apa yang dilihat, kenapa aman>. Satu baris per hal.
 
 **Saran saya:** <arah + alasan>.
+**Selesai kalau:**
+- <hal yang bisa diamati: siapa, melakukan apa, melihat apa>.
+- <satu kasus yang harus ditolak, dan apa yang tampil>.
 **Saya batalkan saran ini kalau:** <kondisi>.
 **Belum saya verifikasi:** <klaim yang masih dugaan dan cara termurah mengeceknya>.
 ```
 
 - **Perubahan kecil:** bagian yang kosong dibuang. Lima sampai sepuluh baris sudah cukup, asal "Yang ikut tersentuh" dan "Sudah dicek dan aman" tetap ada.
 - **Perubahan besar:** semua bagian terisi, ditambah **Jalan lain yang saya tolak** (≥2, masing-masing dengan alasan dan apa yang membuatnya jadi pilihan lebih baik).
+- **"Selesai kalau" adalah kriteria penerimaan**, bukan daftar pekerjaan: tiga sampai lima baris yang bisa diperiksa orang lain tanpa membaca kode, minimal satu untuk jalur normal dan satu untuk yang harus ditolak. Ia ditulis dari sudut pengguna ("karyawan dengan tiga klaim melihat pesan X saat mengajukan yang keempat"), bukan dari sudut kode ("method Y ditambah"). Lensa QA mencari cara merusak; kriteria ini menyatakan apa yang dijanjikan. Setelah disetujui user, kriteria ini menjadi dasar test dan bisa langsung dijadikan pemeriksaan `meta-swipe`. Definisi selesai yang berlaku untuk semua pekerjaan (test, linter, bukti segar) tetap `AGENTS.md` §5.7 dan tidak diulang di sini.
 - **Pertanyaan ke user disaring:** tanya hanya yang tidak bisa diputuskan dari request dan kode. Putuskan bawaan yang masuk akal, nyatakan, dan tanya sisanya.
 - **Yang diusulkan duluan adalah yang paling mudah dibalik.** Memblokir hanya untuk aksi yang merusak, mengikuti pola blokir yang sudah ada di kode.
 - **Perilaku lama dan usulan baru dipisah terang** saat memperluas pola yang sudah ada, dengan menyebut dari berkas mana perilaku lama itu.
@@ -203,9 +214,32 @@ Panel dibaca manusia di percakapan. Bahasa sehari-hari, tanpa istilah internal s
 | Temuan panel menunjukkan keputusan arsitektur besar (pilih stack, pecah modul, messaging, konsistensi data) | Sarankan sesi `meta-brainstorm` Mode 2 dulu — panel bukan pengganti eksplorasi opsi. Pohon keputusan arsitektur ada di `references/decision-tree.md` skill ini. |
 | Keputusannya perlu dibaca, disetujui, atau diingat orang lain | Sarankan dokumen lewat `skills/meta-prd/SKILL.md`: PRD bila yang dipertanyakan apa dan untuk siapa, RFC bila caranya, ADR bila keputusannya sudah diambil. Dokumen ditulis setelah user setuju dokumennya perlu; panel tetap disajikan di percakapan. |
 | Klaim penentu masih dugaan dan menyangkut kode yang akan ditulis | WAJIB verifikasi dulu (source terpasang / dokumentasi resmi) sebelum eksekusi — `AGENTS.md` §3.4. |
+| Proyek baru dari nol, atau modul besar yang belum punya pola | `view_file` ke `references/proyek-baru.md` (wajib dibuka). Tiap peran bertanya berurutan, keputusannya ditulis sebagai dokumen lewat `meta-prd`, dan arah desain disajikan sebagai tiga contoh yang bisa dibuka. Panel biasa baru jalan setelah fondasi itu disetujui. |
+| User ingin berdiskusi dengan satu peran ("menurut orang security gimana", "tanya ke finops", "ngobrol dulu soal ini") | Itu percakapan, bukan gerbang: `skills/meta-brainstorm/SKILL.md` Mode 3. Berkas lensa peran itu tetap menjadi acuannya. |
+| Proyek baru atau keputusan arsitektur yang salah pilihnya mahal | Boleh menawarkan swarm **satu kalimat, sekali**, tidak diulang di permintaan yang sama bila user tidak menanggapi. Swarm HANYA dijalankan bila user sendiri menyebut "swarm" (`shared/tool-claude-code.md` CC-1). Susunannya di §5b. |
 | Penyebab masalahnya belum diketahui | Bukan urusan panel. Pindah ke `skills/meta-debug/SKILL.md`; panel dibuat setelah akarnya ketemu. |
 | User menolak panel ("langsung saja") | Patuhi untuk kecepatan, TAPI peta keterkaitan butir 1 dan sapuan kilat tetap jalan, dan temuan yang menghalangi tetap WAJIB disuarakan sebelum eksekusi. Gerbang tidak bisa dimatikan total atas nama buru-buru. |
 | User bertanya "ada yang aneh?" | Cari cakupan yang tidak masuk akal di rancangannya. Kalau setelah disapu memang tidak ada, jawab "tidak ada". Itu jawaban sah. |
+
+---
+
+## §5b. Swarm Tiga Agen (manual)
+
+Hanya atas permintaan user. Gunanya satu: mendapat pandangan yang **tidak saling terpengaruh** untuk keputusan besar. Untuk permintaan sehari-hari, satu agen dengan berkas lensa sudah menemukan hal yang sama dengan ongkos jauh lebih kecil (uji 10 November 2026).
+
+| Agen | Lensa yang dipegang |
+| :--- | :--- |
+| Produk dan bisnis | 1 Product, 2 Cost, 9 Legal, 10 Domain |
+| Pengalaman pengguna | 3 UX / DX, dan arah desain bila proyek baru |
+| Rekayasa | 4 Security, 5 Ops, 6 Data, 7 QA, 8 Backend |
+
+Aturannya mengikuti `AGENTS.md` §6.1:
+
+1. **Maksimal tiga, hanya membaca.** Tidak ada agen yang menulis berkas proyek atau commit.
+2. **Serah terima lewat berkas.** Permintaan user dan konteksnya ditulis ke satu berkas; tiap agen menerima path berkas itu dan path berkas lensanya, bukan riwayat percakapan.
+3. **Tiap agen tidak diberi kesimpulan agen utama.** Memberi hipotesis berarti memesan konfirmasi.
+4. **Laporan agen bukan bukti.** Agen utama mengecek tiap klaim kode yang akan dipakai, lalu menyusun satu panel dengan format §4. Ketidaksepakatan antaragen disajikan sebagai temuan, bukan dirata-ratakan.
+5. **Ongkosnya disebut sebelum mulai**: tiga agen berarti tiga kali membaca repo.
 
 ---
 
@@ -220,6 +254,8 @@ Panel dibaca manusia di percakapan. Bahasa sehari-hari, tanpa istilah internal s
 [ ] Tidak ada perubahan perilaku di luar kalimat request yang terselip di saran
 [ ] Pertanyaan ke user hanya yang tidak bisa saya putuskan sendiri
 [ ] Dugaan ditulis sebagai dugaan, dengan cara mengeceknya
+[ ] Ada "selesai kalau" yang bisa diperiksa tanpa membaca kode (Terbatas ke atas)
+[ ] Lensa legal dan domain bertanya, tidak memutuskan; tidak ada isi aturan dari ingatan
 [ ] Ada "saya batalkan saran ini kalau"
 [ ] Setelah mengirim: berhenti
 ```

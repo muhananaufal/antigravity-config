@@ -14,7 +14,7 @@ Skill ini adalah **tahap 5** — dan ia berada **SETELAH** gerbang persetujuan, 
 | # | Tahap | Dokumen |
 | :-: | :--- | :--- |
 | 1 | Routing task | `AGENTS.md` §2 |
-| 2 | Sapu 7 lensa Panel Multi-POV | `skills/meta-panel/SKILL.md` bagian 1–2 |
+| 2 | Sapu 10 lensa Panel Multi-POV | `skills/meta-panel/SKILL.md` bagian 1–2 |
 | 3 | Pilih stack & arsitektur | `skills/meta-panel/references/decision-tree.md` |
 | 4 | **BERHENTI — tunggu persetujuan user ("Gasskan")** | `AGENTS.md` §0.2 · **GERBANG MUTLAK** |
 | 5 | **Branch, atomic commit, merge** | **`meta-git/SKILL.md` — Anda di sini** |
