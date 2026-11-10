@@ -24,7 +24,7 @@ description: >-
 3. **WAJIB membuka transcript sesi sebelum menulis** (§2). Handover dari konteks yang sudah terpotong adalah dokumen berlubang.
 4. **WAJIB minimal satu diagram Mermaid** per dokumen (§5).
 5. **Keluaran bawaan HTML, lewat `meta-prd`.** Gaya diambil dari `doc-tools` milik skill itu. DILARANG menulis atau menyalin CSS ke sini. Markdown hanya menurut §1.
-6. **Label epistemik tetap berlaku** (`AGENTS.md` §3). Yang tidak diverifikasi di sesi ini ditulis sebagai belum diverifikasi, dengan cara memverifikasinya.
+6. **Label epistemik tetap berlaku** (`AGENTS.md` §3): `[fakta:sumber]` untuk yang dibuka atau dijalankan sendiri, `[inferensi]` untuk kesimpulan dari fakta, `[spekulasi]` untuk tebakan, `[memori-model]` untuk ingatan yang belum dicek. Yang tidak diverifikasi ditulis sebagai belum diverifikasi, dengan cara memverifikasinya. Penulis handover boleh memverifikasinya sendiri saat menulis; hasilnya dipisahkan dari hasil sesi ("dicek saat handover ditulis").
 7. **Rahasia tidak ditulis.** Password, token, dan isi `.env` tidak masuk dokumen; cukup sebut di mana ia disimpan.
 
 ---
@@ -38,6 +38,8 @@ description: >-
 | Pembacanya agen lain (prompt sesi berikut, berkas handoff sub-agen) | Markdown |
 | Dua pembaca: user membaca, agen melanjutkan | HTML untuk user; tawarkan versi Markdown dalam satu baris, jangan buat dua tanpa diminta |
 
+User yang meminta handover "untuk agen lain" tidak dihitung sebagai pembaca kedua: pembacanya agen, formatnya Markdown. Baris terakhir hanya berlaku bila user sendiri bilang ia juga mau membacanya.
+
 Agen membaca Markdown lebih murah daripada HTML; orang membaca HTML lebih enak. Itu satu-satunya alasan pemisahan ini. Isi dan susunan kedua format sama.
 
 ---
@@ -49,16 +51,20 @@ Lokasi transcript berbeda per alat. Pakai baris yang sesuai dengan alat tempat A
 | Alat | Lokasi | Status |
 | :--- | :--- | :--- |
 | Claude Code | `~/.claude/projects/<slug-folder-kerja>/<session-id>.jsonl`. Slug adalah path folder kerja dengan pemisah diganti `-` (contoh `C--Projects-devivace-altrms`). | Diverifikasi 2026-11-10: folder itu ada dan memuat berkas sesi. |
+| Claude Code, sesi sub-agen | `~/.claude/projects/<slug-folder-kerja>/<session-id>/subagents/agent-<id-agen>.jsonl` | Diverifikasi 2026-11-10 lewat uji skill ini. Berkas `tasks/<id>.output` di folder sementara sesi bisa kosong; jangan diandalkan. |
 | Antigravity | `<AppDataDir>\brain\<conversation-id>\.system_generated\logs\transcript_full.jsonl` | Dari versi lama skill ini; belum diverifikasi ulang. |
 
 Cara membacanya:
 
-1. **Cari path-nya dari konteks dulu.** Bila sesi pernah diringkas otomatis, ringkasannya menyebut path transcript penuh; pakai itu. Bila tidak, cari berkas `.jsonl` yang paling baru diubah di folder proyeknya.
+1. **Cari path-nya dari konteks dulu.** Bila sesi pernah diringkas otomatis, ringkasannya menyebut path transcript penuh; pakai itu. Bila tidak, cari di folder slug proyek itu di bawah `~/.claude/projects/` (bukan di folder kerja proyeknya). Berkas `.jsonl` yang paling baru diubah bisa jadi sesi yang sedang menulis handover ini, bukan sesi yang diserahterimakan: cocokkan id sesi atau isi pesan pertamanya.
 2. **Jangan dibaca utuh bila besar.** Transcript sesi panjang bisa melebihi konteks. Cari dulu (`grep_search`) pesan user, kata "setuju", "tolak", "jangan", nama berkas, dan pesan commit; lalu baca potongan di sekitarnya.
 3. **Yang wajib ditemukan:** semua pesan user, tiap keputusan berikut yang ditolak dan alasannya, tiap koreksi dari user, perintah verifikasi dan hasilnya, pekerjaan yang masih berjalan.
-4. **Cocokkan dengan keadaan nyata.** Jalankan `git status`, `git log` secukupnya, dan lihat berkas yang disebut. Transcript mengatakan apa yang dimaksudkan; repo mengatakan apa yang terjadi.
+4. **Cocokkan dengan keadaan nyata.** Jalankan `git status`, `git log` secukupnya, dan lihat berkas yang disebut. Transcript mengatakan apa yang dimaksudkan; repo mengatakan apa yang terjadi. Proyek tanpa git: pakai cap waktu berkas, isi berkas yang disebut transcript, dan test sebagai gantinya, dan tulis di kepala dokumen bahwa tidak ada git.
+5. **Selisih antara transcript dan keadaan nyata ditulis di kepala dokumen** sebagai peringatan (berkas berubah setelah sesi berakhir, perubahan yang tidak ada di transcript, test yang hasilnya berbeda), dan diulang singkat di risiko sisa. Selidiki secukupnya untuk menyebut apa yang berbeda; penyebab yang tidak diketahui ditulis tidak diketahui.
 
-Transcript tidak ditemukan atau tidak terbaca: lanjutkan dari konteks yang ada, dan **tulis peringatan di kepala dokumen** bahwa ia dibuat tanpa transcript dan bagian mana yang paling mungkin berlubang. DILARANG diam-diam melanjutkan.
+Transcript tidak ditemukan, tidak terbaca, atau kosong (0 byte): cari dulu di lokasi lain dari tabel di atas. Bila tetap tidak ada, lanjutkan dari konteks yang ada, dan **tulis peringatan di kepala dokumen** bahwa ia dibuat tanpa transcript dan bagian mana yang paling mungkin berlubang. DILARANG diam-diam melanjutkan.
+
+**Bila penulisnya bukan agen sesi itu** (agen lain diminta menulis handover dari transcript): tidak ada "konteks yang ada" untuk diandalkan, jadi transcript dan keadaan nyata adalah satu-satunya sumber. Tulis di kalimat pembuka dokumen bahwa ia disusun pihak lain dari transcript, dan "dijalankan di sesi ini" di skill ini dibaca sebagai "tercatat di transcript, atau dijalankan ulang saat handover ditulis".
 
 ---
 
@@ -85,23 +91,23 @@ flowchart TD
 1. **Langkah 0** (§2).
 2. **Tentukan tipe sesi** dari transcript, bukan dari kesan terakhir.
 3. **Gambar diagram dulu.** Diagram memaksa hubungan antarbagian dipetakan sebelum narasinya ditulis.
-4. **Tentukan lokasi dan nama.** Lokasi yang disebut user menang. Bila tidak disebut, ikuti folder dokumen proyek (`.docs/<proyek>/`, `docs/`); bila tidak ada, tanya. Nama: `<proyek>-handover-<YYYY-MM-DD>-<topik>.html` (atau `.md`), huruf kecil dan tanda hubung, sesuai tabel nama di `meta-prd` §2.
+4. **Tentukan lokasi dan nama.** Lokasi yang disebut user menang. Bila tidak disebut, ikuti folder dokumen proyek (`.docs/<proyek>/`, `docs/`); bila tidak ada, tanya. Nama: `<proyek>-handover-<YYYY-MM-DD>-<topik>.html` (atau `.md`), huruf kecil dan tanda hubung. `<topik>` dua sampai empat kata yang menyebut apa yang dikerjakan (`reimbursement`, `urutan-klaim-terbalik`), bukan hasilnya dan bukan kalimat.
 5. **Jalur HTML:** `view_file` ke `skills/meta-prd/SKILL.md` (wajib dibuka, bukan dari ingatan), lalu ikuti langkah 4 sampai 7 di sana: `doc-tools.mjs new`, tulis isi dengan komponen dari `references/components.md`, `doc-tools.mjs check`, render terang, gelap, dan layar sempit.
-6. **Jalur Markdown:** tulis langsung dengan susunan §4. Judul bagian tanpa emoji; tabel untuk hal yang berstruktur; blok kode untuk perintah.
+6. **Jalur Markdown:** tulis langsung dengan susunan §4, tanpa membuka `meta-prd`. Judul bagian tanpa emoji. Padanan komponennya: kunci-nilai dan daftar berstruktur jadi tabel; pill status jadi satu kata tebal (**SELESAI**, **TERBUKTI**, **DIBANTAH**); callout jadi blockquote; kartu keputusan jadi sub-bagian berisi pertanyaan, pilihan, dan bawaan; urutan langkah jadi daftar bernomor; daftar sumber jadi tabel. Diagram Mermaid di Markdown tidak bisa dirender dari sini: periksa sintaksnya dengan membaca ulang, dan tulis di laporan bahwa diagramnya belum dirender.
 7. **Lapor** ke user: path lengkap, apa yang belum terverifikasi, dan satu langkah pertama untuk sesi berikutnya.
 
 ---
 
 ## §4. Susunan Isi
 
-Susunan ini acuan, bukan cetakan: bagian yang tidak punya isi dibuang, bukan diisi basa-basi. Kolom "Komponen" menunjuk kelompok cuplikan di `skills/meta-prd/references/components.md`; untuk Markdown pakai padanan polosnya.
+Susunan ini acuan, bukan cetakan: bagian yang tidak punya isi dibuang, bukan diisi basa-basi. Dua pengecualian yang tetap ditulis walau kosong, satu baris masing-masing: keputusan yang ditolak dan koreksi dari user. "Tidak ada" di sana berarti sudah diperiksa; bagian yang hilang tidak bisa dibedakan dari yang lupa diperiksa. Kolom "Komponen" menunjuk kelompok cuplikan di `skills/meta-prd/references/components.md`; untuk Markdown pakai padanan polosnya.
 
 ### Kepala (semua tipe)
 
 | Isi | Komponen |
 | :--- | :--- |
 | Judul yang menyebut hasil sesi, bukan "Handover sesi" | Kepala dokumen |
-| Tanggal dan jam absolut, tipe sesi, status akhir (selesai, berlanjut, terblokir), stack | Pilihan, keputusan, kunci-nilai (kunci-nilai) |
+| Tanggal dan jam absolut dalam waktu lokal user dengan offsetnya (mis. 13.35 WIB), tipe sesi, status akhir (selesai, selesai dengan keputusan terbuka, berlanjut, terblokir), stack | Pilihan, keputusan, kunci-nilai (kunci-nilai) |
 | Berkas utama yang disentuh, dengan path | Tabel |
 | Branch, commit terakhir, apakah working tree bersih, apa yang belum di-push | Kunci-nilai |
 | Bisa dilanjutkan tanpa konteks tambahan? Kalau tidak, apa yang kurang | Callout |
@@ -115,7 +121,7 @@ Susunan ini acuan, bukan cetakan: bagian yang tidak punya isi dibuang, bukan dii
 | 03 | Temuan per hipotesis | Hipotesis, cara membuktikan, hasil, terbukti atau dibantah | Tabel dengan pill status |
 | 04 | Akar masalah | Mengapa terjadi, bukan hanya apa | Callout |
 | 05 | Perbaikan | Perubahan dan potongan kodenya | Kode |
-| 06 | Bukti | Perintah yang dijalankan dan keluarannya, merah lalu hijau | Kode |
+| 06 | Bukti | Perintah yang dijalankan dan keluarannya, merah lalu hijau. Keluaran panjang boleh dipangkas ke baris yang membuktikan (nama test, jumlah lulus dan gagal, exit code), asal disebut bahwa dipangkas. | Kode |
 | 07 | Risiko sisa | Area terkait yang belum diperiksa | Daftar periksa |
 
 ### Susunan B: fitur atau rancangan
