@@ -17,7 +17,7 @@ Skill ini menulis dokumen untuk dibaca manusia dan menyimpannya sebagai satu ber
 | `scripts/doc-render.mjs` | Merender dokumen di browser headless: tema terang dan gelap, lebar 1280 dan 390, dipotong jadi gambar yang terbaca. |
 | `scripts/gallery.browser-test.mjs` | Mengeklik semua bagian interaktif di browser sungguhan. Dipakai setelah mengubah galeri. |
 | `references/components.md` | Kapan memakai tiap komponen, kapan jangan, dan cuplikan HTML-nya. |
-| `references/structures.md` | Acuan susunan PRD, RFC, ADR, dan laporan. Acuan, bukan kewajiban. |
+| `references/structures.md` | Acuan susunan tiap jenis dokumen, dengan sumber tiap susunan dan tanda untuk yang disusun sendiri. Acuan, bukan kewajiban. |
 
 ---
 

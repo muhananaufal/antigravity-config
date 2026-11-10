@@ -93,57 +93,134 @@ Susunan Konteks, Keputusan, Status, Akibat berasal dari tulisan Michael Nygard (
 
 ---
 
-## 5. Laporan dan Rencana
+## 5. Jenis Dokumen Lain
 
-**Laporan temuan** (audit, hasil swipe, investigasi):
+Tiap susunan di bawah menyebut dari mana ia diturunkan. Yang bertanda **(susunan sendiri)** tidak punya sumber yang dibuka; perlakukan sebagai titik berangkat, bukan pegangan.
+
+### 5.1 Laporan temuan (audit, hasil swipe, investigasi)
+
+Diturunkan dari struktur laporan di OWASP Web Security Testing Guide, yang memisahkan pendahuluan (cakupan, batasan, waktu), ringkasan eksekutif, temuan (ringkasan lalu rincian), dan lampiran.
 
 | # | Bagian | Isi |
 | :-- | :--- | :--- |
-| 00 | Ringkasan | Berapa temuan per tingkat keparahan, dan apa yang paling mendesak |
-| 01 | Cakupan | Apa yang diperiksa, apa yang tidak, dengan alat apa |
-| 02 | Temuan | Tabel ber-ID: gejala, lokasi, cara mengulang, keparahan |
-| 03 | Yang berjalan baik | Supaya tidak diperiksa ulang tanpa perlu |
-| 04 | Rekomendasi | Urutan perbaikan |
-| 05 | Daftar sumber | Bukti per temuan |
+| 00 | Ringkasan | Untuk pembaca yang tidak akan membaca rinciannya: berapa temuan per tingkat keparahan, apa yang paling mendesak, dan apa artinya bagi mereka |
+| 01 | Cakupan dan batas | Apa yang diperiksa, apa yang tidak, dengan alat apa, kapan, dan batasan yang memengaruhi hasil |
+| 02 | Ringkasan temuan | Satu tabel: ID, judul, keparahan |
+| 03 | Rincian temuan | Per temuan: ID, judul, seberapa mungkin terjadi, dampaknya, uraian dan cara mengulang, langkah memperbaiki |
+| 04 | Yang berjalan baik | Supaya tidak diperiksa ulang tanpa perlu **(susunan sendiri)** |
+| 05 | Rekomendasi | Urutan perbaikan **(susunan sendiri)** |
+| 06 | Lampiran | Cara menguji, arti tiap tingkat keparahan, dan daftar semua yang diperiksa, termasuk yang tidak bermasalah |
+| 07 | Daftar sumber | Bukti per temuan |
 
-**Rencana atau peta**: ringkasan, cara membaca, isi utama per kelompok, urutan kerja, yang sengaja ditunda, daftar sumber.
+Laporan swipe dibangun `swipe-tools` dengan susunannya sendiri; tabel ini untuk laporan yang ditulis tangan.
+
+### 5.2 Rencana
+
+Diturunkan dari lima unsur "pitch" di *Shape Up* (Ryan Singer, bab 6): masalah, selera waktu, solusi, lubang kelinci, dan yang tidak dikerjakan.
+
+| # | Bagian | Isi |
+| :-- | :--- | :--- |
+| 00 | Ringkasan | Apa yang akan dikerjakan dan apa yang tidak, dalam beberapa baris |
+| 01 | Masalah | Kejadian atau kebutuhan yang mendorong pekerjaan ini |
+| 02 | Batas waktu yang mau dihabiskan | Berapa besar pekerjaan ini boleh jadi, dan bagaimana batas itu membentuk solusinya. Dari user, bukan taksiran agen |
+| 03 | Solusi | Unsur intinya, dalam bentuk yang langsung terbayang: sketsa, alur, daftar potongan |
+| 04 | Jebakan yang sudah terlihat | Rincian yang perlu disebut sekarang supaya tidak jadi masalah di tengah jalan |
+| 05 | Yang tidak dikerjakan | Fungsi atau kasus yang sengaja dikeluarkan supaya muat di batas waktunya |
+| 06 | Urutan kerja | Potongan dan urutannya, tiap potongan berakhir pada yang bisa dicoba **(susunan sendiri)** |
+| 07 | Daftar sumber | |
+
+**Peta** (peta belajar, peta aplikasi): ringkasan, cara membaca, isi utama per kelompok, yang sengaja ditunda, daftar sumber **(susunan sendiri)**.
 
 **Handover**: susunannya milik `meta-handover`; skill itu memakai gaya yang sama lewat `doc-tools`.
 
-**Runbook** (satu per sistem, diperbarui tiap kali kenyataannya berubah):
+### 5.3 Runbook
+
+Diturunkan dari praktik "Use runbooks to perform procedures" (OPS07-BP03) di AWS Well-Architected Framework: runbook adalah langkah demi langkah untuk satu hasil, dengan hasil yang diharapkan, alat dan izin yang diperlukan, penanganan kegagalan, pemilik, dan siapa yang dihubungi; disimpan di version control, diperbarui saat prosesnya berubah, dan **divalidasi dengan dijalankan orang lain**.
+
+AWS memakai "runbook" untuk satu prosedur. Di sini satu dokumen memuat semua prosedur satu sistem, karena pemegangnya satu orang; tiap prosedur di dalamnya mengikuti bentuk di bawah.
 
 | # | Bagian | Isi |
 | :-- | :--- | :--- |
-| 00 | Ringkasan | Sistem ini apa, jalan di mana, siapa yang memegang, dan tanggal dokumen ini terakhir dicocokkan dengan kenyataan |
-| 01 | Peta | Komponen, alamat, dan ketergantungannya; diagram |
-| 02 | Merilis | Langkah berurutan dengan perintahnya, dan cara tahu rilisnya berhasil |
-| 03 | Mundur | Langkah kembali ke versi sebelumnya; apa yang tidak bisa dimundurkan; kapan terakhir dicoba |
-| 04 | Cadangan dan pemulihan | Apa yang dicadangkan, ke mana, seberapa sering; langkah memulihkan; kapan terakhir dicoba dan berapa lama |
+| 00 | Ringkasan | Sistem ini apa, jalan di mana, siapa pemiliknya, apa yang belum dicoba, dan tanggal terakhir dicocokkan dengan kenyataan |
+| 01 | Peta | Komponen, alamat, dan ketergantungannya; diagram **(susunan sendiri)** |
+| 02 | Merilis | Satu prosedur |
+| 03 | Mundur | Satu prosedur; apa yang tidak bisa dimundurkan |
+| 04 | Cadangan dan pemulihan | Dua prosedur; apa yang dicadangkan, ke mana, seberapa sering |
 | 05 | Saat ada masalah | Per gejala: cek apa dulu, perintah apa, siapa yang dikabari |
-| 06 | Perawatan berkala | Yang kedaluwarsa atau penuh, dengan tanggal atau batasnya |
+| 06 | Perawatan berkala | Yang kedaluwarsa atau penuh, dengan tanggal atau batasnya **(susunan sendiri)** |
 | 07 | Akses | Di mana kredensial disimpan (bukan isinya) dan siapa yang punya akses |
-| 08 | Daftar sumber | Dari mana tiap langkah diambil, dan mana yang belum pernah dijalankan |
+| 08 | Daftar sumber | Dari mana tiap langkah diambil |
+
+**Tiap prosedur** dibuka dengan `dl.kv` berisi: hasil yang diharapkan, alat yang dipakai, izin khusus, siapa yang dihubungi bila gagal, dan kapan terakhir dicoba. Lalu langkahnya di `ol.steps`, dengan perintah di `pre[data-copy]` dan, untuk langkah yang bisa gagal, apa yang dilakukan bila gagal.
 
 Runbook DILARANG memuat password, token, atau isi `.env`.
 
 - **Tanda per langkah:** `<span class="pill muted">Belum dicoba</span>` untuk langkah yang belum pernah dijalankan, `<span class="pill ok">Dicoba 10 Nov 2026</span>` untuk yang sudah. Perintah yang terbukti ada di kode tetapi belum pernah dijalankan tetap "Belum dicoba".
+- **Validasi:** sumbernya meminta runbook dijalankan orang lain. Untuk yang bekerja sendirian, padanannya: jalankan sendiri di lingkungan bukan produksi sambil hanya membaca dokumennya, dan betulkan tiap langkah yang ternyata butuh pengetahuan di kepala.
 - **Runbook pertama hampir selalu draf.** Alamat server, cara rilis, cadangan, dan siapa yang dikabari jarang ada di repo. Jangan dikarang: tulis drafnya, beri status "Draf, belum pernah dijalankan" di `eyebrow`, dan jadikan tiap fakta yang hilang satu kartu keputusan. Namanya tetap `<proyek>-runbook.html`; statusnya yang berubah saat langkahnya dicoba.
 - **Bagian "Keputusan yang dibutuhkan"** ditambahkan sebelum daftar sumber selama masih ada fakta yang hilang, lalu dibuang.
-- **Ringkasan** tetap dua kartu (`SKILL.md` §3): kartu kiri memuat sistem ini apa, jalan di mana, dan siapa yang memegang; kartu kanan memuat apa yang belum dicoba dan tanggal terakhir dokumen dicocokkan dengan kenyataan.
+- **Ringkasan** tetap dua kartu (`SKILL.md` §3): kartu kiri memuat sistem ini apa, jalan di mana, dan siapa pemiliknya; kartu kanan memuat apa yang belum dicoba dan tanggal terakhir dicocokkan.
 
-**Panduan pakai** (untuk pengguna aplikasi): untuk siapa dan untuk pekerjaan apa; langkah per tugas dengan tangkapan layar di `.screen`; apa yang terjadi bila salah langkah dan cara membetulkannya; siapa yang dihubungi. Ditulis dengan kata yang tampil di layar, tanpa nama tabel, kelas, atau endpoint.
+### 5.4 Panduan pakai
 
-**Catatan rilis** (untuk pengguna): apa yang baru, apa yang berubah dari kebiasaan lama, apa yang diperbaiki, dan apa yang perlu dilakukan pengguna. Satu kalimat per butir, dari sudut pengguna. Yang tidak terlihat pengguna tidak masuk.
+Diturunkan dari bagian "How-to guides" di Diátaxis: panduan menuntun pembaca melewati satu masalah atau menuju satu hasil, disusun dari kebutuhan pengguna (bukan dari daftar fitur alatnya), berupa urutan tindakan yang logis, membuang yang tidak perlu, dan berjudul persis seperti yang ditunjukkannya. Panduan bukan tutorial: ia tidak mengajar dari nol.
 
-**Penawaran** (pekerjaan lepas): masalah yang dipecahkan; cakupan, yang tidak termasuk, dan yang masih terbuka; tahapan dan apa yang diserahkan tiap tahap; taksiran berentang dengan asumsinya; harga dan jadwal bayar; masa berlaku. Harga dan tarif hanya dari user. Kalimat kontrak bukan bagian dokumen ini.
+| Bagian | Isi |
+| :--- | :--- |
+| Judul | Tugas pengguna, persis: "Mengajukan klaim transport dari HP", bukan "Modul Reimbursement" |
+| Untuk siapa dan kapan dipakai | Satu sampai dua kalimat; apa yang harus sudah ada sebelum mulai |
+| Langkah | `ol.steps`, satu tindakan per langkah, dengan kata yang tampil di layar; tangkapan layar di `.screen` hanya di langkah yang membingungkan |
+| Cabang | Ditulis sebagai syarat: "Kalau klaimnya dari Field Duty, pilih tanggal dalam rentang dinasnya" |
+| Bila tidak berhasil | Pesan yang mungkin muncul, artinya, dan apa yang dilakukan **(susunan sendiri)** |
+| Siapa yang dihubungi | **(susunan sendiri)** |
 
-**Laporan kemajuan**: yang sudah bisa dicoba; yang sedang dikerjakan; yang terhalang dan butuh apa dari siapa; apakah taksiran berubah dan kenapa; keputusan yang ditunggu. Tanpa persentase.
+Satu panduan satu tugas. Penjelasan lengkap tiap kolom dan pilihan bukan isi panduan; tautkan ke tempatnya bila ada. Tanpa nama tabel, kelas, atau endpoint.
+
+### 5.5 Catatan rilis
+
+Diturunkan dari Keep a Changelog 1.1.0: catatan perubahan ditulis untuk manusia, ada satu entri tiap versi, perubahan sejenis dikelompokkan, versi terbaru di atas, dan tanggal rilis ditampilkan.
+
+Tiap rilis dikelompokkan menurut enam jenis dari sumber itu, dengan label Indonesia:
+
+| Jenis di sumber | Label di dokumen | Isi |
+| :--- | :--- | :--- |
+| Added | Baru | Fitur baru |
+| Changed | Berubah | Perubahan pada yang sudah ada |
+| Deprecated | Akan dihapus | Yang segera dihilangkan |
+| Removed | Dihapus | Yang sudah dihilangkan |
+| Fixed | Diperbaiki | Perbaikan kesalahan |
+| Security | Keamanan | Bila menyangkut kerentanan |
+
+Kelompok yang kosong dibuang. Satu kalimat per butir, dari sudut pengguna: apa yang ia lihat berbeda dan apa yang perlu ia lakukan. Yang tidak terlihat pengguna (refactor, test) tidak masuk. Tanggal ditulis absolut dan `datetime`-nya berformat tahun-bulan-hari, sesuai anjuran sumbernya. Untuk beberapa rilis dalam satu halaman pakai `ul.changelog` atau `ol.timeline`, terbaru di atas.
+
+### 5.6 Laporan kemajuan
+
+Diturunkan dari template laporan status proyek di Confluence (dibuat Arizona State University, diterbitkan Atlassian), yang memuat ringkasan status dan kendala, yang diselesaikan dalam tujuh hari terakhir, langkah berikutnya, dan risiko serta masalah.
+
+| # | Bagian | Isi |
+| :-- | :--- | :--- |
+| 00 | Ringkasan | Satu kalimat status dan kendala utamanya |
+| 01 | Yang selesai sejak laporan terakhir | Yang sudah bisa dicoba orang lain, dengan cara mencobanya |
+| 02 | Langkah berikutnya | Yang dikerjakan sampai laporan berikut |
+| 03 | Risiko dan masalah | Yang terhalang, butuh apa, dari siapa |
+| 04 | Perubahan taksiran | Bila berubah: dari apa ke apa, dan kenapa **(susunan sendiri)** |
+| 05 | Keputusan yang ditunggu | **(susunan sendiri)** |
+
+Tanpa persentase: "yang sudah bisa dicoba" lebih berguna daripada "90% selesai" **(susunan sendiri)**.
+
+### 5.7 Penawaran (pekerjaan lepas) **(susunan sendiri)**
+
+Tidak ada sumber yang dibuka untuk jenis ini. Unsur masalah, batas waktu, dan yang tidak dikerjakan meminjam dari 5.2.
+
+Masalah yang dipecahkan; cakupan, yang tidak termasuk, dan yang masih terbuka; tahapan dan apa yang diserahkan tiap tahap; taksiran berentang dengan asumsinya; harga dan jadwal bayar; masa berlaku penawaran. Harga dan tarif hanya dari user. Kalimat kontrak bukan bagian dokumen ini.
 
 Cara memotong pekerjaan, menaksir, dan menyusun penawaran ada di `skills/meta-brainstorm/references/role-planner.md`; isi runbook berangkat dari `skills/meta-panel/references/lens-ops.md` bagian 2.7.
 
 ---
 
 ## 6. Sumber Susunan
+
+Semua dibuka 10 November 2026. Sumbernya template dan panduan yang dipakai luas, bukan kajian yang membuktikan susunan itu paling efektif.
 
 | Jenis | Sumber | Yang diambil |
 | :--- | :--- | :--- |
@@ -152,8 +229,17 @@ Cara memotong pekerjaan, menaksir, dan menyusun penawaran ada di `skills/meta-br
 | RFC | Go proposal template (github.com/golang/proposal, `design/TEMPLATE.md`) | Background, Rationale, Compatibility, Implementation, Open issues |
 | ADR | Michael Nygard, "Documenting Architecture Decisions", 15 November 2011 | Title, Context, Decision, Status, Consequences; satu sampai dua halaman; status "superseded" |
 | ADR | MADR 4.0.0 (adr.github.io/madr) | Considered Options, Decision Drivers, Pros and Cons of the Options |
+| Laporan temuan | OWASP Web Security Testing Guide, versi "Latest", 5.1 Reporting Structure (wstg.owasp.org/latest/5-Reporting/01-Reporting_Structure) | Introduction dengan Scope, Limitations, Timeline; Executive Summary; Findings Summary dan Findings Details; isi tiap temuan; Appendices |
+| Rencana | Ryan Singer, *Shape Up*, bab 6 "Write the Pitch" (basecamp.com/shapeup/1.5-chapter-06) | Problem, Appetite, Solution, Rabbit holes, No-gos |
+| Runbook | AWS Well-Architected Framework, Operational Excellence, OPS07-BP03 "Use runbooks to perform procedures" (docs.aws.amazon.com) | Definisi runbook; isi minimum (hasil, alat, izin, penanganan kegagalan, pemilik, eskalasi); disimpan di version control; divalidasi dengan dijalankan orang lain; anti-pattern "relying on memory" |
+| Panduan pakai | Diátaxis, "How-to guides" (diataxis.fr/how-to-guides) | Berorientasi tujuan; disusun dari kebutuhan pengguna; urutan logis; membuang yang tidak perlu; penamaan; bukan tutorial |
+| Catatan rilis | Olivier Lacan, Keep a Changelog 1.1.0 (keepachangelog.com/en/1.1.0) | Prinsip "for humans, not machines"; enam jenis perubahan; terbaru di atas; tanggal ditampilkan |
+| Laporan kemajuan | Atlassian, template "Project status report", dibuat Arizona State University (atlassian.com/software/confluence/templates/project-status) | Ringkasan status dan kendala; Accomplishments; Next Steps; Risks and Issues. Halamannya terpotong saat dibaca, jadi mungkin ada bagian yang terlewat |
+| Penawaran | Tidak ada | Pencarian menemukan panduan kontrak agile 18F; halamannya tidak dibuka, jadi tidak dipakai |
 
-Bagian "Pengguna", "Alur", "Keamanan, operasional, data", dan "Rencana uji" tidak berasal dari template di atas. Itu tambahan dari cara kerja user: lensa panel dan kewajiban test di `AGENTS.md`. Susunan runbook, panduan pakai, catatan rilis, penawaran, dan laporan kemajuan di bagian 5 juga susunan sendiri (ditambahkan 2026-11-10), bukan dari template yang dipublikasikan.
+Yang gagal: alamat lama bagian Reporting OWASP (`owasp.org/www-project-web-security-testing-guide/latest/5-Reporting/README`) dialihkan; isinya diambil dari alamat `wstg.owasp.org` di atas.
+
+Bagian "Pengguna", "Alur", "Keamanan, operasional, data", dan "Rencana uji" di PRD dan RFC tidak berasal dari template di atas. Itu tambahan dari cara kerja user: lensa panel dan kewajiban test di `AGENTS.md`. Baris yang bertanda **(susunan sendiri)** di bagian 5 juga begitu.
 
 ---
 
