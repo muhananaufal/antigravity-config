@@ -14,6 +14,8 @@ Skill ini menulis dokumen untuk dibaca manusia dan menyimpannya sebagai satu ber
 | `assets/component-gallery.html` | **Sumber tunggal gaya.** Semua komponen, tampil dengan isi contoh. Buka di browser untuk melihat pilihan yang ada. |
 | `assets/doc-template.html` | Kerangka kosong dengan gaya yang sama. Titik mulai setiap dokumen. |
 | `scripts/doc-tools.mjs` | `new` (salin kerangka), `check` (periksa dokumen), `sync` (salin gaya dari galeri). |
+| `scripts/doc-render.mjs` | Merender dokumen di browser headless: tema terang dan gelap, lebar 1280 dan 390, dipotong jadi gambar yang terbaca. |
+| `scripts/gallery.browser-test.mjs` | Mengeklik semua bagian interaktif di browser sungguhan. Dipakai setelah mengubah galeri. |
 | `references/components.md` | Kapan memakai tiap komponen, kapan jangan, dan cuplikan HTML-nya. |
 | `references/structures.md` | Acuan susunan PRD, RFC, ADR, dan laporan. Acuan, bukan kewajiban. |
 
@@ -65,7 +67,7 @@ flowchart TD
 
 1. **Tentukan jenis dan pembaca** (§1). Kalau dua-duanya bisa disimpulkan dari permintaan dan kode, jangan bertanya.
 2. **Kumpulkan bukti.** Sumber terdekat dulu: kode proyek, data milik user, dokumen yang sudah ada. Web setelah itu. Catat tiap sumber untuk tabel bukti di akhir dokumen.
-3. **Tentukan lokasi dan nama.** Ikuti folder dokumen yang sudah dipakai proyek: periksa `.docs/<proyek>/`, `docs/`, lalu tanya bila tidak ada. Nama berkas mengikuti tabel di bawah: huruf kecil semua, dipisah tanda hubung, diawali nama proyek supaya tetap jelas saat berkasnya dikirim sendirian. DILARANG menimpa dokumen lama; `new` menolak berkas yang sudah ada. Dokumen lama dengan pola nama lain (mis. `PRD-SSO.html`) DILARANG diganti namanya tanpa diminta.
+3. **Tentukan lokasi dan nama.** Lokasi yang disebut peminta selalu menang. Bila tidak disebut, ikuti folder dokumen yang sudah dipakai proyek: periksa `.docs/<proyek>/`, `docs/`, lalu tanya bila tidak ada. Nama berkas mengikuti tabel di bawah: huruf kecil semua, dipisah tanda hubung, diawali nama proyek supaya tetap jelas saat berkasnya dikirim sendirian. DILARANG menimpa dokumen lama; `new` menolak berkas yang sudah ada. Dokumen lama dengan pola nama lain (mis. `PRD-SSO.html`) DILARANG diganti namanya tanpa diminta.
 
    | Jenis | Pola | Contoh |
    | :--- | :--- | :--- |
@@ -82,13 +84,18 @@ flowchart TD
    ```bash
    node ~/.gemini/config/skills/meta-prd/scripts/doc-tools.mjs new <lokasi>/<nama>.html
    ```
+   `~` diperluas oleh Git Bash dan shell Unix. Di PowerShell tulis path lengkapnya (`$env:USERPROFILE\.gemini\config\skills\meta-prd\scripts\doc-tools.mjs`).
 5. **Tulis isi** (§3). Ganti semua `{{...}}`, tambah bagian, pilih komponen menurut fungsinya. Sunting hanya di luar blok gaya dan skrip.
 6. **Periksa:**
    ```bash
    node ~/.gemini/config/skills/meta-prd/scripts/doc-tools.mjs check <lokasi>/<nama>.html
    ```
-   Baca keluarannya penuh, termasuk jumlah bagian dan tautan yang diperiksa. Angka nol di sana berarti pemeriksa tidak membaca apa-apa, bukan dokumennya bersih.
-7. **Render.** Buka halamannya dan lihat sendiri di tema terang, gelap, dan lebar sempit. Tanpa browser yang bisa dikendalikan, pakai Edge atau Chrome headless untuk tangkapan layar, lalu baca gambarnya. Tidak bisa dirender sama sekali: katakan itu di laporan, jangan menyiratkan sudah dilihat.
+   Baca keluarannya penuh. `sections 0` atau `ids 0` berarti pemeriksa tidak membaca apa-apa, bukan dokumennya bersih. `internal links 0` itu wajar: daftar isi dibangun otomatis, jadi dokumen tanpa tautan `#` di badannya sah.
+7. **Render dan baca gambarnya:**
+   ```bash
+   node ~/.gemini/config/skills/meta-prd/scripts/doc-render.mjs <lokasi>/<nama>.html --out <folder scratch>
+   ```
+   Skrip ini membuka dokumen di Edge atau Chrome headless untuk empat kombinasi (terang dan gelap, lebar 1280 dan 390), memotongnya jadi gambar setinggi layar, dan melaporkan halaman yang meluber ke samping, error skrip, serta diagram yang tidak selesai. Exit 0 hanya berarti pemeriksaan otomatisnya bersih; **gambarnya tetap WAJIB dibaca**, minimal potongan pertama dan terakhir tiap kombinasi plus potongan yang memuat tabel lebar dan diagram. Arahkan `--out` ke folder scratch, bukan ke folder dokumen proyek. Exit 3 berarti tidak ada browser: katakan di laporan bahwa dokumen belum dirender, jangan menyiratkan sudah dilihat. DILARANG merender dengan `--window-size` di bawah 500: jendela headless tidak bisa lebih sempit dari itu dan gambarnya terpotong seolah-olah halamannya meluber. Untuk melihat satu tema lewat browser biasa, tambahkan `?theme=light` atau `?theme=dark` di alamatnya.
 8. **Lapor** path lengkap berkasnya, apa yang belum terverifikasi, dan keputusan yang ditunggu dari user.
 
 ---
@@ -99,17 +106,34 @@ flowchart TD
 - `eyebrow`: `JENIS · TOPIK · STATUS`, huruf besar diurus CSS.
 - `h1`: kalimat yang menyebut hasilnya, bukan label. "Reimbursement tanpa kertas untuk karyawan lapangan", bukan "PRD Reimbursement".
 - `lede`: dua sampai tiga kalimat. Apa ini, untuk siapa, disusun dari apa.
-- `meta`: tanggal absolut, basis kode atau data (commit, tanggal data), status.
+- `meta`: tanggal absolut, basis, status. **Basis** adalah apa yang menopang isinya: commit dan branch bila bersumber kode, tanggal pengambilan bila bersumber data, nama berkas catatan dan tanggalnya bila hanya bersumber permintaan.
 - Kolom kanan `header.doc` boleh diisi ringkasan angka (`.progress`, `.stat`) bila ada; kosongkan bila tidak.
+- `footer.doc`: satu sampai dua kalimat. Siapa menyusun, kapan, untuk keputusan apa, dan satu batas terpenting dokumen ini.
 
 **Badan**
-- Bagian `00` selalu **Ringkasan**: dua kartu (apa yang ditemukan atau diusulkan) dan, bila ada batas atau risiko yang harus dibaca dulu, satu `callout warn`.
+- Bagian `00` selalu **Ringkasan**: dua kartu dan, bila ada batas atau risiko yang harus dibaca dulu, satu `callout warn`. Judul kartu mengikuti isinya, mis. "Yang diusulkan" dan "Batas dan yang belum diputuskan", atau "Yang ditemukan" dan "Yang direkomendasikan". Tiga sampai enam butir per kartu, tiap butir dibuka frasa tebal.
 - Satu bagian menjawab satu pertanyaan. Dibuka `p.sub` satu sampai dua kalimat, lalu isi.
 - Nomor bagian dua digit, berurutan dari `00`. Daftar isi dibangun otomatis dari bagian; jangan ditulis tangan.
 - Pilih komponen dari fungsinya: perbandingan setara memakai kartu, daftar berkolom memakai tabel, urutan memakai `.steps`, pilihan memakai `.option` dengan kelebihan, kekurangan, dan pembatal. Rincian di `references/components.md`.
 - Alur lebih dari tiga langkah atau lebih dari dua pihak: diagram Mermaid di dalam `.diagram`, bukan paragraf.
-- Bagian terakhir sebelum sumber: **keputusan yang dibutuhkan**, satu kartu `.decision` per pertanyaan, masing-masing dengan bawaan yang diusulkan.
+- Kebutuhan yang prioritasnya belum diberikan peminta: buang kolom prioritas dan katakan itu, atau jadikan satu kartu keputusan. DILARANG mengarang `P0`/`P1`.
+- Bagian terakhir sebelum sumber: **keputusan yang dibutuhkan**, satu kartu `.decision` per pertanyaan di dalam `div.stack`. Tiap kartu memuat bawaan yang diusulkan, **satu kalimat alasannya, dan satu akibatnya**. Itu cukup untuk pertanyaan yang jawabannya mudah dibalik. Pertanyaan yang menentukan arsitektur tidak cukup dengan satu kalimat: timbang di bagian tersendiri dengan kartu `.option` (tiga kelebihan, tiga kekurangan, pembatal, `AGENTS.md` §4), lalu kartu keputusannya menunjuk ke sana.
 - Bagian penutup: **daftar sumber** dengan ID, tier, dan status, termasuk yang gagal dibuka.
+
+**Label dan sumber**
+- Label ditulis `<span class="lbl">[fakta:E2]</span>` di ujung klaimnya. Bentuk yang dipakai: `[fakta:E#]`, `[inferensi dari E#]`, `[spekulasi]`, `[memori-model]`.
+- Yang WAJIB berlabel: angka, kutipan, klaim tentang perilaku sistem atau pihak luar, dan semua usulan penyusun yang tidak diminta peminta. Bila satu bagian seluruhnya bersumber satu berkas, cukup satu label di kalimat pembukanya; jangan menabur label di tiap kalimat.
+- Tier sumber di tabel bukti (definisi lengkap di `skills/meta-brainstorm/references/evidence-protocol.md`):
+
+  | Tier | Artinya | Contoh |
+  | :-- | :--- | :--- |
+  | 0 | Primer, bisa diperiksa ulang | Kode proyek, data milik user, catatan permintaan user, dokumentasi resmi versi terpin |
+  | 1 | Kajian yang menyebut metodenya | Survei dengan ukuran sampel, engineering blog berdata |
+  | 2 | Praktisi yang jelas orangnya | Tulisan bernama, issue GitHub, postmortem |
+  | 3 | Rangkuman | Tutorial, artikel ringkasan. Petunjuk arah, bukan tumpuan |
+  | — | Gagal dibuka | Tetap dicatat, dengan sebabnya |
+
+- Kutipan penentu ditaruh terbuka (blockquote atau sel tabel). Kutipan pendukung yang banyak boleh masuk `details`; yang DILARANG disembunyikan di `details` adalah isi yang menentukan keputusan.
 
 **Bahasa**
 - Bahasa Indonesia sehari-hari. Kalimat lengkap, kata kerja jelas, satu gagasan per kalimat.
@@ -130,8 +154,8 @@ Galeri adalah sumber tunggal. Kerangka dan semua dokumen menyalin darinya.
 
 | Mau apa | Caranya |
 | :--- | :--- |
-| Menambah atau mengubah komponen | Sunting `assets/component-gallery.html`: CSS di `doc-style`, perilaku di `doc-script`, dan satu contoh tampil di badan galeri. Lalu `sync`, lalu `node scripts/doc-tools.test.mjs`, lalu tambahkan cuplikannya ke `references/components.md`. |
-| Memperbarui dokumen lama ke gaya terbaru | `node scripts/doc-tools.mjs sync <dokumen.html>`, lalu `check`, lalu render ulang. |
+| Menambah atau mengubah komponen | Sunting `assets/component-gallery.html`: CSS di `doc-style`, perilaku di `doc-script`, dan satu contoh tampil di badan galeri. Lalu `sync`, lalu `node scripts/doc-tools.test.mjs` (pemeriksa masih menangkap kerusakan), lalu `node scripts/gallery.browser-test.mjs` (semua bagian interaktif diklik di browser), lalu `doc-render` pada galeri dan baca gambarnya, lalu tambahkan cuplikannya ke `references/components.md`. |
+| Memperbarui dokumen lama ke gaya terbaru | `node scripts/doc-tools.mjs sync <dokumen.html>`, lalu `check`, lalu `doc-render` ulang. |
 | Skill lain butuh keluaran HTML (`meta-handover`, `meta-swipe`) | Memanggil `doc-tools.mjs new` dan `check` yang sama. DILARANG menyalin CSS ke skill lain. |
 
 Perubahan gaya adalah perubahan yang terlihat di semua dokumen berikutnya, jadi ia lewat panel dan persetujuan user seperti perubahan lain.
@@ -155,8 +179,8 @@ Perubahan gaya adalah perubahan yang terlihat di semua dokumen berikutnya, jadi 
 ## §6. Sebelum Melapor
 
 ```
-[ ] doc-tools check: exit 0, jumlah bagian dan tautan yang diperiksa masuk akal
-[ ] Halaman dirender dan dilihat: terang, gelap, layar sempit
+[ ] doc-tools check: exit 0, jumlah bagian dan id yang diperiksa bukan nol
+[ ] doc-render: exit 0, dan gambarnya dibaca (terang, gelap, lebar 1280 dan 390)
 [ ] Tidak ada angka tanpa sumber; kutipan verbatim; sumber gagal tercatat gagal
 [ ] Tiap bagian punya isi nyata; yang kosong sudah dibuang
 [ ] Keputusan yang ditunggu tertulis sebagai kartu, dengan bawaan yang diusulkan
