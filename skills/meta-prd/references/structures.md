@@ -110,6 +110,32 @@ Susunan Konteks, Keputusan, Status, Akibat berasal dari tulisan Michael Nygard (
 
 **Handover**: susunannya milik `meta-handover`; skill itu memakai gaya yang sama lewat `doc-tools`.
 
+**Runbook** (satu per sistem, diperbarui tiap kali kenyataannya berubah):
+
+| # | Bagian | Isi |
+| :-- | :--- | :--- |
+| 00 | Ringkasan | Sistem ini apa, jalan di mana, siapa yang memegang, dan tanggal dokumen ini terakhir dicocokkan dengan kenyataan |
+| 01 | Peta | Komponen, alamat, dan ketergantungannya; diagram |
+| 02 | Merilis | Langkah berurutan dengan perintahnya, dan cara tahu rilisnya berhasil |
+| 03 | Mundur | Langkah kembali ke versi sebelumnya; apa yang tidak bisa dimundurkan; kapan terakhir dicoba |
+| 04 | Cadangan dan pemulihan | Apa yang dicadangkan, ke mana, seberapa sering; langkah memulihkan; kapan terakhir dicoba dan berapa lama |
+| 05 | Saat ada masalah | Per gejala: cek apa dulu, perintah apa, siapa yang dikabari |
+| 06 | Perawatan berkala | Yang kedaluwarsa atau penuh, dengan tanggal atau batasnya |
+| 07 | Akses | Di mana kredensial disimpan (bukan isinya) dan siapa yang punya akses |
+| 08 | Daftar sumber | Dari mana tiap langkah diambil, dan mana yang belum pernah dijalankan |
+
+Runbook DILARANG memuat password, token, atau isi `.env`. Langkah yang belum pernah dijalankan diberi tanda begitu; runbook yang seluruhnya belum pernah dicoba adalah rencana, bukan runbook.
+
+**Panduan pakai** (untuk pengguna aplikasi): untuk siapa dan untuk pekerjaan apa; langkah per tugas dengan tangkapan layar di `.screen`; apa yang terjadi bila salah langkah dan cara membetulkannya; siapa yang dihubungi. Ditulis dengan kata yang tampil di layar, tanpa nama tabel, kelas, atau endpoint.
+
+**Catatan rilis** (untuk pengguna): apa yang baru, apa yang berubah dari kebiasaan lama, apa yang diperbaiki, dan apa yang perlu dilakukan pengguna. Satu kalimat per butir, dari sudut pengguna. Yang tidak terlihat pengguna tidak masuk.
+
+**Penawaran** (pekerjaan lepas): masalah yang dipecahkan; cakupan, yang tidak termasuk, dan yang masih terbuka; tahapan dan apa yang diserahkan tiap tahap; taksiran berentang dengan asumsinya; harga dan jadwal bayar; masa berlaku. Harga dan tarif hanya dari user. Kalimat kontrak bukan bagian dokumen ini.
+
+**Laporan kemajuan**: yang sudah bisa dicoba; yang sedang dikerjakan; yang terhalang dan butuh apa dari siapa; apakah taksiran berubah dan kenapa; keputusan yang ditunggu. Tanpa persentase.
+
+Cara memotong pekerjaan, menaksir, dan menyusun penawaran ada di `skills/meta-brainstorm/references/role-planner.md`; isi runbook berangkat dari `skills/meta-panel/references/lens-ops.md` bagian 2.7.
+
 ---
 
 ## 6. Sumber Susunan
@@ -122,7 +148,7 @@ Susunan Konteks, Keputusan, Status, Akibat berasal dari tulisan Michael Nygard (
 | ADR | Michael Nygard, "Documenting Architecture Decisions", 15 November 2011 | Title, Context, Decision, Status, Consequences; satu sampai dua halaman; status "superseded" |
 | ADR | MADR 4.0.0 (adr.github.io/madr) | Considered Options, Decision Drivers, Pros and Cons of the Options |
 
-Bagian "Pengguna", "Alur", "Keamanan, operasional, data", dan "Rencana uji" tidak berasal dari template di atas. Itu tambahan dari cara kerja user: panel tujuh lensa dan kewajiban test di `AGENTS.md`.
+Bagian "Pengguna", "Alur", "Keamanan, operasional, data", dan "Rencana uji" tidak berasal dari template di atas. Itu tambahan dari cara kerja user: lensa panel dan kewajiban test di `AGENTS.md`. Susunan runbook, panduan pakai, catatan rilis, penawaran, dan laporan kemajuan di bagian 5 juga susunan sendiri (ditambahkan 2026-11-10), bukan dari template yang dipublikasikan.
 
 ---
 

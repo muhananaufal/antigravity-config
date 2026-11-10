@@ -41,6 +41,9 @@ Jenis menentukan pertanyaan yang dijawab, bukan daftar bagian yang wajib diisi.
 | **RFC** | Bagaimana membangunnya, pilihan apa yang ditimbang, kenapa yang ini, apa risikonya | Engineer yang akan mengerjakan dan meninjau | Tidak ada alternatif yang ditolak - itu rencana kerja, bukan RFC |
 | **ADR** | Satu keputusan: konteksnya, keputusannya, akibatnya | Engineer di masa depan yang bertanya "kenapa begini" | Lebih dari satu keputusan dalam satu berkas - pecah |
 | **Laporan / peta / rencana** | Apa yang ditemukan atau apa urutan kerjanya | Yang meminta | Memaksakan susunan PRD pada sesuatu yang bukan produk |
+| **Runbook** | Bagaimana menjalankan, merilis, memundurkan, dan memulihkan sistem ini | Orang yang memegang sistem saat ada masalah, termasuk Anda enam bulan lagi | Isinya alasan rancangan - itu RFC atau ADR |
+| **Panduan pakai / catatan rilis** | Bagaimana pengguna memakai fitur ini; apa yang berubah di rilis ini | Pengguna aplikasi, bukan developer | Menyebut nama kelas, tabel, atau endpoint |
+| **Penawaran / laporan kemajuan** | Apa yang dikerjakan, berapa lama, dengan syarat apa; sudah sampai mana | Klien atau atasan | Ada harga atau tarif yang tidak datang dari user |
 
 Ragu antara PRD dan RFC: tulis PRD pendek dulu. RFC di atas masalah yang belum disepakati adalah kerja yang akan diulang.
 
@@ -78,8 +81,13 @@ flowchart TD
    | Laporan | `<proyek>-<topik>-report.html` | `hris-audit-izin-report.html` |
    | Handover | `<proyek>-handover-<YYYY-MM-DD>-<topik>.html` | `hris-handover-2026-11-10-reimbursement.html` |
    | Swipe | `<proyek>-swipe-<YYYY-MM-DD>-<cakupan>.html` | `hris-swipe-2026-11-10-reimbursement.html` |
+   | Runbook | `<proyek>-runbook.html` (satu per sistem) | `hris-runbook.html` |
+   | Panduan pakai | `<proyek>-<fitur>-guide.html` | `hris-reimbursement-guide.html` |
+   | Catatan rilis | `<proyek>-release-<YYYY-MM-DD>.html` | `hris-release-2026-11-10.html` |
+   | Penawaran | `<proyek>-<topik>-proposal.html` | `kasir-aplikasi-toko-proposal.html` |
+   | Laporan kemajuan | `<proyek>-progress-<YYYY-MM-DD>.html` | `hris-progress-2026-11-10.html` |
 
-   Handover dan swipe diberi tanggal karena dibuat berulang; PRD, RFC, dan ADR tidak, karena satu berkas per topik. Nomor ADR berurutan per proyek: lihat nomor terakhir di foldernya sebelum memberi nomor baru. Dua dokumen berjenis sama di hari yang sama dibedakan lewat topiknya, bukan lewat akhiran `-2`.
+   Handover, swipe, catatan rilis, dan laporan kemajuan diberi tanggal karena dibuat berulang; runbook tidak, karena ia satu berkas yang terus diperbarui; PRD, RFC, dan ADR tidak, karena satu berkas per topik. Nomor ADR berurutan per proyek: lihat nomor terakhir di foldernya sebelum memberi nomor baru. Dua dokumen berjenis sama di hari yang sama dibedakan lewat topiknya, bukan lewat akhiran `-2`.
 4. **Buat kerangka:**
    ```bash
    node ~/.gemini/config/skills/meta-prd/scripts/doc-tools.mjs new <lokasi>/<nama>.html

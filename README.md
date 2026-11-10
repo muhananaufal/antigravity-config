@@ -144,6 +144,8 @@ Protokol eksplorasi ide untuk ranah **umum** (bisnis, karir, keuangan, hukum, pe
 - **Fase 0:** ekstrak klaim penentu → sumber terdekat → WebSearch (*menemukan*) → WebFetch (*membaca*) → **pencarian pembantah wajib** → Evidence Ledger — semuanya sebelum opsi pertama disajikan.
 - **Hubungan dengan `AGENTS.md` §3:** §3 adalah SSOT definisi label; §0 skill ini menambahkan Evidence Ledger di atasnya. Bila keduanya tampak berbeda, yang lebih ketat menang.
 
+- **Mode 3, ngobrol per peran:** satu peran tim pada satu waktu sebagai teman berpikir. Sepuluh peran memakai berkas lensa panel; dua peran pembuat punya berkasnya sendiri di `references/`: **desainer** (arah tampilan, susunan halaman, teks antarmuka) dan **perencana** (memotong pekerjaan, menaksir, mengurutkan, penawaran, laporan kemajuan).
+
 ### `meta-git`
 
 Git Flow (`feature/*`, `fix/*`, `chore/*`), Conventional Commits, atomic commit per unit logis, Stacked PRs & micro-branching per batch, dan trailer atribusi:
@@ -158,7 +160,7 @@ Dokumentasi API (collection Postman, saved response, deskripsi endpoint). Contoh
 
 ### `meta-prd`
 
-Satu skill untuk semua dokumen yang dibaca orang: PRD, RFC, ADR, rencana, laporan. Yang diikat **gayanya**, bukan susunannya.
+Satu skill untuk semua dokumen yang dibaca orang: PRD, RFC, ADR, rencana, laporan, runbook, panduan pakai, catatan rilis, penawaran, dan laporan kemajuan. Yang diikat **gayanya**, bukan susunannya.
 
 - **Galeri sebagai sumber tunggal:** `assets/component-gallery.html` memuat seluruh gaya dan skrip; kerangka dan semua dokumen menyalin darinya.
 - **`scripts/doc-tools.mjs`:** `new` membuat kerangka, `check` menolak dokumen yang gayanya berubah atau masih ber-placeholder, `sync` memperbarui dokumen lama.
