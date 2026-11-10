@@ -50,12 +50,16 @@
 │   ├── LEARNED.md              # Living Brain — pelajaran yang sudah dibayar mahal
 │   └── tool-claude-code.md     # Adaptor Claude Code (terjemahan mekanisme tool)
 │
-├── skills/                     # Empat skill aktif. Itu saja.
+├── skills/                     # Delapan skill aktif.
 │   ├── meta-panel/             # ★ GERBANG UTAMA — klasifikasi + Panel 7 lensa
-│   │   └── references/decision-tree.md   # Pohon keputusan stack & arsitektur
+│   │   └── references/         # Peta keterkaitan, satu berkas per lensa, pohon keputusan stack
 │   ├── meta-debug/             # Debugging sistematis — akar masalah sebelum perbaikan
 │   ├── meta-brainstorm/        # Brainstorming umum & teknikal + Gerbang Bukti
-│   └── meta-git/               # Git Flow, Conventional Commits, atribusi
+│   ├── meta-git/               # Git Flow, Conventional Commits, atribusi
+│   ├── meta-api-docs/          # Dokumentasi API dari eksekusi nyata
+│   ├── meta-prd/               # Dokumen HTML (PRD, RFC, ADR, laporan) dengan satu gaya
+│   ├── meta-handover/          # Serah terima sesi — bawaan HTML lewat meta-prd
+│   └── meta-swipe/             # Mencoba aplikasi di browser per peran, dengan daftar periksa
 │
 └── plugins/                    # Plugin pihak ketiga (Apache-2.0) — ter-gitignore
 ```
@@ -142,6 +146,31 @@ Git Flow (`feature/*`, `fix/*`, `chore/*`), Conventional Commits, atomic commit 
 ```text
 Co-authored-by: aetheris <agents.aetheris@gmail.com>
 ```
+
+### `meta-api-docs`
+
+Dokumentasi API (collection Postman, saved response, deskripsi endpoint). Contoh response dibuat dari eksekusi nyata, dan deskripsi diverifikasi ke kode.
+
+### `meta-prd`
+
+Satu skill untuk semua dokumen yang dibaca orang: PRD, RFC, ADR, rencana, laporan. Yang diikat **gayanya**, bukan susunannya.
+
+- **Galeri sebagai sumber tunggal:** `assets/component-gallery.html` memuat seluruh gaya dan skrip; kerangka dan semua dokumen menyalin darinya.
+- **`scripts/doc-tools.mjs`:** `new` membuat kerangka, `check` menolak dokumen yang gayanya berubah atau masih ber-placeholder, `sync` memperbarui dokumen lama.
+- **`scripts/doc-render.mjs`:** merender terang dan gelap di dua lebar layar. Selesai berarti `check` lulus **dan** gambarnya dibaca.
+- **Hubungan dengan panel:** dokumen tidak menggantikan panel. Panel menyarankan jenis dokumen bila request-nya besar.
+
+### `meta-handover`
+
+Dokumen serah terima di akhir sesi panjang. Bawaan HTML lewat `doc-tools` milik `meta-prd`; Markdown hanya bila diminta atau pembacanya agen lain. Langkah 0 mewajibkan membuka transcript sesi dan mencocokkannya dengan keadaan repo.
+
+### `meta-swipe`
+
+Mencoba aplikasi web lewat browser sebagai tiap peran, **hanya bila diminta**.
+
+- **Daftar periksa di repo proyek** (`.swipe/checklist.json`) dan satu berkas hasil per swipe, supaya swipe berikutnya mengulang langkah yang sama dan menunjukkan apa yang berubah.
+- **`scripts/swipe-tools.mjs`:** `init`, `validate`, `plan`, `diff`, `report`. Laporan HTML dibangun dari data, bukan ditulis tangan.
+- **Pagar:** hanya alamat lokal atau dev yang disebut user, password tidak diketik maupun ditulis, aksi yang tidak bisa dibalik ditanyakan dulu, data buatan swipe tidak dibersihkan otomatis.
 
 ---
 
