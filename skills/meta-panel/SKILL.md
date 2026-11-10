@@ -251,6 +251,8 @@ Aturannya mengikuti `AGENTS.md` §6.1:
 [ ] Tiap temuan punya skenario, akibat, bukti, usul
 [ ] Tidak ada kalimat yang bisa ditempel ke request lain
 [ ] Lensa tanpa temuan menyebut apa yang dilihat
+[ ] Tiap lensa yang berkasnya dibuka terlihat di panel dengan namanya: sebagai temuan, keputusan, atau satu baris "sudah dicek"
+[ ] Angka hitungan (jumlah berkas, pemanggil, test) disertai apa yang dihitung, supaya bisa diulang
 [ ] Tidak ada perubahan perilaku di luar kalimat request yang terselip di saran
 [ ] Pertanyaan ke user hanya yang tidak bisa saya putuskan sendiri
 [ ] Dugaan ditulis sebagai dugaan, dengan cara mengeceknya

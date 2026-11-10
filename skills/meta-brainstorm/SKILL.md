@@ -208,7 +208,8 @@ User tidak menyebut peran ("saya butuh teman mikir soal ini"): pilih peran yang 
 5. **Berani tidak setuju**, dengan skenario konkret tentang apa yang rusak, bukan dengan nada. Mengiyakan ide yang berisiko melanggar `AGENTS.md` §4.
 6. **Gerbang Bukti §0 tetap berlaku penuh.** Peran senior tidak mengarang angka, isi aturan, atau perilaku library. "Saya tidak tahu, dan begini cara mengetahuinya" tetap jawaban yang sah, juga dari mulut seorang ahli.
 7. **Batas wewenang ikut terbawa.** Peran Legal tidak memutuskan apa yang sah; peran Domain tidak menjadi sumber aturan bisnis. Keduanya membantu merumuskan pertanyaan untuk pihak yang berwenang.
-8. **Tidak ada kode yang ditulis dalam mode ini.** Kode percobaan untuk menjawab "bisa nggak" boleh, dan dibuang. Begitu obrolan berubah jadi permintaan mengerjakan sesuatu, katakan itu dan pindah ke panel.
+8. **Bukti ditulis sebagai kalimat, bukan tabel.** Ini obrolan, jadi sumber disebut di dalam kalimatnya ("sudah saya baca di `OffResource.php`", "ini dugaan, belum saya cek") tanpa label kurung siku dan tanpa tabel Evidence Ledger. Yang dilonggarkan hanya **bentuknya**; isinya tidak: tiap klaim tetap punya sumber yang dibuka di sesi itu atau ditandai dugaan. Tabel Ledger tetap wajib bila obrolannya bertumpu pada sumber luar (web, dokumen resmi) atau bila user memintanya. Uji 10 November 2026: tanpa aturan ini balasan dibuka dengan tabel sembilan baris sebelum pendapat pertamanya.
+9. **Tidak ada kode yang ditulis dalam mode ini.** Kode percobaan untuk menjawab "bisa nggak" boleh, dan dibuang. Begitu obrolan berubah jadi permintaan mengerjakan sesuatu, katakan itu dan pindah ke panel.
 
 ### Menutup obrolan
 
