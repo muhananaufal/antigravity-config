@@ -124,7 +124,12 @@ Susunan Konteks, Keputusan, Status, Akibat berasal dari tulisan Michael Nygard (
 | 07 | Akses | Di mana kredensial disimpan (bukan isinya) dan siapa yang punya akses |
 | 08 | Daftar sumber | Dari mana tiap langkah diambil, dan mana yang belum pernah dijalankan |
 
-Runbook DILARANG memuat password, token, atau isi `.env`. Langkah yang belum pernah dijalankan diberi tanda begitu; runbook yang seluruhnya belum pernah dicoba adalah rencana, bukan runbook.
+Runbook DILARANG memuat password, token, atau isi `.env`.
+
+- **Tanda per langkah:** `<span class="pill muted">Belum dicoba</span>` untuk langkah yang belum pernah dijalankan, `<span class="pill ok">Dicoba 10 Nov 2026</span>` untuk yang sudah. Perintah yang terbukti ada di kode tetapi belum pernah dijalankan tetap "Belum dicoba".
+- **Runbook pertama hampir selalu draf.** Alamat server, cara rilis, cadangan, dan siapa yang dikabari jarang ada di repo. Jangan dikarang: tulis drafnya, beri status "Draf, belum pernah dijalankan" di `eyebrow`, dan jadikan tiap fakta yang hilang satu kartu keputusan. Namanya tetap `<proyek>-runbook.html`; statusnya yang berubah saat langkahnya dicoba.
+- **Bagian "Keputusan yang dibutuhkan"** ditambahkan sebelum daftar sumber selama masih ada fakta yang hilang, lalu dibuang.
+- **Ringkasan** tetap dua kartu (`SKILL.md` §3): kartu kiri memuat sistem ini apa, jalan di mana, dan siapa yang memegang; kartu kanan memuat apa yang belum dicoba dan tanggal terakhir dokumen dicocokkan dengan kenyataan.
 
 **Panduan pakai** (untuk pengguna aplikasi): untuk siapa dan untuk pekerjaan apa; langkah per tugas dengan tangkapan layar di `.screen`; apa yang terjadi bila salah langkah dan cara membetulkannya; siapa yang dihubungi. Ditulis dengan kata yang tampil di layar, tanpa nama tabel, kelas, atau endpoint.
 

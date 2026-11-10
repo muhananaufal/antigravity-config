@@ -95,7 +95,7 @@ Kolom kanan opsional. Hapus `div.progress` bila tidak ada angka yang layak ditam
 </section>
 ```
 
-`id` huruf kecil tanpa spasi. Nomor dua digit berurutan dari `00`. Judul `h2` berisi teks polos saja: `<code>` di dalam `h2` menjadi kolom sendiri dan di layar sempit hurufnya tersusun ke bawah satu per satu. Label daftar isi yang lebih pendek dari judul: tambahkan `data-toc-label="Masalah"` pada `section`.
+`id` huruf kecil tanpa spasi. Nomor dua digit berurutan dari `00`. Judul `h2` berisi teks polos saja: `<code>` di dalam `h2` menjadi kolom sendiri dan di layar sempit hurufnya tersusun ke bawah satu per satu. `code` di `h3` dan `h4` boleh. Label daftar isi yang lebih pendek dari judul: tambahkan `data-toc-label="Masalah"` pada `section`.
 
 ### Kartu, kisi, persona
 
@@ -188,6 +188,8 @@ Saringan baris:
   <div class="lane"><b>Laporan</b><div class="track"><span class="soft" style="--from: 6; --span: 3">Kalau sempat</span></div></div>
 </div>
 ```
+
+`pre[data-copy]` boleh ditaruh di dalam butir `ol.steps` untuk perintah per langkah.
 
 `--cols` jumlah kolom waktu. `--from` kolom mulai (dari 1), `--span` lebarnya. `span.soft` untuk rencana yang belum pasti.
 

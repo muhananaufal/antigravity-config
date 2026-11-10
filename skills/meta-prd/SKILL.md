@@ -103,7 +103,7 @@ flowchart TD
    ```bash
    node ~/.gemini/config/skills/meta-prd/scripts/doc-render.mjs <lokasi>/<nama>.html --out <folder scratch>
    ```
-   Skrip ini membuka dokumen di Edge atau Chrome headless untuk empat kombinasi (terang dan gelap, lebar 1280 dan 390), memotongnya jadi gambar setinggi layar, dan melaporkan halaman yang meluber ke samping, error skrip, serta diagram yang tidak selesai. Exit 0 hanya berarti pemeriksaan otomatisnya bersih; **gambarnya tetap WAJIB dibaca**, minimal potongan pertama dan terakhir tiap kombinasi plus potongan yang memuat tabel lebar dan diagram. Arahkan `--out` ke folder scratch, bukan ke folder dokumen proyek. Exit 3 berarti tidak ada browser: katakan di laporan bahwa dokumen belum dirender, jangan menyiratkan sudah dilihat. DILARANG merender dengan `--window-size` di bawah 500: jendela headless tidak bisa lebih sempit dari itu dan gambarnya terpotong seolah-olah halamannya meluber. Untuk melihat satu tema lewat browser biasa, tambahkan `?theme=light` atau `?theme=dark` di alamatnya. Dua hal yang pernah terjadi: potongan terakhir bisa kosong (hanya latar), maka yang dibaca adalah potongan terakhir yang berisi; dan satu gambar bisa rusak (isi berulang atau terpotong) walau exit 0 dan halamannya benar, maka render ulang sekali dan bandingkan dengan tema lainnya sebelum menyimpulkan halamannya yang rusak.
+   Skrip ini membuka dokumen di Edge atau Chrome headless untuk empat kombinasi (terang dan gelap, lebar 1280 dan 390), memotongnya jadi gambar setinggi layar, dan melaporkan halaman yang meluber ke samping, error skrip, serta diagram yang tidak selesai. Exit 0 hanya berarti pemeriksaan otomatisnya bersih; **gambarnya tetap WAJIB dibaca**, minimal potongan pertama dan terakhir tiap kombinasi plus potongan yang memuat tabel lebar dan diagram. Arahkan `--out` ke folder scratch, bukan ke folder dokumen proyek. Exit 3 berarti tidak ada browser: katakan di laporan bahwa dokumen belum dirender, jangan menyiratkan sudah dilihat. DILARANG merender dengan `--window-size` di bawah 500: jendela headless tidak bisa lebih sempit dari itu dan gambarnya terpotong seolah-olah halamannya meluber. Untuk melihat satu tema lewat browser biasa, tambahkan `?theme=light` atau `?theme=dark` di alamatnya. Dua hal yang pernah terjadi: potongan terakhir bisa kosong (hanya latar), maka yang dibaca adalah potongan terakhir yang berisi; dan satu gambar bisa rusak (isi berulang atau terpotong) walau exit 0 dan halamannya benar, maka render ulang sekali dan bandingkan dengan tema lainnya sebelum menyimpulkan halamannya yang rusak. Kerusakan ini sering dan berpindah potongan (dua dari tiga render pada satu uji), jadi setelah render ulang yang dibaca lagi adalah potongan yang tadi rusak.
 8. **Lapor** path lengkap berkasnya, apa yang belum terverifikasi, dan keputusan yang ditunggu dari user.
 
 ---
@@ -111,10 +111,11 @@ flowchart TD
 ## §3. Cara Menulisnya
 
 **Kepala dokumen**
+- Judul tab (`<title>`): pendek, jenis dan topiknya, mis. "RFC notifikasi klaim · hris".
 - `eyebrow`: `JENIS · TOPIK · STATUS`, huruf besar diurus CSS.
 - `h1`: kalimat yang menyebut hasilnya, bukan label. "Reimbursement tanpa kertas untuk karyawan lapangan", bukan "PRD Reimbursement".
 - `lede`: dua sampai tiga kalimat. Apa ini, untuk siapa, disusun dari apa.
-- `meta`: tanggal absolut, basis, status. **Basis** adalah apa yang menopang isinya: commit dan branch bila bersumber kode, tanggal pengambilan bila bersumber data, nama berkas catatan dan tanggalnya bila hanya bersumber permintaan.
+- `meta`: tanggal absolut, basis, status. **Basis** adalah apa yang menopang isinya: commit dan branch bila bersumber kode, tanggal pengambilan bila bersumber data, nama berkas catatan dan tanggalnya bila hanya bersumber permintaan. Bila ada perubahan yang belum di-commit dan ikut jadi bukti, sebut itu di basis.
 - Kolom kanan `header.doc` boleh diisi ringkasan angka (`.progress`, `.stat`) bila ada; kosongkan bila tidak.
 - `footer.doc`: satu sampai dua kalimat. Siapa menyusun, kapan, untuk keputusan apa, dan satu batas terpenting dokumen ini.
 
@@ -138,7 +139,7 @@ flowchart TD
   | 0 | Primer, bisa diperiksa ulang | Kode proyek, data milik user, catatan permintaan user, dokumentasi resmi versi terpin |
   | 1 | Kajian yang menyebut metodenya | Survei dengan ukuran sampel, engineering blog berdata |
   | 2 | Praktisi yang jelas orangnya | Tulisan bernama, issue GitHub, postmortem |
-  | 3 | Rangkuman | Tutorial, artikel ringkasan. Petunjuk arah, bukan tumpuan |
+  | 3 | Rangkuman | Tutorial, artikel ringkasan, dan berkas acuan skill yang menyebut dirinya susunan sendiri. Petunjuk arah, bukan tumpuan |
   | — | Gagal dibuka | Tetap dicatat, dengan sebabnya |
 
 - Kutipan penentu ditaruh terbuka (blockquote atau sel tabel). Kutipan pendukung yang banyak boleh masuk `details`; yang DILARANG disembunyikan di `details` adalah isi yang menentukan keputusan.

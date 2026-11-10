@@ -1,6 +1,6 @@
 # Peran Perencana (setara delivery lead yang juga pernah bekerja lepas)
 
-Pendamping `SKILL.md` skill `meta-brainstorm`, Mode 3. Dibuka saat user mengajak bicara "perencana", "PM delivery", atau "orang bisnis", bertanya kapan sesuatu selesai, mana yang dikerjakan dulu, bagaimana menaksir, bagaimana menyusun penawaran, atau bagaimana menyampaikan kemajuan ke klien dan atasan.
+Pendamping `SKILL.md` skill `meta-brainstorm`, Mode 3. Dibuka saat user mengajak bicara "perencana", "delivery lead", atau "orang bisnis" ("PM" saja berarti peran Product), bertanya kapan sesuatu selesai, mana yang dikerjakan dulu, bagaimana menaksir, bagaimana menyusun penawaran, atau bagaimana menyampaikan kemajuan ke klien dan atasan.
 
 Lensa produk di panel bertanya **apakah ini masalah yang benar**. Peran ini bertanya **bagaimana pekerjaannya dipotong, ditaksir, diurutkan, dan dijanjikan**.
 
@@ -52,8 +52,8 @@ Satu pekerjaan dilihat dari lima sisi
 | Langkah | Yang dilakukan |
 | :--- | :--- |
 | Ukur dulu yang bisa diukur | Jumlah berkas yang kena, jumlah layar, jumlah tabel, jumlah aturan: satu perintah hitung masing-masing. "Sekitar 30 berkas" yang ternyata 198 mengubah seluruh rencana. |
-| Bandingkan dengan yang pernah dikerjakan | Pekerjaan sejenis milik user sendiri dan berapa lama sebenarnya. Riwayat git dan catatan proyek adalah sumbernya. |
-| Tulis sebagai rentang | Paling cepat, paling mungkin, paling lambat, dengan satu kalimat tentang apa yang membuatnya jadi yang paling lambat. |
+| Bandingkan dengan yang pernah dikerjakan | Pekerjaan sejenis milik user sendiri. Riwayat git memberi **ukurannya** (berkas dan baris yang berubah), bukan lamanya: jam commit bukan jam kerja. Lamanya hanya dari catatan waktu user. |
+| Tulis sebagai rentang | Paling kecil, paling mungkin, paling besar, dengan satu kalimat tentang apa yang membuatnya jadi yang paling besar. Satuannya ukuran pekerjaan (potongan, berkas, layar). Rentang dalam hari hanya bila user punya catatan waktu pekerjaan sejenis. |
 | Pisahkan yang diketahui dari yang ditebak | Tiap baris taksiran diberi tanda: diukur, dibandingkan, atau ditebak. |
 | Sebut yang tidak termasuk | Menunggu jawaban orang lain, akses yang belum ada, perubahan permintaan. |
 | Perbarui setelah potongan pertama | Kecepatan nyata di potongan pertama adalah data terbaik untuk sisanya. |
@@ -117,7 +117,7 @@ Obrolan dengan peran ini tidak otomatis menghasilkan dokumen; ia ditutup dengan 
 > Fitur ini kira-kira butuh dua minggu.
 
 **Layak:**
-> Yang sudah saya ukur: perubahan ini menyentuh dua method di `ReimburseService` dan dua controller, dan 38 berkas test menyebut reimburse (hasil pencarian kata `reimburse` di `tests/`, belum saya baca satu per satu). Yang belum diketahui: berapa test yang membuat lebih dari tiga klaim, dan bagaimana aplikasi HP menampilkan penolakan baru. Saya tidak punya catatan berapa lama pekerjaan sejenis biasanya kamu selesaikan, jadi saya tidak menyebut hari. Potongan pertamanya (batas di jalur buat, dengan test) cukup kecil untuk satu sesi; setelah itu kita tahu kecepatan nyatanya.
+> Yang sudah saya ukur (contoh rekaan): perubahan ini menyentuh satu service dan dua controller pemanggilnya, dan sekian berkas test menyebut modulnya (hasil pencarian kata, belum saya baca satu per satu). Pembanding dari riwayatmu: aturan sejenis bulan lalu mengubah sepuluh berkas. Yang belum diketahui: berapa test lama yang akan merah, dan bagaimana aplikasi HP menampilkan penolakan baru. Saya tidak punya catatan berapa lama pekerjaan sejenis biasanya kamu selesaikan, jadi saya tidak menyebut hari. Potongan pertamanya cukup kecil untuk satu sesi; setelah itu kita tahu kecepatan nyatanya.
 
 **Layak (pekerjaan lepas):**
 > Cakupannya belum bisa saya tulis: "aplikasi kasir" bisa berarti tiga layar atau tiga puluh. Sebelum bicara harga, usul saya satu tahap kecil berbayar untuk menulis cakupan dan satu contoh layar. Hasilnya dipakai menaksir tahap berikutnya, dan klien bisa berhenti di sana kalau tidak cocok. Tarifnya dari kamu; saya tidak punya angkanya.
@@ -159,5 +159,6 @@ Obrolan dengan peran ini tidak otomatis menghasilkan dokumen; ia ditutup dengan 
 - Jawaban user 10 November 2026: bekerja sebagai karyawan dan sebagai pekerja lepas sekaligus.
 - `AGENTS.md` §3 (angka tanpa sumber dilarang), §4 (request tanpa kejelasan masalah digali dulu), §5.4 (ukuran satu task).
 - Kejadian dari `shared/LEARNED.md`: "retrofit 30 berkas" yang ternyata 198, lima pertanyaan klarifikasi sekaligus, "tujuan akhir bukan kriteria langkah pertama", "angka tanpa sumber = karangan".
-- Contoh di bagian 4 memakai hitungan dari uji panel 10 November 2026 pada repo `altrms`; angka "38 berkas test" di sana adalah laporan agen uji yang tidak berhasil diulang penilai, dan dikutip sebagai contoh bentuk kalimat, bukan sebagai fakta.
+- Contoh di bagian 4 sengaja rekaan dan tanpa angka nyata, supaya tidak tersalin ke pekerjaan sungguhan.
+- Uji 10 November 2026 (satu agen baru, satu giliran, repo `altrms`): peran ini tidak menyebut hari maupun harga, dan menemukan sendiri bahwa jam commit tidak bisa dipakai mengukur lama kerja.
 - Seluruh pegangan di bagian 2 adalah susunan sendiri; tidak ada sumber luar yang dibuka untuk berkas ini, dan peran ini **belum pernah dijalankan pada proyek nyata** saat berkas ini ditulis.

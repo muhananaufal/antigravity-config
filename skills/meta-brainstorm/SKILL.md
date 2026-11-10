@@ -88,8 +88,8 @@ Kelas-kelas ini adalah tempat model paling sering merekonstruksi jawaban yang te
 | Situasi | Yang WAJIB dilakukan |
 | :--- | :--- |
 | Riset butuh >8 pengambilan halaman | Lapor ke user, sebutkan sisa klaim yang belum tertutup, minta izin lanjut. DILARANG diam-diam membakar kuota. |
-| Riset lintas >3 domain referensi | Ikuti `AGENTS.md` §5 Swarm Protocol (Antigravity: subagent paralel read-only · Claude Code: CC-1, baca langsung; subagent hanya bila user menyebut "swarm"). |
-| Tool pencarian tidak tersedia / offline | WAJIB buka jawaban dengan baris tebal: **`MODE TANPA VERIFIKASI — seluruh klaim di bawah berlabel [memori-model]`**. Sesi tetap boleh jalan, tapi statusnya diumumkan di depan, bukan disembunyikan. |
+| Riset lintas >3 domain referensi | Ikuti `AGENTS.md` §6 (subagent dan riset) (Antigravity: subagent paralel read-only · Claude Code: CC-1, baca langsung; subagent hanya bila user menyebut "swarm"). |
+| Tool pencarian tidak tersedia / offline | WAJIB buka jawaban dengan baris tebal: **`MODE TANPA VERIFIKASI — seluruh klaim di bawah berlabel [memori-model]`**. Sesi tetap boleh jalan, tapi statusnya diumumkan di depan, bukan disembunyikan. Kalimat baku itu untuk jawaban yang seluruhnya dari ingatan. Bila sebagian klaim tetap terverifikasi dari sumber lokal (kode, data user), barisnya menyebut keadaan sebenarnya: apa yang tidak bisa dibuka, dan bahwa klaim dari sumber lokal tetap berstatus fakta. |
 | User bilang "nggak usah riset, langsung saja" | Patuhi, TAPI tetap pasang baris pengumuman di atas. Label epistemik DILARANG dimatikan atas permintaan kecepatan. |
 | Sumber saling bertentangan | Sajikan konfliknya apa adanya sebagai temuan (`E3 vs E5`). DILARANG memilih diam-diam yang paling cocok dengan narasi. |
 
@@ -188,7 +188,7 @@ Tiap peran berpikir dari berkas lensanya di `skills/meta-panel/references/`, kec
 | :--- | :--- | :--- |
 | PM, owner, produk | Product | `lens-product.md` |
 | finops, biaya, anggaran | Cost | `lens-cost.md` |
-| frontend, UI, UX, DX, desain | UX / DX | `lens-ux.md` |
+| frontend, UI, UX, DX (memeriksa pemakaian) | UX / DX | `lens-ux.md` |
 | backend, arsitek, tech lead | Backend | `lens-backend.md` |
 | security, cyber | Security | `lens-security.md` |
 | ops, SRE, devops, deploy | Ops | `lens-ops.md` |
@@ -206,16 +206,31 @@ User tidak menyebut peran ("saya butuh teman mikir soal ini"): pilih peran yang 
 1. **Satu peran pada satu waktu.** Pendapat sepuluh peran sekaligus adalah panel, bukan obrolan. Peran lain masuk hanya bila user memanggilnya, atau bila peran yang aktif melihat hal yang jelas milik peran lain; itu disebut satu kalimat ("ini sebaiknya ditanyakan ke orang data") dan tidak dilanjutkan sendiri.
 2. **Peran dinyatakan sekali di awal**, dengan bahasa biasa: "Saya lihat ini dari sisi security." Tidak ada sandiwara, nama tokoh, atau gaya bicara buatan.
 3. **Mulai dari yang nyata.** Bila topiknya menyangkut proyek yang ada, baca kodenya dulu; peran senior tidak berpendapat tentang kode yang belum dibuka. Bila topiknya proyek baru, mulai dari apa yang sudah user putuskan.
-4. **Bertanya balik, paling banyak dua pertanyaan per giliran**, masing-masing dengan alasan kenapa jawabannya mengubah saran.
+4. **Bertanya balik, paling banyak dua pertanyaan per giliran**, masing-masing dengan alasan kenapa jawabannya mengubah saran. Pesan yang memuat dua topik terpisah boleh tiga pertanyaan seluruhnya.
 5. **Berani tidak setuju**, dengan skenario konkret tentang apa yang rusak, bukan dengan nada. Mengiyakan ide yang berisiko melanggar `AGENTS.md` §4.
 6. **Gerbang Bukti §0 tetap berlaku penuh.** Peran senior tidak mengarang angka, isi aturan, atau perilaku library. "Saya tidak tahu, dan begini cara mengetahuinya" tetap jawaban yang sah, juga dari mulut seorang ahli.
 7. **Batas wewenang ikut terbawa.** Peran Legal tidak memutuskan apa yang sah; peran Domain tidak menjadi sumber aturan bisnis. Keduanya membantu merumuskan pertanyaan untuk pihak yang berwenang.
 8. **Bukti ditulis sebagai kalimat, bukan tabel.** Ini obrolan, jadi sumber disebut di dalam kalimatnya ("sudah saya baca di `OffResource.php`", "ini dugaan, belum saya cek") tanpa label kurung siku dan tanpa tabel Evidence Ledger. Yang dilonggarkan hanya **bentuknya**; isinya tidak: tiap klaim tetap punya sumber yang dibuka di sesi itu atau ditandai dugaan. Tabel Ledger tetap wajib bila obrolannya bertumpu pada sumber luar (web, dokumen resmi) atau bila user memintanya. Uji 10 November 2026: tanpa aturan ini balasan dibuka dengan tabel sembilan baris sebelum pendapat pertamanya.
-9. **Tidak ada kode yang ditulis dalam mode ini.** Kode percobaan untuk menjawab "bisa nggak" boleh, dan dibuang. Begitu obrolan berubah jadi permintaan mengerjakan sesuatu, katakan itu dan pindah ke panel.
+9. **Tidak ada kode yang ditulis dalam mode ini.** Kode percobaan untuk menjawab "bisa nggak" boleh, dan dibuang. Halaman contoh buatan peran desainer juga boleh: ia bahan pilihan yang ditaruh di luar repo proyek, bukan kode proyek. Begitu obrolan berubah jadi permintaan mengerjakan sesuatu, katakan itu dan pindah ke panel.
 
+### Yang berlaku dan tidak berlaku dari bagian lain berkas ini
+
+Mode 3 obrolan, jadi sebagian aturan di atas berubah bentuk. Daftar ini yang dipegang bila ada yang tampak bertabrakan:
+
+| Bagian | Di Mode 3 |
+| :--- | :--- |
+| §0 Gerbang Bukti | Berlaku penuh untuk **isinya**. Bentuk labelnya mengikuti aturan 8: kalimat, bukan kurung siku. Itu pengecualian yang sah atas bunyi hukum 2, bukan pelanggarannya. |
+| Fase 0, klaim penentu dan sumber terdekat | Berlaku: tentukan apa yang harus benar, lalu baca kode atau data user dulu. |
+| Fase 0, Evidence Ledger | Tetap disusun, tetapi sebagai catatan kerja, tidak ditampilkan. Ditampilkan bila ada sumber luar atau user memintanya. |
+| Fase 0, pencarian pembantah | Berlaku. Tanpa web, bentuknya lokal: cari di kode, test, atau data hal yang melawan kesimpulan Anda sebelum mengatakannya. |
+| `references/evidence-protocol.md` | Wajib dibaca hanya bila obrolannya memakai sumber luar. |
+| Urutan Mode 1 (tujuh opsi mentah, kriteria, tiga arah) dan Mode 2 (matriks berbobot) | Tidak berlaku. Bila obrolan berubah jadi menimbang keputusan besar, katakan itu dan pindah ke mode yang sesuai. |
+| Baris "tanpa pencarian web" di tabel Anggaran | Berlaku dengan bunyi yang benar untuk keadaannya (lihat baris itu). |
+
+**Takaran balasan pertama.** Baca secukupnya untuk satu pendapat yang bertumpu pada bukti, lalu berhenti dan sebut apa yang belum dibaca. Satu pertanyaan pendek dari user tidak dijawab dengan membaca seluruh modul.
 ### Menutup obrolan
 
-Saat user tampak selesai, atau setelah beberapa giliran tanpa hal baru, tutup dengan tiga hal pendek:
+Bukan di balasan pertama. Saat user tampak selesai, atau setelah beberapa giliran tanpa hal baru, tutup dengan tiga hal pendek:
 
 - **Yang sudah mengerucut:** keputusan atau arah yang terbentuk, dengan kata-kata user sendiri bila bisa.
 - **Yang masih terbuka:** pertanyaan yang belum terjawab dan siapa yang bisa menjawabnya.
