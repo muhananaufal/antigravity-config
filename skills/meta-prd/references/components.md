@@ -220,7 +220,7 @@ Saringan baris:
 </dl>
 ```
 
-`AGENTS.md` §4 mewajibkan tiga kelebihan dan tiga kekurangan per opsi serta pembatalnya. Komponen `.option` disusun untuk itu. Label `.lbl` di dalam butir `ul.pros` atau `ul.cons` jatuh ke baris sendiri di luar indentasi (diketahui, belum diperbaiki di galeri): taruh labelnya di paragraf pembuka bagian atau di `p.note` di bawah kisi kartu.
+`AGENTS.md` §4 mewajibkan tiga kelebihan dan tiga kekurangan per opsi serta pembatalnya. Komponen `.option` disusun untuk itu. Label `.lbl` dan `code` boleh ditaruh langsung di dalam butir `ul.pros` atau `ul.cons`: `<li>Tanpa komponen baru. <span class="lbl">[fakta:E1]</span></li>`.
 
 Beberapa kartu berurutan di luar kisi dibungkus `div.stack` supaya berjarak. Kartu keputusan yang sudah dijawab tidak dihapus: pill-nya diganti `ok` dengan jawabannya, supaya riwayatnya terbaca.
 
@@ -285,7 +285,7 @@ Mermaid dimuat dari CDN hanya bila halaman punya `pre.mermaid`, dan digambar ula
 
 Ganti baris di dalam label node ditulis `&lt;br/&gt;`, bukan `<br/>`. Di dalam `pre`, `<br/>` mentah dibaca browser sebagai elemen dan hilang dari teks yang diterima Mermaid, sehingga dua baris label menyatu tanpa spasi ("Peta belajar Goselesai"). `check` dan `doc-render` tidak menangkap ini; hanya terlihat di gambarnya.
 
-Diagram dengan lebih dari sekitar delapan node mengecil di layar sempit sampai hurufnya sulit dibaca: pecah jadi dua diagram, atau pindahkan rinciannya ke `ol.steps` di bawahnya. Yang diketahui dan belum diperbaiki di galeri: label garis Mermaid di tema gelap berlatar gelap pekat, tidak mengikuti warna kartu.
+Diagram dengan lebih dari sekitar delapan node mengecil di layar sempit sampai hurufnya sulit dibaca: pecah jadi dua diagram, atau pindahkan rinciannya ke `ol.steps` di bawahnya. Label garis (`A -- Ya --> B`) memakai warna kartu di kedua tema.
 
 ### Cerita pengguna dan kriteria penerimaan
 

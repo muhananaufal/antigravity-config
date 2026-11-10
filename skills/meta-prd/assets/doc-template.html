@@ -194,9 +194,11 @@
   .kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
   @media (max-width: 620px) { .kv > div { grid-template-columns: minmax(0, 1fr); gap: 2px; } }
   .pros, .cons { list-style: none; padding: 0; margin: 8px 0 0; display: grid; gap: 4px; font-size: 14.5px; }
-  .pros li, .cons li { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 6px; max-width: none; }
-  .pros li::before { content: "+"; font-family: var(--mono); font-weight: 600; color: var(--on-success); }
-  .cons li::before { content: "\2212"; font-family: var(--mono); font-weight: 600; color: var(--on-danger); }
+  /* The marker is positioned, not a grid column: as a grid, every inline child of the item (a label, a code span) became its own cell and dropped under the marker. */
+  .pros li, .cons li { position: relative; padding-left: 24px; max-width: none; }
+  .pros li::before, .cons li::before { position: absolute; left: 0; top: 0; width: 18px; font-family: var(--mono); font-weight: 600; }
+  .pros li::before { content: "+"; color: var(--on-success); }
+  .cons li::before { content: "\2212"; color: var(--on-danger); }
   .option { display: grid; gap: 8px; align-content: start; }
   .option.chosen { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
   .option .killer { font-size: 13.5px; color: var(--muted); border-top: 1px dashed var(--line); padding-top: 8px; margin-top: 4px; }
@@ -497,7 +499,7 @@
           darkMode: getComputedStyle(root).colorScheme === "dark",
           background: cssVar("--surface"), primaryColor: cssVar("--accent-soft"), primaryTextColor: cssVar("--ink"),
           primaryBorderColor: cssVar("--line-strong"), lineColor: cssVar("--muted"), secondaryColor: cssVar("--canvas"),
-          tertiaryColor: cssVar("--surface"), fontFamily: "Figtree, system-ui, sans-serif"
+          tertiaryColor: cssVar("--surface"), edgeLabelBackground: cssVar("--surface"), fontFamily: "Figtree, system-ui, sans-serif"
         }
       });
       return Promise.all(diagrams.map(function (pre, index) {

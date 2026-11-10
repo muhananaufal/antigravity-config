@@ -158,6 +158,45 @@ try {
   report("no horizontal overflow at 390px", narrow.scroll <= narrow.inner, `scrollWidth ${narrow.scroll}, viewport ${narrow.inner}`);
   report("table of contents moves to the top on narrow screens", narrow.side === "none" && narrow.mobile === "block", `side ${narrow.side}, mobile ${narrow.mobile}`);
 
+  // A source label inside a pro or con must stay inside the text column, not drop into the marker column.
+  await browser.viewport(1280, 900);
+  await sleep(200);
+  const optionLabel = await browser.evaluate(`(() => {
+    const label = document.querySelector(".pros li .lbl, .cons li .lbl");
+    if (!label) return null;
+    const item = label.closest("li").getBoundingClientRect();
+    const box = label.getBoundingClientRect();
+    return { indent: Math.round(box.left - item.left), sameRow: Math.round(box.top - item.top) < 8 };
+  })()`);
+  if (optionLabel) report("label inside a pro or con stays in the text column", optionLabel.indent >= 18 && optionLabel.sameRow, `indent ${optionLabel.indent}px, same row ${optionLabel.sameRow}`);
+  else absent("label inside a pro or con");
+
+  // In the dark theme an edge label must sit on the card colour, not on a black box.
+  await browser.colorScheme("dark");
+  await browser.open(target);
+  const darkStates = await browser.settleDiagrams();
+  if (darkStates.length && darkStates.every((s) => s === "ready")) {
+    const edge = await browser.evaluate(`(() => {
+      const probe = document.createElement("div");
+      probe.style.background = "var(--surface)";
+      document.body.appendChild(probe);
+      const surface = getComputedStyle(probe).backgroundColor;
+      probe.remove();
+      const seen = [...document.querySelectorAll("pre.mermaid .edgeLabel, pre.mermaid .edgeLabel *")]
+        .map((node) => getComputedStyle(node).backgroundColor)
+        .concat([...document.querySelectorAll("pre.mermaid .edgeLabel rect, pre.mermaid rect.background")].map((node) => getComputedStyle(node).fill))
+        .filter((color) => color && color !== "rgba(0, 0, 0, 0)" && color !== "transparent" && color !== "none");
+      return { surface, seen: [...new Set(seen)] };
+    })()`);
+    // Mermaid also paints a half-transparent copy of the same colour; over the card that is still the card colour,
+    // so only the red, green and blue values are compared.
+    const rgb = (color) => (color.match(/\d+/g) || []).slice(0, 3).join(",");
+    if (edge.seen.length) report("diagram edge labels use the card colour in the dark theme", edge.seen.every((color) => rgb(color) === rgb(edge.surface)), `card ${edge.surface}, labels ${edge.seen.join(" | ")}`);
+    else absent("diagram edge label");
+  } else if (darkStates.length) skipped.push("diagram edge label colour (library not loaded)");
+  else absent("diagram edge label");
+  await browser.colorScheme("light");
+
   report("no script errors", browser.pageErrors.length === 0, browser.pageErrors.slice(0, 2).join(" | "));
 } catch (error) {
   failed++;
