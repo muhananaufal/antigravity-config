@@ -195,7 +195,7 @@ Tiap peran berpikir dari berkas lensanya di `skills/meta-panel/references/`, kec
 | data, DBA, database | Data | `lens-data.md` |
 | QA, tester | QA | `lens-qa.md` |
 | legal, hukum, privasi, lisensi | Legal | `lens-legal.md` |
-| domain, aturan bisnis, HR, keuangan (sebagai bidang) | Domain | `lens-domain.md` |
+| aturan bisnis, orang domain, HR atau keuangan (sebagai bidang) | Domain | `lens-domain.md` |
 | desainer, bikin atau rapikan tampilan, tipografi, warna, teks antarmuka | Desainer (membuat, bukan memeriksa) | `references/role-designer.md` di skill ini |
 | perencana, orang bisnis, estimasi, prioritas, penawaran, laporan ke klien atau atasan | Perencana | `references/role-planner.md` di skill ini |
 
@@ -215,7 +215,9 @@ Sebut nomornya, atau "semua" kalau mau disapu sekaligus lewat panel.
 
 - **Hanya peran yang relevan untuk topik itu**, biasanya tiga sampai lima, urut dari yang paling menentukan. Bukan dua belas.
 - **Satu baris per peran** berisi hal konkret yang akan dipersoalkannya, bertumpu pada yang sudah dibaca di obrolan itu. Baris yang hanya menyebut nama peran tidak membantu user memilih.
-- **Peran yang sudah berbicara di obrolan itu tidak diulang.**
+- **Baca dulu secukupnya.** Bila topiknya menyangkut proyek yang ada dan belum ada yang dibaca di obrolan itu, buka bagian kode yang paling dekat dengan topiknya sebelum menulis daftar. Berkas lensa belum perlu dibuka untuk menulis daftar; ia dibuka saat user memilih perannya.
+- **Temuan yang mengubah pertanyaannya** (fiturnya ternyata sudah ada, premisnya keliru) boleh ditaruh sebagai satu paragraf pendek sebelum daftar.
+- **Peran yang sudah berbicara di obrolan itu tidak diulang.** Bila belum ada yang berbicara, "yang lain" dibaca sebagai "sudut pandang apa saja".
 - **Jawaban berupa nomor atau nama** ("2", "lanjut yang data") melanjutkan obrolan dengan peran itu saja, menurut aturan percakapan di bawah, termasuk membuka berkas lensanya.
 - **"Semua"** bukan Mode 3: itu sapuan panel (`skills/meta-panel/SKILL.md`).
 - Kata "domain" tanpa keterangan lain dibaca sebagai "bidang atau sudut pandang", bukan sebagai peran Domain. Peran Domain dipanggil dengan "aturan bisnis" atau "orang domain".
@@ -244,7 +246,7 @@ Mode 3 obrolan, jadi sebagian aturan di atas berubah bentuk. Daftar ini yang dip
 | Fase 0, klaim penentu dan sumber terdekat | Berlaku: tentukan apa yang harus benar, lalu baca kode atau data user dulu. |
 | Fase 0, Evidence Ledger | Tetap disusun, tetapi sebagai catatan kerja, tidak ditampilkan. Ditampilkan bila ada sumber luar atau user memintanya. |
 | Fase 0, pencarian pembantah | Berlaku. Tanpa web, bentuknya lokal: cari di kode, test, atau data hal yang melawan kesimpulan Anda sebelum mengatakannya. |
-| `references/evidence-protocol.md` | Wajib dibaca hanya bila obrolannya memakai sumber luar. |
+| `references/evidence-protocol.md` dan "Pemeriksaan Terakhir" di akhir berkas ini | Wajib hanya bila obrolannya memakai sumber luar. Tanpa sumber luar, pemeriksaan terakhirnya cukup: tiap klaim menyebut berkasnya atau ditandai dugaan. |
 | Urutan Mode 1 (tujuh opsi mentah, kriteria, tiga arah) dan Mode 2 (matriks berbobot) | Tidak berlaku. Bila obrolan berubah jadi menimbang keputusan besar, katakan itu dan pindah ke mode yang sesuai. |
 | Baris "tanpa pencarian web" di tabel Anggaran | Berlaku dengan bunyi yang benar untuk keadaannya (lihat baris itu). |
 
