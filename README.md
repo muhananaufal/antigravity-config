@@ -5,7 +5,7 @@
 
 **Dua perilaku inti yang dijaga seluruh isi repo ini:**
 
-1. **Tidak pernah langsung meng-acc request** — setiap permintaan fitur/perbaikan disapu **Panel Multi-POV** (7 lensa role) sebelum dieksekusi, lalu berhenti menunggu persetujuan.
+1. **Tidak pernah langsung meng-acc request** — setiap permintaan fitur/perbaikan disapu **Panel Multi-POV** (10 lensa role) sebelum dieksekusi, lalu berhenti menunggu persetujuan.
 2. **Setiap klaim berlabel sumber** — `[fakta:sumber]` · `[inferensi]` · `[spekulasi]` · `[memori-model]`, berlaku di semua mode termasuk saat menulis kode.
 
 ---
@@ -51,7 +51,7 @@
 │   └── tool-claude-code.md     # Adaptor Claude Code (terjemahan mekanisme tool)
 │
 ├── skills/                     # Delapan skill aktif.
-│   ├── meta-panel/             # ★ GERBANG UTAMA — klasifikasi + Panel 7 lensa
+│   ├── meta-panel/             # ★ GERBANG UTAMA — klasifikasi + Panel 10 lensa
 │   │   └── references/         # Peta keterkaitan, satu berkas per lensa, pohon keputusan stack
 │   ├── meta-debug/             # Debugging sistematis — akar masalah sebelum perbaikan
 │   ├── meta-brainstorm/        # Brainstorming umum & teknikal + Gerbang Bukti
@@ -107,7 +107,7 @@ Baseline regresi → branch kerja → batch maks 3–4 berkas → TDD untuk bugf
 
 ### ★ `meta-panel` — gerbang utama
 
-Leburan lima role v1 (`architect`, `swe`, `devops`, `dba`, `qa`) menjadi **tujuh lensa yang menyala bersamaan** pada setiap request:
+Leburan lima role v1 (`architect`, `swe`, `devops`, `dba`, `qa`) menjadi **sepuluh lensa yang menyala bersamaan** pada setiap request, masing-masing dengan berkas acuan setara orang senior di peran itu:
 
 | # | Lensa | Menjawab |
 | :-: | :--- | :--- |
@@ -118,6 +118,11 @@ Leburan lima role v1 (`architect`, `swe`, `devops`, `dba`, `qa`) menjadi **tujuh
 | 5 | ⚙️ Ops / SRE | Bagaimana ini mati? Blast radius, observability, rollback |
 | 6 | 🗄️ Data | (kondisional) Skema reversibel? Lock, index, pertumbuhan volume? |
 | 7 | 🧪 QA / Edge-case | Bagaimana saya merusaknya? Race, double-submit, input aneh |
+| 8 | 🧱 Backend / Arsitektur | Di mana kode ini tinggal menurut pola repo? Pintu masuk lain? Keadaan setengah jadi? |
+| 9 | ⚖️ Legal & kepatuhan | (bersyarat) Data pribadi, lisensi, kontrak — bertanya, tidak memutuskan |
+| 10 | 📐 Domain / aturan bisnis | Aturan mana yang disentuh, dari mana asalnya, bertabrakan dengan yang mana? |
+
+Tambahan di luar gerbang: tiap panel menutup dengan **kriteria selesai** yang bisa diperiksa tanpa membaca kode; proyek baru punya alurnya sendiri (`references/proyek-baru.md`, termasuk tiga arah desain yang bisa dibuka); dan swarm tiga agen hanya jalan bila user memintanya.
 
 Output **proporsional**: request kecil dapat panel ringkas beberapa baris; request besar dapat tabel penuh + rekomendasi + alternatif ditolak + **pembatal** + utang bukti. Yang wajib adalah *menyapu* semua lensa — yang dilaporkan hanya lensa yang menemukan sesuatu.
 
