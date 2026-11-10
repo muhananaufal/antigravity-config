@@ -229,9 +229,9 @@ Hanya atas permintaan user. Gunanya satu: mendapat pandangan yang **tidak saling
 
 | Agen | Lensa yang dipegang |
 | :--- | :--- |
-| Produk dan bisnis | 1 Product, 2 Cost, 9 Legal, 10 Domain |
-| Pengalaman pengguna | 3 UX / DX, dan arah desain bila proyek baru |
-| Rekayasa | 4 Security, 5 Ops, 6 Data, 7 QA, 8 Backend |
+| Produk dan bisnis | Product (1), Cost (2), Legal (9), aturan bisnis (10) |
+| Pengalaman pengguna | UX / DX (3), dan arah desain bila proyek baru |
+| Rekayasa | Security (4), Ops (5), Data (6), QA (7), Backend (8) |
 
 Aturannya mengikuti `AGENTS.md` §6.1:
 
