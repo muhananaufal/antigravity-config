@@ -95,6 +95,26 @@ Perubahan
 | Penyimpanan bersama | Probe ke database lain masih memakai cache berkas yang sama dan mengotori aplikasi yang hidup. |
 | Operasi yang merusak | Reset, sync dengan input kosong, atau restore tanpa penjaga jumlah menghapus semuanya tanpa error. |
 
+### 2.7 Setelah rilis: menjalankan sendirian
+
+Katalog di atas dipakai saat merancang perubahan. Bagian ini untuk sistem yang sudah jalan dan dipegang satu orang. Jawabannya ditulis sekali sebagai runbook (`skills/meta-prd/references/structures.md` bagian 5) dan diperbarui tiap kali kenyataannya berubah.
+
+| Cek | Skenario yang dicari |
+| :--- | :--- |
+| Rilis yang bisa diulang | Urutan langkah rilis tertulis dan bisa diikuti orang lain, atau Anda sendiri enam bulan lagi. Langkah yang hanya ada di kepala adalah langkah yang suatu hari terlewat. |
+| Mundur yang pernah dicoba | Cara kembali ke versi sebelumnya ditulis **dan pernah dijalankan**. Migrasi yang membuang kolom tidak bisa dimundurkan dengan memundurkan kode. |
+| Cadangan yang pernah dipulihkan | Cadangan yang belum pernah dicoba dipulihkan belum terbukti ada. Kapan terakhir dicoba, ke mana, dan berapa lama? Berkas unggahan ikut dicadangkan, bukan hanya database. |
+| Tahu duluan | Siapa yang tahu lebih dulu saat sistem mati: pemantau, atau pengguna yang mengeluh? Sinyal termurah: satu pemeriksaan dari luar yang memanggil satu halaman dan memberi tahu saat gagal. |
+| Yang penuh diam-diam | Disk, tabel log, antrian gagal, sertifikat dan domain yang kedaluwarsa. Tiap hal punya tanggal atau batas yang bisa dicek. |
+| Langkah saat produksi mati | Urutan pendek yang bisa diikuti saat panik: cek apa dulu, perintah apa, siapa yang dikabari. Ditulis saat tenang. |
+| Akses dan rahasia | Di mana kredensial disimpan, siapa lagi yang punya akses, dan apa yang terjadi bila Anda tidak bisa dihubungi. |
+| Setelah kejadian | Catatan pendek tanpa mencari kambing hitam: apa yang terjadi, bagaimana ketahuan, apa yang diubah supaya tidak berulang. |
+| Perawatan berkala | Pembaruan keamanan sistem dan dependency, rotasi log, pembersihan data sementara: siapa dan seberapa sering. |
+
+Untuk aplikasi satu server dengan sedikit pengguna, sebagian baris dijawab "belum ada, dan ini yang paling murah untuk mulai". Itu jawaban yang sah; yang tidak sah adalah tidak tahu bahwa belum ada.
+
+Agen tidak menjalankan rilis, pemulihan, atau perintah di server produksi atas inisiatif sendiri. Bagian ini menghasilkan pertanyaan dan dokumen; eksekusinya milik user atau atas perintahnya yang eksplisit.
+
 ---
 
 ## 3. Daftar Peluncuran Ringkas
@@ -166,4 +186,5 @@ Tanyakan dulu ke tabel kegagalan: berapa baris, sejak kapan, job apa.
 - Google SRE Book, dibuka 2026-11-10: bab 21 Handling Overload, bab 22 Addressing Cascading Failures, bab 12 Effective Troubleshooting, bab 15 Postmortem Culture, lampiran Launch Coordination Checklist.
 - SRE Workbook bab 16 Canarying Releases dan bab 5 Alerting on SLOs, dibuka 2026-11-10.
 - AWS Builders' Library, "Timeouts, retries, and backoff with jitter" (2019), dibuka 2026-11-10.
+- Bagian 2.7 disusun sendiri dari daftar peluncuran SRE di atas dan dari kebutuhan user memegang sistem seorang diri; tidak ada sumber luar tambahan yang dibuka, dan belum pernah dijalankan pada sistem nyata.
 - Kejadian di proyek user dari `shared/LEARNED.md`: deadline go-redis yang diabaikan, PUBLISH sinkron yang menahan pemanggil, `failed_jobs` 2887 baris, endpoint refund yang tidak pernah dipanggil, hook commit yang menggantung, pipa yang menelan exit code, restart WSL saat race test, port ganda di Windows.

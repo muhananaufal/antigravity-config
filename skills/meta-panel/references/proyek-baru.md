@@ -25,9 +25,9 @@ Yang tidak diulang di sini: pemilihan stack ada di `decision-tree.md`; daftar fo
 | 3 | Cost dan Legal | Anggaran waktu dan uang, siapa yang merawat, data pribadi apa yang dikumpulkan, lisensi, kontrak | `lens-cost.md`, `lens-legal.md` | PRD bagian batas; pertanyaan untuk pihak berwenang |
 | 4 | Data | Entitas utama dan hubungannya, yang tidak boleh hilang, yang tumbuh, yang perlu jejak perubahan | `lens-data.md` | Diagram entitas; RFC bagian data |
 | 5 | Backend | Stack, susunan lapisan, pola yang akan ditiru semua modul berikutnya, integrasi luar | `lens-backend.md`, `decision-tree.md` | ADR per keputusan besar; RFC bagian arsitektur |
-| 6 | UX | Arah desain (bagian 4), alur layar utama per peran, lima keadaan tiap layar | `lens-ux.md` | Tiga contoh arah desain; pilihan user |
+| 6 | UX | Arah desain (bagian 4), alur layar utama per peran, lima keadaan tiap layar | `lens-ux.md`, dan `role-designer.md` di `meta-brainstorm` | Tiga contoh arah desain; pilihan user |
 | 7 | Security dan Ops | Cara masuk dan pembagian izin, tempat rahasia disimpan, tempat jalan, cara rilis dan mundur, cadangan | `lens-security.md`, `lens-ops.md` | RFC bagian keamanan dan operasional |
-| 8 | QA | Kriteria selesai untuk potongan pertama, apa yang diuji otomatis, apa yang dicoba di browser | `lens-qa.md` | Kriteria selesai; daftar periksa awal `meta-swipe` |
+| 8 | QA | Kriteria selesai untuk potongan pertama, apa yang diuji otomatis, apa yang dicoba di browser | `lens-qa.md`, dan `role-planner.md` di `meta-brainstorm` | Kriteria selesai; rencana kerja berpotongan; daftar periksa awal `meta-swipe` |
 
 Putaran boleh dilewati bila jawabannya sudah ada di permintaan user; sebutkan bahwa dilewati dan dari kalimat mana jawabannya diambil. Putaran tidak boleh dilewati hanya karena terasa membosankan.
 
