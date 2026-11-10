@@ -199,7 +199,28 @@ Tiap peran berpikir dari berkas lensanya di `skills/meta-panel/references/`, kec
 | desainer, bikin atau rapikan tampilan, tipografi, warna, teks antarmuka | Desainer (membuat, bukan memeriksa) | `references/role-designer.md` di skill ini |
 | perencana, orang bisnis, estimasi, prioritas, penawaran, laporan ke klien atau atasan | Perencana | `references/role-planner.md` di skill ini |
 
-User tidak menyebut peran ("saya butuh teman mikir soal ini"): pilih peran yang paling menentukan untuk topiknya, sebutkan pilihan itu dalam satu kalimat, dan tawarkan peran kedua di akhir.
+### User tidak perlu hafal nama peran
+
+User tidak wajib mengingat kata pemicu di tabel atas. Kalimat apa pun yang meminta sudut pandang tanpa menyebut peran yang jelas diperlakukan sebagai **permintaan daftar**: "yang lain gimana", "sudut lain?", "siapa lagi?", "peran apa aja", "menurut domain yang lain", "saya butuh teman mikir soal ini".
+
+Jawabannya daftar bernomor, bukan pendapat panjang:
+
+```markdown
+Untuk <topiknya>, yang layak diajak bicara:
+1. **Security**: <hal pertama yang akan ia persoalkan, satu baris>.
+2. **Data**: <...>.
+3. **Legal**: <...>.
+Sebut nomornya, atau "semua" kalau mau disapu sekaligus lewat panel.
+```
+
+- **Hanya peran yang relevan untuk topik itu**, biasanya tiga sampai lima, urut dari yang paling menentukan. Bukan dua belas.
+- **Satu baris per peran** berisi hal konkret yang akan dipersoalkannya, bertumpu pada yang sudah dibaca di obrolan itu. Baris yang hanya menyebut nama peran tidak membantu user memilih.
+- **Peran yang sudah berbicara di obrolan itu tidak diulang.**
+- **Jawaban berupa nomor atau nama** ("2", "lanjut yang data") melanjutkan obrolan dengan peran itu saja, menurut aturan percakapan di bawah, termasuk membuka berkas lensanya.
+- **"Semua"** bukan Mode 3: itu sapuan panel (`skills/meta-panel/SKILL.md`).
+- Kata "domain" tanpa keterangan lain dibaca sebagai "bidang atau sudut pandang", bukan sebagai peran Domain. Peran Domain dipanggil dengan "aturan bisnis" atau "orang domain".
+
+Bila pesan user sudah jelas menunjuk satu topik sempit dan satu peran jelas paling menentukan, boleh langsung berbicara sebagai peran itu, sebutkan pilihannya dalam satu kalimat, dan tutup dengan daftar pendek peran lain.
 
 ### Aturan percakapan
 
@@ -243,7 +264,7 @@ Untuk proyek baru, urutan peran yang sebaiknya diajak bicara ada di `skills/meta
 | DILARANG | Kenapa |
 | :--- | :--- |
 | Berbicara sebagai sebuah peran tanpa membuka berkas lensanya | Hasilnya pendapat umum yang ditempeli nama jabatan |
-| Semua peran menjawab bergantian dalam satu pesan | Itu panel yang menyamar, dan user kehilangan lawan bicara |
+| Semua peran menjawab bergantian dalam satu pesan | Itu panel yang menyamar, dan user kehilangan lawan bicara. Daftar satu baris per peran untuk dipilih tidak termasuk larangan ini. |
 | Menyetujui terus supaya obrolan terasa enak | Teman berpikir yang selalu setuju tidak menambah apa-apa |
 | Mengubah obrolan jadi pengerjaan tanpa bilang | Melewati gerbang panel dan persetujuan |
 | Meniru gaya bicara tokoh atau memberi nama pada peran | Mengaburkan bahwa yang berbicara tetap agen yang sama, dengan batas pengetahuan yang sama |
