@@ -87,7 +87,7 @@ Menjawab satu hal: keputusan apa yang diambil, dalam konteks apa, dengan akibat 
 - Status ditulis di `eyebrow` dan `meta`: diusulkan, diterima, digantikan.
 - **ADR lama tidak disunting dan tidak dihapus.** Keputusan yang dibalik ditulis sebagai ADR baru; yang lama diberi status "digantikan" dengan tautan ke penggantinya.
 - Panjangnya satu sampai dua halaman. ADR yang lebih panjang biasanya RFC yang salah nama.
-- Nama berkas bernomor urut: `adr-0007-antrian-di-database.html`.
+- Nama berkas bernomor urut per proyek: `hris-adr-0007-antrian-di-database.html` (pola lengkap di `SKILL.md` langkah 3).
 
 Susunan Konteks, Keputusan, Status, Akibat berasal dari tulisan Michael Nygard (2011), yang juga menyebut dokumennya sebaiknya satu sampai dua halaman. MADR menambah "Considered Options" dan "Decision Drivers" sebagai bagian tersendiri.
 

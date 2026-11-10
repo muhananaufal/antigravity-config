@@ -65,7 +65,19 @@ flowchart TD
 
 1. **Tentukan jenis dan pembaca** (§1). Kalau dua-duanya bisa disimpulkan dari permintaan dan kode, jangan bertanya.
 2. **Kumpulkan bukti.** Sumber terdekat dulu: kode proyek, data milik user, dokumen yang sudah ada. Web setelah itu. Catat tiap sumber untuk tabel bukti di akhir dokumen.
-3. **Tentukan lokasi.** Ikuti folder dokumen yang sudah dipakai proyek: periksa `.docs/`, `docs/`, lalu tanya bila tidak ada. Nama berkas `kebab-case` yang menyebut isi, mis. `.docs/hris/reimbursement-prd.html`. DILARANG menimpa dokumen lama; `new` menolak berkas yang sudah ada.
+3. **Tentukan lokasi dan nama.** Ikuti folder dokumen yang sudah dipakai proyek: periksa `.docs/<proyek>/`, `docs/`, lalu tanya bila tidak ada. Nama berkas mengikuti tabel di bawah: huruf kecil semua, dipisah tanda hubung, diawali nama proyek supaya tetap jelas saat berkasnya dikirim sendirian. DILARANG menimpa dokumen lama; `new` menolak berkas yang sudah ada. Dokumen lama dengan pola nama lain (mis. `PRD-SSO.html`) DILARANG diganti namanya tanpa diminta.
+
+   | Jenis | Pola | Contoh |
+   | :--- | :--- | :--- |
+   | PRD | `<proyek>-<topik>-prd.html` | `hris-reimbursement-prd.html` |
+   | RFC | `<proyek>-<topik>-rfc.html` | `hris-antrian-notifikasi-rfc.html` |
+   | ADR | `<proyek>-adr-<nomor 4 digit>-<keputusan>.html` | `hris-adr-0007-antrian-di-database.html` |
+   | Rencana | `<proyek>-<topik>-plan.html` | `pentahoot-motion-plan.html` |
+   | Laporan | `<proyek>-<topik>-report.html` | `hris-audit-izin-report.html` |
+   | Handover | `<proyek>-handover-<YYYY-MM-DD>-<topik>.html` | `hris-handover-2026-11-10-reimbursement.html` |
+   | Swipe | `<proyek>-swipe-<YYYY-MM-DD>-<cakupan>.html` | `hris-swipe-2026-11-10-reimbursement.html` |
+
+   Handover dan swipe diberi tanggal karena dibuat berulang; PRD, RFC, dan ADR tidak, karena satu berkas per topik. Nomor ADR berurutan per proyek: lihat nomor terakhir di foldernya sebelum memberi nomor baru. Dua dokumen berjenis sama di hari yang sama dibedakan lewat topiknya, bukan lewat akhiran `-2`.
 4. **Buat kerangka:**
    ```bash
    node ~/.gemini/config/skills/meta-prd/scripts/doc-tools.mjs new <lokasi>/<nama>.html
