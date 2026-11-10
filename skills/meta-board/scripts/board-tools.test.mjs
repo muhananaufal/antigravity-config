@@ -179,15 +179,61 @@ for (const [name, mutate, pattern] of REJECTED) {
 
 // --- status needs evidence -----------------------------------------------------------------------
 {
-  const bare = tool(["set", id, "--status", "selesai"]);
-  expect("set: done without evidence is refused", bare.code === 1 && /evidence/.test(bare.text), bare.text);
+  const EVIDENCE = "php artisan test: 412 lulus, 0 gagal; commit a1b2c3d";
   const doing = tool(["set", id, "--status", "dikerjakan"]);
-  expect("set: in progress needs no evidence", doing.code === 0, doing.text);
-  const done = tool(["set", id, "--status", "selesai", "--evidence", "php artisan test: 412 lulus, 0 gagal; commit a1b2c3d"], { now: "2026-11-12T15:00:00+07:00" });
+  expect("set: in progress needs nothing extra", doing.code === 0, doing.text);
+  const bare = tool(["set", id, "--status", "dicek"]);
+  expect("set: handing over for checking without evidence is refused", bare.code === 1 && /evidence/.test(bare.text), bare.text);
+  const noWords = tool(["set", id, "--status", "selesai", "--evidence", EVIDENCE]);
+  expect("set: done without the owner's acceptance is refused", noWords.code === 1 && /--words/.test(noWords.text), noWords.text);
+  const check = tool(["set", id, "--status", "dicek", "--evidence", EVIDENCE], { now: "2026-11-12T15:00:00+07:00" });
+  const waiting = tool(["list", "--waiting"]);
+  expect("set: a ticket with evidence waits for the owner to check it", check.code === 0 && count(waiting.text) === 1, check.text + waiting.text);
+  const lazyReturn = tool(["set", id, "--status", "dikerjakan"]);
+  expect("set: sending back without a reason is refused", lazyReturn.code === 1 && /--reason/.test(lazyReturn.text), lazyReturn.text);
+  const back = tool(["set", id, "--status", "dikerjakan", "--reason", "Pesan batas belum muncul di aplikasi HP.", "--words", "di hp pesannya belum keluar"], { now: "2026-11-13T09:00:00+07:00" });
+  const listed = tool(["list", "--project", "hris-demo"]);
+  expect("set: sent back to the same ticket, and the list says so", back.code === 0 && /sent back/.test(back.text) && /dikembalikan 1 kali/.test(listed.text), back.text + listed.text);
+  tool(["set", id, "--status", "dicek", "--evidence", `${EVIDENCE}; pesan muncul di HP`], { now: "2026-11-14T10:00:00+07:00" });
+  const done = tool(["set", id, "--status", "selesai", "--words", "oke sudah muncul"], { now: "2026-11-14T16:00:00+07:00" });
   const shown = tool(["show", id]);
-  expect("set: done with evidence is stored with its date", done.code === 0 && /412 lulus/.test(shown.text) && /2026-11-12/.test(shown.text), shown.text);
+  expect("set: accepted by the owner, with the whole trail in the history", done.code === 0 && /Riwayat:/.test(shown.text) && /2026-11-13: dicek ke dikerjakan \(dikembalikan\)/.test(shown.text)
+    && /di hp pesannya belum keluar/.test(shown.text) && /2026-11-14: dicek ke selesai/.test(shown.text) && /oke sudah muncul/.test(shown.text), shown.text);
   const bad = tool(["set", id, "--status", "beres"]);
   expect("set: unknown status is refused", bad.code === 1 && /status must be one of/.test(bad.text), bad.text);
+  const cancel = tool(["set", idBlog, "--status", "batal"]);
+  expect("set: cancelling without a reason is refused", cancel.code === 1 && /--reason/.test(cancel.text), cancel.text);
+}
+
+// --- ideas, and follow-up tickets ----------------------------------------------------------------
+let idIdea = null, idNext = null;
+{
+  const idea = { title: "Ekspor rekap klaim ke Excel", summary: "Bagian keuangan ingin mengunduh rekap klaim reimburse per bulan sebagai berkas Excel untuk dicocokkan dengan pembukuan.", status: "ide" };
+  const a = tool(["add", "--file", file(idea), "--dir", HRIS]);
+  idIdea = (/#(\d+)/.exec(a.text) || [])[1];
+  expect("idea: recorded with only a title and a summary", a.code === 0 && idIdea, a.text);
+  const skip = tool(["set", idIdea, "--status", "dikerjakan"]);
+  expect("idea: cannot be worked on before it is approved", skip.code === 1 && /approve/.test(skip.text), skip.text);
+  const thin = tool(["approve", idIdea, "--file", file({ approved_by: "user", user_words: "gass" })]);
+  expect("approve: refused without acceptance criteria and sources", thin.code === 1 && /done_when/.test(thin.text) && /sources/.test(thin.text), thin.text);
+  const ok = tool(["approve", idIdea, "--file", file({ done_when: ticket().done_when, sources: ticket().sources, approved_by: "user", user_words: "gass yang excel" })]);
+  const listed = tool(["list", "--status", "siap"]);
+  expect("approve: the idea becomes ready work", ok.code === 0 && new RegExp(`^#${idIdea}\\b`, "m").test(listed.text), ok.text + listed.text);
+  const twice = tool(["approve", idIdea, "--file", file({ approved_by: "user", user_words: "gass" })]);
+  expect("approve: only an idea is approved", twice.code === 1 && /not an idea/.test(twice.text), twice.text);
+
+  const next = tool(["add", "--file", file({ ...ticket(), title: "Batas klaim bisa diatur per perusahaan", decisions: [], follows: Number(id) }), "--dir", HRIS]);
+  idNext = (/#(\d+)/.exec(next.text) || [])[1];
+  const older = tool(["show", id]);
+  const newer = tool(["show", idNext]);
+  expect("follows: changed criteria are a new ticket, linked both ways", next.code === 0 && new RegExp(`Dilanjutkan oleh: #${idNext}`).test(older.text) && new RegExp(`Lanjutan dari: #${id}`).test(newer.text), next.text);
+  const cross = tool(["add", "--file", file({ ...ticket(), follows: Number(id) }), "--dir", BLOG]);
+  expect("follows: refused across projects", cross.code === 1 && /another project/.test(cross.text), cross.text);
+  const ghost = tool(["add", "--file", file({ ...ticket(), follows: 999 }), "--dir", HRIS]);
+  expect("follows: refused when the earlier ticket does not exist", ghost.code === 1 && /does not exist/.test(ghost.text), ghost.text);
+  const jump = tool(["add", "--file", file({ ...ticket(), status: "selesai" }), "--dir", HRIS]);
+  expect("add: a new ticket cannot start as done", jump.code === 1 && /reached with "set"/.test(jump.text), jump.text);
+  tool(["set", idBlog, "--status", "batal", "--reason", "Blognya tidak jadi dibuat."]);
 }
 
 // --- export and pages ----------------------------------------------------------------------------
@@ -195,7 +241,7 @@ for (const [name, mutate, pattern] of REJECTED) {
   const exported = tool(["export", "--project", "hris-demo"]);
   let parsed = null;
   try { parsed = JSON.parse(exported.text); } catch { /* reported below */ }
-  expect("export: valid JSON for one project, decisions nested in the ticket", parsed !== null && parsed.tickets.length === 1 && parsed.tickets[0].decisions.length === 3, exported.text.slice(0, 300));
+  expect("export: valid JSON for one project, decisions nested in the ticket", parsed !== null && parsed.tickets.length === 3 && parsed.tickets[0].decisions.length === 3, exported.text.slice(0, 300));
 
   const site = path.join(TMP, "site");
   const r = tool(["report", "--out", site]);
@@ -213,6 +259,14 @@ for (const [name, mutate, pattern] of REJECTED) {
     expect("report: the board does not carry ticket details", !board.includes("sengaja panjang"));
     expect("report: ticket page has summary, decisions and sources", /id="ringkasan"/.test(detail) && /id="keputusan"/.test(detail) && /id="sumber"/.test(detail) && detail.includes("sengaja panjang dan lengkap") && detail.includes("ReimburseService.php:14"));
     expect("report: ticket page links back to the board", detail.includes('href="index.html"'));
+    const columns = [...board.matchAll(/<h3>([^<]+) <span class="pill muted" data-count>(\d+)<\/span>/g)].map((m) => `${m[1]}=${m[2]}`).join(", ");
+    expect("report: six columns, each ticket in the right one", columns === "Ide=0, Menunggu kamu=0, Siap=2, Dikerjakan=0, Perlu kamu cek=0, Selesai=1", columns);
+    expect("report: cancelled tickets are tucked away, not gone", /Tampilkan yang batal \(1\)/.test(board));
+    const bodyOf = (html) => html.slice(html.indexOf("<body"));
+    expect("report: no cover text or helper sentences on either page",
+      [board, detail].every((html) => !/class="lede"|<b>Disusun<\/b>|Pilihan tema|class="sub"|class="toolbar"/.test(bodyOf(html)) && /<header class="doc">[^]*data-theme-set="dark"[^]*<\/header>/.test(html)) && !/class="eyebrow"/.test(bodyOf(board)) && /class="eyebrow">Tiket #/.test(detail));
+    expect("report: ticket page shows its history, the return, and the follow-up link", /id="riwayat"/.test(detail) && /Dikembalikan ke Dikerjakan/.test(detail) && detail.includes(`href="tiket-${idNext}.html"`));
+    expect("report: board card marks a ticket that was sent back", /Dikembalikan 1 kali/.test(board));
     expect("report: owner's words are escaped, not interpreted", detail.includes("&lt;b&gt;ya&lt;/b&gt;") && !detail.includes("<b>ya</b>"));
     expect("report: shows who decided", /Diputuskan kamu/.test(detail) && /Diputuskan agen/.test(detail));
     expect("report: no table of contents sidebar", /nav\.toc[^}]*display:\s*none/.test(board) && /nav\.toc[^}]*display:\s*none/.test(detail));
