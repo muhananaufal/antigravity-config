@@ -182,7 +182,7 @@ Bedanya dengan panel (`skills/meta-panel/SKILL.md`): panel adalah **gerbang** se
 
 ### Peran yang tersedia
 
-Tiap peran berpikir dari berkas lensanya di `skills/meta-panel/references/`. **`view_file` ke berkas itu sebelum berbicara sebagai peran tersebut** (wajib, bukan dari ingatan): di sanalah cara berpikir, kasus tepi, dan batas wewenangnya.
+Tiap peran berpikir dari berkas lensanya di `skills/meta-panel/references/`, kecuali dua peran pembuat (desainer dan perencana) yang berkasnya ada di `references/` skill ini. **`view_file` ke berkas itu sebelum berbicara sebagai peran tersebut** (wajib, bukan dari ingatan): di sanalah cara berpikir, kasus tepi, dan batas wewenangnya.
 
 | User menyebut | Peran | Berkas lensa |
 | :--- | :--- | :--- |
@@ -196,6 +196,8 @@ Tiap peran berpikir dari berkas lensanya di `skills/meta-panel/references/`. **`
 | QA, tester | QA | `lens-qa.md` |
 | legal, hukum, privasi, lisensi | Legal | `lens-legal.md` |
 | domain, aturan bisnis, HR, keuangan (sebagai bidang) | Domain | `lens-domain.md` |
+| desainer, bikin atau rapikan tampilan, tipografi, warna, teks antarmuka | Desainer (membuat, bukan memeriksa) | `references/role-designer.md` di skill ini |
+| perencana, orang bisnis, estimasi, prioritas, penawaran, laporan ke klien atau atasan | Perencana | `references/role-planner.md` di skill ini |
 
 User tidak menyebut peran ("saya butuh teman mikir soal ini"): pilih peran yang paling menentukan untuk topiknya, sebutkan pilihan itu dalam satu kalimat, dan tawarkan peran kedua di akhir.
 
