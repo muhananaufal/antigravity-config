@@ -2,17 +2,18 @@
 // board-tools: one ticket board for every project, kept in a single SQLite file outside all repos.
 //
 // A ticket belongs to one project and is the only container: its summary, acceptance criteria,
-// decisions and sources all live inside it. A decision never exists without its ticket.
+// decisions, sources and history all live inside it. A decision never exists without its ticket.
 //
 //   node board-tools.mjs project ensure [--dir <path>]     create the project for a folder if it is not on the board yet
 //   node board-tools.mjs project list
 //   node board-tools.mjs add --file <ticket.json> [--dir <path>]
+//   node board-tools.mjs approve <id> --file <approval.json>  an idea becomes agreed work
 //   node board-tools.mjs decide <id> --file <decision.json> [--answers K<n>]
 //   node board-tools.mjs source <id> --file <source.json>
 //   node board-tools.mjs review <id> K<n>                   the owner has seen a decision the agent made
-//   node board-tools.mjs approve <id> --file <approval.json>  an idea becomes agreed work
 //   node board-tools.mjs set <id> --status <status> [--evidence <text>] [--reason <text>] [--words <owner's sentence>]
 //   node board-tools.mjs list [--project p] [--group g] [--status s] [--waiting] [--limit n]
+//                             [--created-from d] [--created-to d] [--updated-from d] [--updated-to d]
 //   node board-tools.mjs show <id>                          the full text of one ticket
 //   node board-tools.mjs search <words> [--project p]       ticket numbers and titles only
 //   node board-tools.mjs export [--project p]               JSON
@@ -21,6 +22,7 @@
 // The board lives at ~/.aetheris/board/board.db; AETHERIS_BOARD overrides the path.
 // Reading is deliberately narrow: `list` and `search` print one short line per ticket, and only `show`
 // prints the long text, so an agent never loads the whole board to answer one question.
+// The tool and its pages speak English; what the owner and the agent wrote is stored and shown as written.
 // Exit codes: 0 ok, 1 the data was refused, 2 usage or environment error.
 // No dependencies; needs a Node version with the built-in node:sqlite module.
 import fs from "node:fs";
@@ -33,9 +35,12 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const DOC_TOOLS = path.join(HERE, "..", "..", "meta-prd", "scripts", "doc-tools.mjs");
 const DB_PATH = process.env.AETHERIS_BOARD || path.join(os.homedir(), ".aetheris", "board", "board.db");
 
-// ide: recorded, not approved yet. dicek: the agent is done and attached evidence, the owner has not accepted it.
-const STATUSES = ["ide", "siap", "dikerjakan", "dicek", "selesai", "batal"];
-const STATUS_LABEL = { ide: "Ide", siap: "Siap", dikerjakan: "Dikerjakan", dicek: "Perlu kamu cek", selesai: "Selesai", batal: "Batal" };
+// idea: recorded, not approved yet. review: the agent is done and attached evidence, the owner has not accepted it.
+const STATUSES = ["idea", "ready", "doing", "review", "done", "cancelled"];
+const STATUS_LABEL = { idea: "Idea", ready: "Ready", doing: "In progress", review: "Needs your check", done: "Done", cancelled: "Cancelled" };
+// Board columns in order. "waiting" is not a status: it holds open tickets with a question for the owner.
+const COLUMNS = [["idea", "Idea"], ["waiting", "Waiting for you"], ["ready", "Ready"], ["doing", "In progress"], ["review", "Needs your check"], ["done", "Done"], ["cancelled", "Cancelled"]];
+const CLOSED_LIMIT = 30;
 const CREDENTIAL_KEY = /pass(word|wd)?$|secret|token|api[-_]?key|cookie|authorization|credential/i;
 const CREDENTIAL_QUERY = /[?&](token|access_token|password|passwd|secret|api_?key|key|signature)=[^&\s]+/i;
 const URL_WITH_LOGIN = /[a-z][a-z0-9+.-]*:\/\/[^/\s:@]+:[^/\s@]+@/i;
@@ -114,7 +119,7 @@ function projectOf(dir) {
   const full = path.resolve(dir || process.cwd());
   const key = kebab(path.basename(full));
   if (!key) throw new UsageError(`cannot name a project from the folder ${full}`);
-  return { key, grp: kebab(path.basename(path.dirname(full))) || "lainnya", dir: full };
+  return { key, grp: kebab(path.basename(path.dirname(full))) || "other", dir: full };
 }
 
 function ensureProject(db, dir) {
@@ -170,7 +175,7 @@ function validateTicket(ticket) {
   else (ticket.decisions || []).forEach((decision, index) => validateDecision(decision, `decisions[${index}]`, problems));
   if (ticket.follows !== undefined && !Number.isInteger(ticket.follows)) problems.push('"follows" must be the number of the ticket this one continues');
   // An idea is only a title and a summary. The rest is required once it becomes agreed work.
-  if (ticket.status === "ide") {
+  if (ticket.status === "idea") {
     if (ticket.approved_by !== undefined) problems.push('an idea has no "approved_by" yet; use "approve" when the owner agrees to it');
     return problems;
   }
@@ -180,7 +185,7 @@ function validateTicket(ticket) {
   if (!["user", "agent"].includes(ticket.approved_by)) problems.push('approved_by must be "user" or "agent"');
   if (ticket.approved_by === "user" && !isText(ticket.user_words)) problems.push('a ticket approved by the owner needs "user_words", the owner\'s approval verbatim');
   if (ticket.approved_by === "agent" && !isText(ticket.authority)) problems.push('a ticket opened by the agent needs "authority", the owner\'s sentence that allowed it, verbatim');
-  if (["dicek", "selesai", "batal"].includes(ticket.status)) problems.push(`a new ticket starts as ide, siap or dikerjakan; "${ticket.status}" is reached with "set"`);
+  if (["review", "done", "cancelled"].includes(ticket.status)) problems.push(`a new ticket starts as idea, ready or doing; "${ticket.status}" is reached with "set"`);
   return problems;
 }
 
@@ -201,10 +206,10 @@ const counts = (t) => ({
 
 /** The board column a ticket sits in. Anything that needs the owner wins over the plain status. */
 function columnOf(t) {
-  if (t.status === "selesai" || t.status === "batal") return t.status;
+  if (t.status === "done" || t.status === "cancelled") return t.status;
   const c = counts(t);
-  if (c.unanswered) return "menunggu";
-  if (t.status === "dicek" || c.unseen) return "dicek";
+  if (c.unanswered) return "waiting";
+  if (t.status === "review" || c.unseen) return "review";
   return t.status;
 }
 
@@ -244,13 +249,13 @@ const short = (text, max) => (text.length > max ? `${text.slice(0, max - 1)}…`
 
 function line(t) {
   const c = counts(t);
-  const marks = [c.unanswered ? `${c.unanswered} belum dijawab` : "", c.unseen ? `${c.unseen} diputuskan agen*` : "", c.returned ? `dikembalikan ${c.returned} kali` : ""].filter(Boolean).join(", ");
+  const marks = [c.unanswered ? `${c.unanswered} unanswered` : "", c.unseen ? `${c.unseen} agent decision*` : "", c.returned ? `sent back ${c.returned}x` : ""].filter(Boolean).join(", ");
   return `#${t.id}  ${t.group}/${t.project}  ${t.status}${marks ? `  [${marks}]` : ""}  ${short(t.title, 90)}`;
 }
 
 function printRows(rows, total) {
   rows.forEach((t) => console.log(line(t)));
-  if (total > rows.length) console.log(`... ${total - rows.length} more (narrow with --project, --status, or raise --limit)`);
+  if (total > rows.length) console.log(`... ${total - rows.length} more (narrow with --project, --status, a date range, or raise --limit)`);
   if (!rows.length) console.log("no tickets match");
   else if (rows.some((t) => counts(t).unseen)) console.log("* decided by the agent, not yet seen by the owner");
 }
@@ -279,7 +284,7 @@ async function cmdAdd(args) {
   if (problems.length) throw new Refused(problems.join("\n"));
   const db = await openDb();
   const project = ensureProject(db, dir);
-  const { title, status = "siap", ...data } = ticket;
+  const { title, status = "ready", ...data } = ticket;
   if (data.follows !== undefined) {
     const earlier = db.prepare("SELECT project FROM tickets WHERE id = ?").get(data.follows);
     if (!earlier) throw new Refused(`"follows" points at ticket #${data.follows}, which does not exist`);
@@ -295,6 +300,25 @@ async function cmdAdd(args) {
   db.prepare("INSERT INTO tickets_fts (rowid, title, body) VALUES (?, ?, ?)").run(id, title, searchable(data));
   if (project.created) console.log(`created project: ${project.grp}/${project.key}`);
   console.log(`added #${id} to ${project.grp}/${project.key}: ${title.trim()}`);
+  return 0;
+}
+
+/** An idea becomes agreed work: the criteria, sources and the owner's approval are added in one step. */
+async function cmdApprove(args) {
+  const patch = readJson(option(args, "--file"));
+  const db = await openDb();
+  const ticket = getTicket(db, args[0]);
+  if (ticket.status !== "idea") throw new Refused(`#${ticket.id} is "${ticket.status}", not an idea; only an idea is approved`);
+  if (patch === null || typeof patch !== "object" || Array.isArray(patch)) throw new Refused("the approval must be a JSON object");
+  const stamp = now();
+  const { decisions: added = [], title, status, ...fields } = patch;
+  const merged = { ...ticket, ...fields, status: "ready", decisions: [...(ticket.decisions || []), ...(Array.isArray(added) ? added : [])] };
+  const problems = validateTicket(merged);
+  if (problems.length) throw new Refused(problems.join("\n"));
+  merged.decisions = merged.decisions.map((d) => (isPending(d) || d.decided_at ? d : { ...d, decided_at: stamp }));
+  merged.history = [...(ticket.history || []), { at: stamp, from: "idea", to: "ready", words: merged.approved_by === "user" ? merged.user_words : merged.authority }];
+  save(db, merged);
+  console.log(`#${ticket.id} approved: now ready`);
   return 0;
 }
 
@@ -350,25 +374,6 @@ async function cmdReview(args) {
   return 0;
 }
 
-/** An idea becomes agreed work: the criteria, sources and the owner's approval are added in one step. */
-async function cmdApprove(args) {
-  const patch = readJson(option(args, "--file"));
-  const db = await openDb();
-  const ticket = getTicket(db, args[0]);
-  if (ticket.status !== "ide") throw new Refused(`#${ticket.id} is "${ticket.status}", not an idea; only an idea is approved`);
-  if (patch === null || typeof patch !== "object" || Array.isArray(patch)) throw new Refused("the approval must be a JSON object");
-  const stamp = now();
-  const { decisions: added = [], title, status, ...fields } = patch;
-  const merged = { ...ticket, ...fields, status: "siap", decisions: [...(ticket.decisions || []), ...(Array.isArray(added) ? added : [])] };
-  const problems = validateTicket(merged);
-  if (problems.length) throw new Refused(problems.join("\n"));
-  merged.decisions = merged.decisions.map((d) => (isPending(d) || d.decided_at ? d : { ...d, decided_at: stamp }));
-  merged.history = [...(ticket.history || []), { at: stamp, from: "ide", to: "siap", words: merged.approved_by === "user" ? merged.user_words : merged.authority }];
-  save(db, merged);
-  console.log(`#${ticket.id} approved: now siap`);
-  return 0;
-}
-
 async function cmdSet(args) {
   const status = option(args, "--status");
   const evidence = option(args, "--evidence");
@@ -380,22 +385,22 @@ async function cmdSet(args) {
   const ticket = getTicket(db, args[0]);
   const from = ticket.status;
   if (from === status) throw new Refused(`#${ticket.id} is already ${status}`);
-  if (status === "ide") throw new Refused("a ticket cannot go back to being an idea");
-  if (from === "ide" && status !== "batal") throw new Refused('an idea becomes work through "approve", which records the acceptance criteria, sources and the owner\'s approval');
+  if (status === "idea") throw new Refused("a ticket cannot go back to being an idea");
+  if (from === "idea" && status !== "cancelled") throw new Refused('an idea becomes work through "approve", which records the acceptance criteria, sources and the owner\'s approval');
   const step = { at: now(), from, to: status };
-  if (status === "dicek") {
+  if (status === "review") {
     // The agent's side of "done": there is something to point at.
-    if (!isText(evidence)) throw new Refused('status "dicek" needs --evidence: the command and result, commit, or swipe report that shows the work is done');
-  } else if (status === "selesai") {
+    if (!isText(evidence)) throw new Refused('status "review" needs --evidence: the command and result, commit, or swipe report that shows the work is done');
+  } else if (status === "done") {
     // The owner's side of "done": the evidence exists and the owner accepted it.
-    if (!isText(evidence) && !isText(ticket.evidence)) throw new Refused('status "selesai" needs --evidence, or a ticket that already carries evidence from "dicek"');
-    if (!isText(said)) throw new Refused('status "selesai" needs --words: the owner\'s acceptance, verbatim');
-  } else if (status === "dikerjakan" && (from === "dicek" || from === "selesai")) {
+    if (!isText(evidence) && !isText(ticket.evidence)) throw new Refused('status "done" needs --evidence, or a ticket that already carries evidence from "review"');
+    if (!isText(said)) throw new Refused('status "done" needs --words: the owner\'s acceptance, verbatim');
+  } else if (status === "doing" && (from === "review" || from === "done")) {
     // Sent back: the agreed criteria were not met. Changed criteria are a new ticket with "follows".
     if (!isText(reason) || !isText(said)) throw new Refused("sending a ticket back needs --reason (what is still missing) and --words (the owner's sentence, verbatim)");
     step.returned = true;
-  } else if (status === "batal" && !isText(reason)) {
-    throw new Refused('status "batal" needs --reason');
+  } else if (status === "cancelled" && !isText(reason)) {
+    throw new Refused('status "cancelled" needs --reason');
   }
   if (isText(evidence)) { ticket.evidence = evidence.trim(); ticket.finished_at = step.at; step.evidence = ticket.evidence; }
   if (isText(reason)) step.reason = reason.trim();
@@ -417,7 +422,15 @@ async function cmdList(args) {
     const value = option(args, name);
     if (value !== undefined) { filters.push(`${column} = ?`); values.push(name === "--status" ? value : kebab(value)); }
   }
-  if (flag(args, "--waiting")) filters.push("t.status NOT IN ('selesai', 'batal') AND (t.unanswered > 0 OR t.unseen > 0 OR t.status = 'dicek')");
+  // Stored stamps start with the owner's local date, so a date range is a comparison on that prefix.
+  for (const [name, column, operator] of [["--created-from", "created_at", ">="], ["--created-to", "created_at", "<="], ["--updated-from", "updated_at", ">="], ["--updated-to", "updated_at", "<="]]) {
+    const value = option(args, name);
+    if (value === undefined) continue;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) throw new UsageError(`${name} must be a date as YYYY-MM-DD`);
+    filters.push(`substr(t.${column}, 1, 10) ${operator} ?`);
+    values.push(value);
+  }
+  if (flag(args, "--waiting")) filters.push("t.status NOT IN ('done', 'cancelled') AND (t.unanswered > 0 OR t.unseen > 0 OR t.status = 'review')");
   const limit = Number(option(args, "--limit") ?? 20);
   if (!Number.isInteger(limit) || limit < 1) throw new UsageError("--limit must be a positive number");
   const where = filters.length ? ` WHERE ${filters.join(" AND ")}` : "";
@@ -427,34 +440,34 @@ async function cmdList(args) {
   return 0;
 }
 
-const historyText = (h) => [`${h.at.slice(0, 10)}: ${h.from ? `${h.from} ke ${h.to}` : `dicatat sebagai ${h.to}`}${h.returned ? " (dikembalikan)" : ""}`,
-  h.reason ? `alasan: ${h.reason}` : "", h.evidence ? `bukti: ${h.evidence}` : "", h.words ? `kata pemilik: "${h.words}"` : ""].filter(Boolean).join("; ");
+const historyText = (h) => [`${h.at.slice(0, 10)}: ${h.from ? `${h.from} to ${h.to}` : `recorded as ${h.to}`}${h.returned ? " (sent back)" : ""}`,
+  h.reason ? `reason: ${h.reason}` : "", h.evidence ? `evidence: ${h.evidence}` : "", h.words ? `owner's words: "${h.words}"` : ""].filter(Boolean).join("; ");
 
-const byText = (d) => (isPending(d) ? "belum dijawab pemilik" : d.decided_by === "agent" ? `diputuskan agen${d.reviewed ? " (sudah dilihat pemilik)" : " (belum dilihat pemilik)"}` : "diputuskan pemilik");
+const byText = (d) => (isPending(d) ? "waiting for the owner" : d.decided_by === "agent" ? `decided by the agent, ${d.reviewed ? "seen" : "not yet seen"} by the owner` : "decided by the owner");
 
 async function cmdShow(args) {
   const db = await openDb();
   const t = getTicket(db, args[0]);
-  const out = [`#${t.id}  ${t.group}/${t.project}  ${t.status}`, `Judul: ${t.title}`, `Dicatat: ${t.created_at}${t.updated_at !== t.created_at ? `, diubah ${t.updated_at}` : ""}`];
+  const out = [`#${t.id}  ${t.group}/${t.project}  ${t.status}`, `Title: ${t.title}`, `Created: ${t.created_at}`, `Updated: ${t.updated_at}`];
   const add = (label, value) => { if (isText(value)) out.push("", `${label}:`, value.trim()); };
   const followers = db.prepare("SELECT id FROM tickets WHERE follows = ? ORDER BY id").all(t.id).map((row) => `#${row.id}`);
-  if (t.follows) out.push(`Lanjutan dari: #${t.follows}`);
-  if (followers.length) out.push(`Dilanjutkan oleh: ${followers.join(", ")}`);
-  add("Ringkasan", t.summary);
-  add("Isi", t.body);
-  out.push("", "Selesai kalau:", ...(t.done_when?.length ? t.done_when.map((item) => `- ${item}`) : ["(belum ditentukan; tiket ini masih ide)"]));
-  out.push("", "Keputusan:");
-  if (!t.decisions?.length) out.push("(belum ada)");
+  if (t.follows) out.push(`Follows: #${t.follows}`);
+  if (followers.length) out.push(`Continued by: ${followers.join(", ")}`);
+  add("Summary", t.summary);
+  add("Details", t.body);
+  out.push("", "Done when:", ...(t.done_when?.length ? t.done_when.map((item) => `- ${item}`) : ["(not set; this ticket is still an idea)"]));
+  out.push("", "Decisions:");
+  if (!t.decisions?.length) out.push("(none)");
   (t.decisions || []).forEach((d, index) => {
     out.push(`K${index + 1} (${byText(d)}${d.decided_at ? `, ${d.decided_at.slice(0, 10)}` : ""}): ${d.question}`);
     if (isPending(d)) return;
-    out.push(`  Yang dipilih: ${d.chosen}`, `  Alasan: ${d.reason}`, ...d.rejected.map((r) => `  Ditolak: ${r.option}: ${r.reason}`));
-    out.push(d.decided_by === "agent" ? `  Izin yang dipakai agen: "${d.authority}"` : `  Kata pemilik: "${d.user_words}"`);
+    out.push(`  Chosen: ${d.chosen}`, `  Reason: ${d.reason}`, ...d.rejected.map((r) => `  Rejected: ${r.option}: ${r.reason}`));
+    out.push(d.decided_by === "agent" ? `  Owner's sentence the agent relied on: "${d.authority}"` : `  Owner's words: "${d.user_words}"`);
   });
-  out.push("", "Daftar sumber:", ...(t.sources?.length ? t.sources.map((s, index) => `E${index + 1}: ${s.claim} | ${s.source}${isText(s.status) ? ` | ${s.status}` : ""}`) : ["(belum ada)"]));
-  if (t.approved_by) out.push("", t.approved_by === "agent" ? `Dibuka agen dengan izin: "${t.authority}"` : `Disetujui pemilik: "${t.user_words}"`);
-  add("Bukti selesai", t.evidence ? `${t.evidence} (${t.finished_at})` : "");
-  out.push("", "Riwayat:", ...(t.history || []).map(historyText));
+  out.push("", "Sources:", ...(t.sources?.length ? t.sources.map((s, index) => `E${index + 1}: ${s.claim} | ${s.source}${isText(s.status) ? ` | ${s.status}` : ""}`) : ["(none)"]));
+  if (t.approved_by) out.push("", t.approved_by === "agent" ? `Opened by the agent, relying on: "${t.authority}"` : `Approved by the owner: "${t.user_words}"`);
+  add("Evidence", t.evidence ? `${t.evidence} (${t.finished_at})` : "");
+  out.push("", "History:", ...(t.history || []).map(historyText));
   console.log(out.join("\n"));
   return 0;
 }
@@ -494,73 +507,209 @@ const esc = (value) => String(value ?? "")
   .replace(/\b(T)(ODO)\b|\b(T)(BD)\b|\b(F)(IXME)\b/g, (m, a, b, c, d, e, f) => `${a || c || e}&#8203;${b || d || f}`)
   .replace(/(lorem) (ipsum)/gi, "$1&#8203; $2");
 
-const MONTHS = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
-const longDate = (iso) => { const [y, m, d] = iso.slice(0, 10).split("-").map(Number); return `${d} ${MONTHS[m - 1]} ${y}`; };
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const day = (iso) => iso.slice(0, 10);
+const showDate = (iso) => { const [y, m, d] = day(iso).split("-").map(Number); return `${d} ${MONTHS[m - 1]} ${y}`; };
 
 // The board is an app-like set of pages, not a long document: no table of contents, one column,
-// and cards that are links. Everything else comes from the shared doc-style.
+// cards that are links, and a board that scrolls sideways. Everything else comes from the shared doc-style.
 const PAGE_STYLE = `<style id="page-style">
   .wrap { grid-template-columns: minmax(0, 1fr); }
   nav.toc, .toc-mobile { display: none; }
   header.doc h1 { margin-bottom: 0; }
+  header.doc .meta { margin: 12px 0 0; }
   @media print { header.doc .theme-switch { display: none; } }
-  .appbar { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; margin: 0 0 16px; font-weight: 600; }
+  .appbar { margin: 0 0 16px; font-weight: 600; }
+  .filters { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: center; margin: 12px 0; }
+  .filters .chips { margin: 0; }
+  .title-search { font: 500 15px var(--body); color: var(--ink); background: var(--surface); border: 1px solid var(--line-strong); border-radius: 999px; padding: 9px 16px; min-height: 40px; width: min(320px, 100%); }
+  .title-search:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .board { display: flex; gap: 16px; align-items: flex-start; overflow-x: auto; padding-bottom: 12px; scroll-snap-type: x proximity; }
+  .board > div { flex: 0 0 min(300px, 82vw); scroll-snap-align: start; }
+  .board h3 { margin-top: 0; }
   a.ticket { display: block; color: inherit; text-decoration: none; }
   a.ticket:hover, a.ticket:focus-visible { border-color: var(--accent); }
   a.ticket h4 { margin-top: 0; }
   a.ticket p { margin: 8px 0 0; }
   a.ticket .pill { white-space: normal; }
-  .board { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 16px; align-items: start; }
-  .board h3 { font-size: 16px; }
-  .board .card { padding: 14px; }
-  @media (max-width: 1180px) { .board { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
-  @media (max-width: 720px) { .board { grid-template-columns: minmax(0, 1fr); } }
+  a.ticket .dates { color: var(--muted); font-size: 13px; }
   .column-empty { color: var(--muted); font-size: 14px; }
+  dialog.range { border: 1px solid var(--line); border-radius: 20px; background: var(--surface); color: var(--ink); padding: 22px; width: min(660px, calc(100vw - 2rem)); }
+  dialog.range::backdrop { background: rgb(0 0 0 / .45); }
+  .range-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+  .range-row h3 { margin: 0; }
+  .range-row.foot { margin: 16px 0 0; padding-top: 14px; border-top: 1px solid var(--line); }
+  .range-row > span { display: flex; gap: 8px; }
+  .range-months { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
+  @media (max-width: 620px) { .range-months { grid-template-columns: minmax(0, 1fr); } }
+  .range-months p { text-align: center; font-weight: 600; margin: 0 0 6px; }
+  .range-months table { width: 100%; min-width: 0; font-size: 14px; table-layout: fixed; border-collapse: collapse; text-align: center; border: 0; background: none; }
+  .range-months th { font-size: 12px; color: var(--muted); padding: 0 0 4px; background: none; border: 0; text-align: center; }
+  .range-months td { padding: 0; border: 0; }
+  .range-months td button { width: 100%; height: 40px; border: 0; background: none; color: inherit; font: inherit; font-variant-numeric: tabular-nums; cursor: pointer; border-radius: 10px; }
+  .range-months td button:hover { background: var(--accent-soft); }
+  .range-months td button.in-range { background: var(--accent-soft); border-radius: 0; }
+  .range-months td button.edge { background: var(--accent); color: var(--on-accent); font-weight: 700; border-radius: 10px; }
+  .range-months td button.today { font-weight: 700; text-decoration: underline; text-underline-offset: 4px; }
 </style>`;
 
+// The range picker follows the one in the owner's pentahoot project (resources/js/date-range.js): dates are
+// YYYY-MM-DD strings counted with UTC arithmetic, the first click starts a range and the second closes it,
+// and the keys follow the W3C APG date grid (arrows, Page Up/Down, Home/End, Enter).
 const PAGE_SCRIPT = `<script id="page-script">
 (function () {
-  var group = document.querySelector("[data-board-filters]");
-  if (!group) return;
-  var KEY = "board-project";
-  var buttons = [].slice.call(group.querySelectorAll("[data-board-filter]"));
-  function apply(project) {
-    if (!buttons.some(function (b) { return b.getAttribute("data-board-filter") === project; })) project = "";
-    buttons.forEach(function (b) { b.setAttribute("aria-pressed", String(b.getAttribute("data-board-filter") === project)); });
-    [].slice.call(document.querySelectorAll("[data-project]")).forEach(function (el) {
-      el.hidden = project !== "" && el.getAttribute("data-project") !== project;
+  var bar = document.querySelector("[data-board-filters]");
+  if (!bar) return;
+  var all = function (selector, root) { return [].slice.call((root || document).querySelectorAll(selector)); };
+  var KEY = "board-filters";
+  var DAY = 86400000;
+  var MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+  var SHORT = MONTHS.map(function (m) { return m.slice(0, 3); });
+  var pad = function (n) { return String(n).padStart(2, "0"); };
+  var local = new Date();
+  var today = local.getFullYear() + "-" + pad(local.getMonth() + 1) + "-" + pad(local.getDate());
+
+  function toTime(date) { var p = date.split("-").map(Number); return Date.UTC(p[0], p[1] - 1, p[2]); }
+  function fromTime(time) { return new Date(time).toISOString().slice(0, 10); }
+  function addDays(date, days) { return fromTime(toTime(date) + days * DAY); }
+  function addMonths(date, months) {
+    var p = date.split("-").map(Number);
+    var target = new Date(Date.UTC(p[0], p[1] - 1 + months, 1));
+    var last = new Date(Date.UTC(target.getUTCFullYear(), target.getUTCMonth() + 1, 0)).getUTCDate();
+    target.setUTCDate(Math.min(p[2], last));
+    return fromTime(target.getTime());
+  }
+  function weekday(date) { return (new Date(toTime(date)).getUTCDay() + 6) % 7; }
+  function firstOf(date) { return date.slice(0, 7) + "-01"; }
+  function show(date) { var p = date.split("-").map(Number); return p[2] + " " + SHORT[p[1] - 1] + " " + p[0]; }
+
+  var state = { project: "", field: "created", from: "", to: "", title: "" };
+  var searchBox = bar.querySelector("[data-title-search]");
+  try { var saved = JSON.parse(localStorage.getItem(KEY) || "{}"); for (var k in state) if (typeof saved[k] === "string") state[k] = saved[k]; } catch (e) { /* filters still work without storage */ }
+  var projectButtons = all("[data-board-filter]", bar);
+  var fieldButtons = all("[data-date-field]", bar);
+  var openButton = bar.querySelector("[data-range-open]");
+  var dialog = document.querySelector("dialog[data-range]");
+  var grid = dialog.querySelector("[data-range-grid]");
+  var draft = { from: "", to: "" };
+  var focusDay = today;
+  var shownMonth = firstOf(today);
+
+  function apply() {
+    if (!projectButtons.some(function (b) { return b.getAttribute("data-board-filter") === state.project; })) state.project = "";
+    if (state.field !== "updated") state.field = "created";
+    var to = state.to || state.from;
+    projectButtons.forEach(function (b) { b.setAttribute("aria-pressed", String(b.getAttribute("data-board-filter") === state.project)); });
+    fieldButtons.forEach(function (b) { b.setAttribute("aria-pressed", String(b.getAttribute("data-date-field") === state.field)); });
+    openButton.textContent = state.from ? (to === state.from ? show(state.from) : show(state.from) + " – " + show(to)) : "Any date";
+    openButton.setAttribute("aria-pressed", String(Boolean(state.from)));
+    var wanted = state.title.trim().toLowerCase().split(/\\s+/).filter(Boolean);
+    if (searchBox.value !== state.title) searchBox.value = state.title;
+    all("[data-project]").forEach(function (el) {
+      var date = el.getAttribute("data-" + state.field) || "";
+      var heading = el.querySelector("h4");
+      var title = heading ? heading.textContent.toLowerCase() : "";
+      var inProject = state.project === "" || el.getAttribute("data-project") === state.project;
+      var inRange = !state.from || (date >= state.from && date <= to);
+      // Every word typed must appear in the title, in any order.
+      var inTitle = wanted.every(function (word) { return title.indexOf(word) !== -1; });
+      el.hidden = !(inProject && inRange && inTitle);
     });
-    [].slice.call(document.querySelectorAll("[data-column]")).forEach(function (col) {
-      var shown = [].slice.call(col.querySelectorAll("[data-project]")).filter(function (el) { return !el.hidden; }).length;
+    all("[data-column]").forEach(function (col) {
+      var shown = all("[data-project]", col).filter(function (el) { return !el.hidden; }).length;
       var badge = col.querySelector("[data-count]");
       if (badge) badge.textContent = String(shown);
       var empty = col.querySelector(".column-empty");
       if (empty) empty.hidden = shown > 0;
     });
-    try { localStorage.setItem(KEY, project); } catch (e) { /* the filter still works without storage */ }
+    try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) { /* see above */ }
   }
-  buttons.forEach(function (b) { b.addEventListener("click", function () { apply(b.getAttribute("data-board-filter")); }); });
-  var saved = "";
-  try { saved = localStorage.getItem(KEY) || ""; } catch (e) { saved = ""; }
-  apply(saved);
+
+  function monthHtml(first) {
+    var p = first.split("-").map(Number);
+    var last = addDays(addMonths(first, 1), -1);
+    var cursor = addDays(first, -weekday(first));
+    var end = addDays(last, 6 - weekday(last));
+    var rangeEnd = draft.to || draft.from;
+    var rows = "";
+    while (cursor <= end) {
+      rows += "<tr>";
+      for (var i = 0; i < 7; i++) {
+        if (cursor.slice(0, 7) === first.slice(0, 7)) {
+          var classes = [cursor === draft.from || cursor === draft.to ? "edge" : (draft.from && cursor >= draft.from && cursor <= rangeEnd ? "in-range" : ""), cursor === today ? "today" : ""].join(" ").trim();
+          rows += '<td role="gridcell"><button type="button" data-day="' + cursor + '" tabindex="' + (cursor === focusDay ? 0 : -1) + '" aria-label="' + show(cursor) + '"' + (classes ? ' class="' + classes + '"' : "") + ">" + Number(cursor.slice(8)) + "</button></td>";
+        } else rows += "<td></td>";
+        cursor = addDays(cursor, 1);
+      }
+      rows += "</tr>";
+    }
+    var name = MONTHS[p[1] - 1] + " " + p[0];
+    return "<div><p>" + name + '</p><table role="grid" aria-label="' + name + '"><thead><tr><th>Mo</th><th>Tu</th><th>We</th><th>Th</th><th>Fr</th><th>Sa</th><th>Su</th></tr></thead><tbody>' + rows + "</tbody></table></div>";
+  }
+  function draw(focus) {
+    grid.innerHTML = monthHtml(shownMonth) + monthHtml(addMonths(shownMonth, 1));
+    if (focus) { var cell = grid.querySelector('[data-day="' + focusDay + '"]'); if (cell) cell.focus(); }
+  }
+  function pick(date) {
+    if (draft.from === "" || draft.to !== "") draft = { from: date, to: "" };
+    else draft = date < draft.from ? { from: date, to: draft.from } : { from: draft.from, to: date };
+    focusDay = date;
+    draw(true);
+  }
+  var PRESETS = {
+    today: function () { return { from: today, to: today }; },
+    last7: function () { return { from: addDays(today, -6), to: today }; },
+    last30: function () { return { from: addDays(today, -29), to: today }; },
+    month: function () { return { from: firstOf(today), to: addDays(addMonths(firstOf(today), 1), -1) }; }
+  };
+  var MOVES = { ArrowLeft: function (d) { return addDays(d, -1); }, ArrowRight: function (d) { return addDays(d, 1); }, ArrowUp: function (d) { return addDays(d, -7); }, ArrowDown: function (d) { return addDays(d, 7); },
+    PageUp: function (d) { return addMonths(d, -1); }, PageDown: function (d) { return addMonths(d, 1); }, Home: function (d) { return addDays(d, -weekday(d)); }, End: function (d) { return addDays(d, 6 - weekday(d)); } };
+
+  projectButtons.forEach(function (b) { b.addEventListener("click", function () { state.project = b.getAttribute("data-board-filter"); apply(); }); });
+  fieldButtons.forEach(function (b) { b.addEventListener("click", function () { state.field = b.getAttribute("data-date-field"); apply(); }); });
+  searchBox.addEventListener("input", function () { state.title = searchBox.value; apply(); });
+  openButton.addEventListener("click", function () {
+    draft = { from: state.from, to: state.to };
+    focusDay = state.from || today;
+    shownMonth = firstOf(addMonths(focusDay, focusDay.slice(0, 7) === today.slice(0, 7) ? -1 : 0));
+    dialog.showModal();
+    draw(true);
+  });
+  grid.addEventListener("click", function (event) { var cell = event.target.closest("[data-day]"); if (cell) pick(cell.getAttribute("data-day")); });
+  grid.addEventListener("keydown", function (event) {
+    var move = MOVES[event.key];
+    if (!move) return; // Enter and Space reach the focused day button as a click
+    event.preventDefault();
+    focusDay = move(focusDay);
+    if (focusDay < shownMonth) shownMonth = firstOf(focusDay);
+    else if (focusDay > addDays(addMonths(shownMonth, 2), -1)) shownMonth = firstOf(addMonths(focusDay, -1));
+    draw(true);
+  });
+  all("[data-range-shift]", dialog).forEach(function (b) { b.addEventListener("click", function () { shownMonth = addMonths(shownMonth, Number(b.getAttribute("data-range-shift"))); draw(false); }); });
+  all("[data-range-preset]", dialog).forEach(function (b) { b.addEventListener("click", function () { draft = PRESETS[b.getAttribute("data-range-preset")](); focusDay = draft.from; shownMonth = firstOf(draft.from); draw(false); }); });
+  dialog.querySelector("[data-range-clear]").addEventListener("click", function () { draft = { from: "", to: "" }; draw(false); });
+  dialog.querySelector("[data-range-cancel]").addEventListener("click", function () { dialog.close(); });
+  dialog.querySelector("[data-range-apply]").addEventListener("click", function () { state.from = draft.from; state.to = draft.to; dialog.close(); apply(); });
+  apply();
 })();
 </script>`;
 
-const section = (id, number, heading, sub, body) => `    <section id="${id}">
+const section = (id, number, heading, body) => `    <section id="${id}">
       <h2><span class="num">${String(number).padStart(2, "0")}</span>${heading}</h2>
-${sub ? `      <p class="sub">${sub}</p>\n` : ""}${body}
+${body}
     </section>`;
 
 function boardCard(t) {
   const c = counts(t);
   const pills = [`<span class="pill info">${esc(t.group)} / ${esc(t.project)}</span>`,
     columnOf(t) !== t.status ? `<span class="pill accent">${STATUS_LABEL[t.status]}</span>` : "",
-    c.unanswered ? `<span class="pill warn">${c.unanswered} belum kamu jawab</span>` : "",
-    c.unseen ? `<span class="pill warn">${c.unseen} keputusan agen belum kamu lihat</span>` : "",
-    c.returned ? `<span class="pill danger">Dikembalikan ${c.returned} kali</span>` : ""].filter(Boolean).join(" ");
-  return `          <a class="card ticket" href="tiket-${t.id}.html" data-project="${esc(t.project)}">
+    c.unanswered ? `<span class="pill warn">${c.unanswered} question${c.unanswered > 1 ? "s" : ""} for you</span>` : "",
+    c.unseen ? `<span class="pill warn">${c.unseen} agent decision${c.unseen > 1 ? "s" : ""} to review</span>` : "",
+    c.returned ? `<span class="pill danger">Sent back ${c.returned}×</span>` : ""].filter(Boolean).join(" ");
+  return `          <a class="card ticket" href="ticket-${t.id}.html" data-project="${esc(t.project)}" data-created="${day(t.created_at)}" data-updated="${day(t.updated_at)}">
             <h4>#${t.id} · ${esc(t.title)}</h4>
             <p>${pills}</p>
+            <p class="dates">Created ${showDate(t.created_at)} · Updated ${showDate(t.updated_at)}</p>
           </a>`;
 }
 
@@ -569,114 +718,146 @@ const boardColumn = (title, tickets, note) => `        <div data-column>
           <div class="stack">
 ${tickets.map(boardCard).join("\n")}
           </div>
-          <p class="column-empty"${tickets.length ? " hidden" : ""}>Tidak ada.</p>${note ? `\n          <p class="note">${note}</p>` : ""}
+          <p class="column-empty"${tickets.length ? " hidden" : ""}>Nothing here.</p>${note ? `\n          <p class="note">${note}</p>` : ""}
         </div>`;
 
-function boardSections(tickets, projects) {
-  const inColumn = (name) => tickets.filter((t) => columnOf(t) === name);
-  const doneAll = inColumn("selesai");
-  const done = doneAll.slice(0, 30);
-  const cancelled = inColumn("batal");
-  const chips = ['<button class="chip" type="button" data-board-filter="" aria-pressed="true">Semua proyek</button>',
-    ...projects.map((p) => `<button class="chip" type="button" data-board-filter="${esc(p.key)}" aria-pressed="false">${esc(p.grp)} / ${esc(p.key)}</button>`)].join("\n        ");
-  return [section("ringkasan", 0, "Proyek", null, `      <div class="chips" data-board-filters>
-        ${chips}
-      </div>`),
-  section("papan", 1, "Papan", null, `      <div class="board">
-${boardColumn("Ide", inColumn("ide"))}
-${boardColumn("Menunggu kamu", inColumn("menunggu"))}
-${boardColumn("Siap", inColumn("siap"))}
-${boardColumn("Dikerjakan", inColumn("dikerjakan"))}
-${boardColumn("Perlu kamu cek", inColumn("dicek"))}
-${boardColumn("Selesai", done, doneAll.length > done.length ? `Menampilkan ${done.length} tiket terbaru dari ${doneAll.length}.` : "")}
-      </div>
-      <details><summary>Tampilkan yang batal (${cancelled.length})</summary>
-        <div class="stack">
-${cancelled.map(boardCard).join("\n")}
+const RANGE_DIALOG = `      <dialog class="range" data-range aria-labelledby="range-title">
+        <div class="range-row">
+          <h3 id="range-title">Date range</h3>
+          <span>
+            <button class="chip" type="button" data-range-shift="-1" aria-label="Previous month">&lsaquo;</button>
+            <button class="chip" type="button" data-range-shift="1" aria-label="Next month">&rsaquo;</button>
+          </span>
         </div>
-      </details>`)].join("\n\n");
+        <div class="chips" role="group" aria-label="Quick ranges">
+          <button class="chip" type="button" data-range-preset="today">Today</button>
+          <button class="chip" type="button" data-range-preset="last7">Last 7 days</button>
+          <button class="chip" type="button" data-range-preset="last30">Last 30 days</button>
+          <button class="chip" type="button" data-range-preset="month">This month</button>
+        </div>
+        <div class="range-months" data-range-grid></div>
+        <div class="range-row foot">
+          <button class="chip" type="button" data-range-clear>Clear</button>
+          <span>
+            <button class="chip" type="button" data-range-cancel>Cancel</button>
+            <button class="chip" type="button" data-range-apply aria-pressed="true">Apply</button>
+          </span>
+        </div>
+      </dialog>`;
+
+function boardSections(tickets, projects) {
+  const chips = ['<button class="chip" type="button" data-board-filter="" aria-pressed="true">All projects</button>',
+    ...projects.map((p) => `<button class="chip" type="button" data-board-filter="${esc(p.key)}" aria-pressed="false">${esc(p.grp)} / ${esc(p.key)}</button>`)].join("\n          ");
+  const columns = COLUMNS.map(([key, title]) => {
+    const inColumn = tickets.filter((t) => columnOf(t) === key);
+    const closed = key === "done" || key === "cancelled";
+    const shown = closed ? inColumn.slice(0, CLOSED_LIMIT) : inColumn;
+    return boardColumn(title, shown, shown.length < inColumn.length ? `Showing the ${shown.length} most recent of ${inColumn.length}.` : "");
+  }).join("\n");
+  return [section("filters", 0, "Filters", `      <div data-board-filters>
+        <div class="chips" role="group" aria-label="Project">
+          ${chips}
+        </div>
+        <div class="filters">
+          <input class="title-search" type="search" data-title-search placeholder="Search by title" aria-label="Search by title" autocomplete="off">
+          <div class="chips" role="group" aria-label="Date to filter on">
+            <button class="chip" type="button" data-date-field="created" aria-pressed="true">Created</button>
+            <button class="chip" type="button" data-date-field="updated" aria-pressed="false">Updated</button>
+          </div>
+          <button class="chip" type="button" data-range-open aria-haspopup="dialog" aria-pressed="false">Any date</button>
+        </div>
+      </div>
+${RANGE_DIALOG}`),
+  section("board", 1, "Board", `      <div class="board">
+${columns}
+      </div>`)].join("\n\n");
 }
 
 function decisionCard(d, index) {
   const head = `<h4>K${index + 1} · ${esc(d.question)}</h4>`;
-  if (isPending(d)) return `      <div class="card">${head}<p><span class="pill warn">Belum kamu jawab</span></p></div>`;
+  if (isPending(d)) return `      <div class="card">${head}<p><span class="pill warn">Waiting for your answer</span></p></div>`;
   const pill = d.decided_by === "agent"
-    ? `<span class="pill ${d.reviewed ? "muted" : "warn"}">Diputuskan agen${d.reviewed ? "" : ", belum kamu lihat"}</span>`
-    : '<span class="pill ok">Diputuskan kamu</span>';
+    ? `<span class="pill ${d.reviewed ? "muted" : "warn"}">Decided by the agent${d.reviewed ? "" : ", not yet seen by you"}</span>`
+    : '<span class="pill ok">Decided by you</span>';
   const quote = d.decided_by === "agent"
-    ? `<blockquote><p>"${esc(d.authority)}"</p><footer>Kalimatmu yang dipakai agen sebagai izin memutuskan.</footer></blockquote>`
-    : `<blockquote><p>"${esc(d.user_words)}"</p><footer>Kalimatmu, ${esc(longDate(d.decided_at))}.</footer></blockquote>`;
+    ? `<blockquote><p>"${esc(d.authority)}"</p><footer>Your sentence the agent relied on to decide.</footer></blockquote>`
+    : `<blockquote><p>"${esc(d.user_words)}"</p><footer>Your words.</footer></blockquote>`;
   return `      <div class="card">${head}
-        <p>${pill} <span class="lbl">${esc(longDate(d.decided_at))}</span></p>
-        <p><b>Yang dipilih.</b> ${esc(d.chosen)}</p>
-        <p><b>Alasan.</b> ${esc(d.reason)}</p>
-        <p><b>Yang ditolak.</b></p>
+        <p>${pill} <span class="lbl">${showDate(d.decided_at)}</span></p>
+        <p><b>Chosen.</b> ${esc(d.chosen)}</p>
+        <p><b>Reason.</b> ${esc(d.reason)}</p>
+        <p><b>Rejected.</b></p>
         <ul>${d.rejected.map((r) => `<li><b>${esc(r.option)}:</b> ${esc(r.reason)}</li>`).join("")}</ul>
         ${quote}
       </div>`;
 }
 
 function historyRow(h) {
-  const what = h.returned ? "Dikembalikan ke Dikerjakan" : h.from ? `${STATUS_LABEL[h.from]} ke ${STATUS_LABEL[h.to]}` : `Dicatat sebagai ${STATUS_LABEL[h.to]}`;
-  const notes = [h.reason ? `<b>Alasan.</b> ${esc(h.reason)}` : "", h.evidence ? `<b>Bukti.</b> ${esc(h.evidence)}` : "", h.words ? `<b>Kalimatmu.</b> "${esc(h.words)}"` : ""].filter(Boolean).join("<br>");
-  return `          <tr><td class="nowrap">${esc(longDate(h.at))}</td><td>${h.returned ? `<span class="pill danger">${what}</span>` : what}</td><td>${notes}</td></tr>`;
+  const what = h.returned ? `Sent back to ${STATUS_LABEL[h.to]}` : h.from ? `${STATUS_LABEL[h.from]} to ${STATUS_LABEL[h.to]}` : `Recorded as ${STATUS_LABEL[h.to]}`;
+  const notes = [h.reason ? `<b>Reason.</b> ${esc(h.reason)}` : "", h.evidence ? `<b>Evidence.</b> ${esc(h.evidence)}` : "", h.words ? `<b>Your words.</b> "${esc(h.words)}"` : ""].filter(Boolean).join("<br>");
+  return `          <tr><td class="nowrap">${showDate(h.at)}</td><td>${h.returned ? `<span class="pill danger">${what}</span>` : what}</td><td>${notes}</td></tr>`;
 }
 
 function ticketSections(t, followers) {
-  const approval = !t.approved_by ? "<p>Tiket ini masih ide: belum lewat panel dan belum kamu setujui.</p>"
+  const approval = !t.approved_by ? "<p>This ticket is still an idea: it has not been through a panel and you have not approved it.</p>"
     : t.approved_by === "agent"
-      ? `<blockquote><p>"${esc(t.authority)}"</p><footer>Tiket ini dibuka agen. Kalimatmu di atas yang dipakai sebagai izin.</footer></blockquote>`
-      : `<blockquote><p>"${esc(t.user_words)}"</p><footer>Persetujuanmu.</footer></blockquote>`;
-  const links = [t.follows ? `Lanjutan dari <a href="tiket-${t.follows}.html">tiket #${t.follows}</a>.` : "",
-    followers.length ? `Dilanjutkan oleh ${followers.map((id) => `<a href="tiket-${id}.html">tiket #${id}</a>`).join(", ")}.` : ""].filter(Boolean).join(" ");
-  const parts = [
-    section("ringkasan", 0, "Ringkasan", null, `${links ? `      <p>${links}</p>\n` : ""}      <p>${esc(t.summary)}</p>
+      ? `<blockquote><p>"${esc(t.authority)}"</p><footer>The agent opened this ticket, relying on your sentence above.</footer></blockquote>`
+      : `<blockquote><p>"${esc(t.user_words)}"</p><footer>Your approval.</footer></blockquote>`;
+  const links = [t.follows ? `Follows <a href="ticket-${t.follows}.html">ticket #${t.follows}</a>.` : "",
+    followers.length ? `Continued by ${followers.map((id) => `<a href="ticket-${id}.html">ticket #${id}</a>`).join(", ")}.` : ""].filter(Boolean).join(" ");
+  return [
+    section("summary", 0, "Summary", `${links ? `      <p>${links}</p>\n` : ""}      <p>${esc(t.summary)}</p>
 ${isText(t.body) ? `      <p>${esc(t.body)}</p>\n` : ""}      ${approval}`),
-    section("keputusan", 1, "Keputusan", null, t.decisions?.length ? `      <div class="stack">
+    section("decisions", 1, "Decisions", t.decisions?.length ? `      <div class="stack">
 ${t.decisions.map(decisionCard).join("\n")}
-      </div>` : "      <p>Belum ada keputusan yang dicatat untuk tiket ini.</p>"),
-    section("selesai-kalau", 2, "Selesai kalau", null, `${t.done_when?.length ? `      <ul>
+      </div>` : "      <p>No decisions recorded for this ticket yet.</p>"),
+    section("done-when", 2, "Done when", `${t.done_when?.length ? `      <ul>
 ${t.done_when.map((item) => `        <li>${esc(item)}</li>`).join("\n")}
-      </ul>` : "      <p>Belum ditentukan. Kriteria ini diisi saat ide disetujui menjadi pekerjaan.</p>"}${isText(t.evidence) ? `\n      <div class="card"><h4>Bukti selesai</h4><p>${esc(t.evidence)}</p><p class="lbl">${esc(longDate(t.finished_at))}</p></div>` : ""}`),
-    section("sumber", 3, "Daftar sumber", null, t.sources?.length ? `      <div class="table-scroll"><table>
-        <thead><tr><th>ID</th><th>Klaim</th><th>Sumber</th><th>Status</th></tr></thead>
+      </ul>` : "      <p>Not set yet. The criteria are added when the idea is approved as work.</p>"}${isText(t.evidence) ? `\n      <div class="card"><h4>Evidence</h4><p>${esc(t.evidence)}</p><p class="lbl">${showDate(t.finished_at)}</p></div>` : ""}`),
+    section("sources", 3, "Sources", t.sources?.length ? `      <div class="table-scroll"><table>
+        <thead><tr><th>ID</th><th>Claim</th><th>Source</th><th>Status</th></tr></thead>
         <tbody>
 ${t.sources.map((s, index) => `          <tr><td class="id">E${index + 1}</td><td>${esc(s.claim)}</td><td>${esc(s.source)}</td><td>${esc(s.status || "")}</td></tr>`).join("\n")}
         </tbody>
-      </table></div>` : "      <p>Belum ada sumber yang dicatat.</p>"),
-    section("riwayat", 4, "Riwayat", null, `      <div class="table-scroll"><table>
-        <thead><tr><th>Tanggal</th><th>Perubahan</th><th>Catatan</th></tr></thead>
+      </table></div>` : "      <p>No sources recorded yet.</p>"),
+    section("history", 4, "History", `      <div class="table-scroll"><table>
+        <thead><tr><th>Date</th><th>Change</th><th>Notes</th></tr></thead>
         <tbody>
 ${(t.history || []).map(historyRow).join("\n")}
         </tbody>
       </table></div>`),
-  ];
-  return parts.join("\n\n");
+  ].join("\n\n");
 }
 
-function makePage(template, { fills, sections, appbar, eyebrow = true }) {
+/** One edit to the document template. Each must match, so a template change fails loudly instead of leaking old text. */
+function swap(html, pattern, replacement) {
+  const next = html.replace(pattern, replacement);
+  if (next === html) throw new UsageError(`the doc-tools template changed shape: nothing matches ${pattern}`);
+  return next;
+}
+
+function makePage(template, { tab, title, eyebrow, meta, appbar, sections, foot }) {
   const start = template.indexOf('<section id="ringkasan">');
   const end = template.indexOf('<footer class="doc">');
-  if (start === -1 || end === -1) throw new UsageError("the doc-tools template changed shape: cannot find the summary section or the footer");
+  if (start === -1 || end === -1) throw new UsageError("the doc-tools template changed shape: cannot find the first section or the footer");
   let html = `${template.slice(0, start)}${sections.trimStart()}\n\n    ${template.slice(end)}`;
-  // The header keeps only the eyebrow and the title: an app page, not a document cover.
-  const before = html;
   // The theme switch moves into the header card; the toolbar row it came from is dropped.
   const themeSwitch = /<div class="theme-switch"[^]*?<\/div>/.exec(html);
   if (!themeSwitch) throw new UsageError("the doc-tools template changed shape: cannot find the theme switch");
-  for (const pattern of [/\s*<p class="lede">[^]*?<\/p>/, /\s*<ul class="meta">[^]*?<\/ul>/, /\s*<div class="toolbar">[^]*?<div class="theme-switch"[^]*?<\/div>\s*<\/div>/, ...(eyebrow ? [] : [/\s*<p class="eyebrow">[^]*?<\/p>/])]) {
-    const next = html.replace(pattern, "");
-    if (next === html) throw new UsageError(`the doc-tools template changed shape: nothing matches ${pattern}`);
-    html = next;
-  }
-  if (html.length >= before.length || !html.includes("</header>")) throw new UsageError("the doc-tools template changed shape: the header could not be trimmed");
-  html = html.replace("</header>", `  ${themeSwitch[0]}\n    </header>`);
-  for (const [key, value] of Object.entries(fills)) html = html.split(`{{${key}}}`).join(value);
-  if (!html.includes("<main>") || !html.includes("</head>")) throw new UsageError("the doc-tools template changed shape: cannot find <main> or </head>");
-  return html
-    .replace("</head>", `${PAGE_STYLE}\n</head>`)
-    .replace("<main>", appbar ? `<main>\n    <p class="appbar">${appbar}</p>` : "<main>")
-    .replace("</body>", `${PAGE_SCRIPT}\n<!-- ${REPORT_MARK} -->\n</body>`);
+  html = swap(html, /\s*<div class="toolbar">[^]*?<div class="theme-switch"[^]*?<\/div>\s*<\/div>/, "");
+  // The header keeps the title, and on a ticket its number, project, status and dates: an app page, not a document cover.
+  html = swap(html, /\s*<p class="lede">[^]*?<\/p>/, "");
+  html = swap(html, /\s*<ul class="meta">[^]*?<\/ul>/, meta ? `\n        <ul class="meta">\n          ${meta}\n        </ul>` : "");
+  html = swap(html, /\s*<p class="eyebrow">[^]*?<\/p>/, eyebrow ? `\n        <p class="eyebrow">${eyebrow}</p>` : "");
+  html = swap(html, "</header>", `  ${themeSwitch[0]}\n    </header>`);
+  // The template's own labels are Indonesian; the board speaks English.
+  html = swap(html, /<html lang="[a-z-]+"/, '<html lang="en"');
+  for (const [from, to] of [['aria-label="Daftar isi"', 'aria-label="Contents"'], ["<p>Isi</p>", "<p>Contents</p>"], ["<summary>Daftar isi</summary>", "<summary>Contents</summary>"],
+    ['aria-label="Tema halaman"', 'aria-label="Page theme"'], [">Terang<", ">Light<"], [">Gelap<", ">Dark<"], [">Sistem<", ">System<"]]) html = swap(html, from, to);
+  for (const [key, value] of Object.entries({ JUDUL_TAB: tab, JUDUL: title, KAKI: foot })) html = swap(html, `{{${key}}}`, value);
+  html = swap(html, "</head>", `${PAGE_STYLE}\n</head>`);
+  if (appbar) html = swap(html, "<main>", `<main>\n    <p class="appbar">${appbar}</p>`);
+  return swap(html, "</body>", `${PAGE_SCRIPT}\n<!-- ${REPORT_MARK} -->\n</body>`);
 }
 
 async function cmdReport(args) {
@@ -687,8 +868,7 @@ async function cmdReport(args) {
   const db = await openDb();
   const tickets = db.prepare(`${SELECT} ORDER BY t.id DESC`).all().map(rowToTicket);
   const projects = db.prepare("SELECT key, grp FROM projects ORDER BY grp, key").all();
-  const stamp = now();
-  const foot = `Dihasilkan board-tools pada ${longDate(stamp)}. Halaman ini salinan; sumbernya basis data papan.`;
+  const foot = `Generated ${showDate(now())} from the board database.`;
 
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "board-report-"));
   try {
@@ -698,21 +878,16 @@ async function cmdReport(args) {
     const template = fs.readFileSync(seed, "utf8");
     fs.rmSync(seed);
 
-    const waiting = tickets.filter((t) => ["menunggu", "dicek"].includes(columnOf(t))).length;
-    const pages = [["index.html", makePage(template, {
-      eyebrow: false,
-      sections: boardSections(tickets, projects),
-      fills: { JUDUL_TAB: "Papan kerja", JENIS: "Papan", TOPIK: "Semua proyek", STATUS: waiting ? `${waiting} menunggu kamu` : "Tidak ada yang menunggu",
-        JUDUL: "Papan kerja", LEDE: "Tiket dari semua proyek. Tiap tiket memuat ringkasan, keputusan yang diambil, dan sumbernya, ditulis dengan kalimat lengkap.",
-        TANGGAL: longDate(stamp), BASIS: "basis data papan", STATUS_RINCI: `${projects.length} proyek, ${tickets.length} tiket`, KAKI: foot },
-    })]];
+    const pages = [["index.html", makePage(template, { tab: "Board", title: "Board", sections: boardSections(tickets, projects), foot })]];
     for (const t of tickets) {
-      pages.push([`tiket-${t.id}.html`, makePage(template, {
-        appbar: '<a href="index.html">&larr; Kembali ke papan</a>',
+      pages.push([`ticket-${t.id}.html`, makePage(template, {
+        tab: `#${t.id} ${esc(t.title)}`,
+        title: esc(t.title),
+        eyebrow: `Ticket #${t.id} · ${esc(t.group)} / ${esc(t.project)} · ${STATUS_LABEL[t.status]}`,
+        meta: `<li><b>Created</b> ${showDate(t.created_at)}</li>\n          <li><b>Updated</b> ${showDate(t.updated_at)}</li>`,
+        appbar: '<a href="index.html">&larr; Back to the board</a>',
         sections: ticketSections(t, tickets.filter((other) => other.follows === t.id).map((other) => other.id).sort((a, b) => a - b)),
-        fills: { JUDUL_TAB: `#${t.id} ${esc(t.title)}`, JENIS: `Tiket #${t.id}`, TOPIK: `${esc(t.group)} / ${esc(t.project)}`, STATUS: STATUS_LABEL[t.status],
-          JUDUL: esc(t.title), LEDE: `Tiket di proyek ${esc(t.project)}, dibuka ${longDate(t.created_at)}.`,
-          TANGGAL: longDate(t.updated_at), BASIS: "basis data papan", STATUS_RINCI: STATUS_LABEL[t.status], KAKI: foot },
+        foot,
       })]);
     }
 
@@ -729,6 +904,7 @@ async function cmdReport(args) {
     }
     fs.mkdirSync(dir, { recursive: true });
     for (const [name] of pages) fs.copyFileSync(path.join(scratch, name), path.join(dir, name));
+    const waiting = tickets.filter((t) => ["waiting", "review"].includes(columnOf(t))).length;
     console.log(`board written: ${path.join(dir, "index.html")}`);
     console.log(`${projects.length} project(s), ${tickets.length} ticket page(s), ${waiting} waiting for the owner`);
     return 0;
