@@ -36,6 +36,7 @@ Request
 | :--- | :--- |
 | Request berbentuk solusi ("bikin fitur X", "pakai Redis") | Tanya masalahnya. Panel butuh masalah, bukan solusi titipan. |
 | Tidak ada contoh kejadian | Minta satu contoh nyata: siapa, melakukan apa, hasilnya apa, harusnya apa. |
+| Aturan atau batas baru tanpa alasan ("maksimal 3", "wajib isi", "kunci setelah X") | Tanya tujuannya sebagai butir "perlu keputusanmu", bukan disimpan di bagian pembatal: menekan biaya, mencegah akal-akalan, atau mengurangi beban pemutus menghasilkan bentuk aturan yang berbeda. Sertakan bawaan yang dipakai bila tidak dijawab. |
 | Premis "cuma terjadi di X" | Verifikasi premisnya dulu sebelum menjelaskan kenapa. |
 | "Tadi jalan" atau "ada yang rusak" tanpa sebab | Bukan panel. Pindah ke `meta-debug`. |
 | User hanya meneruskan keluhan orang lain | Ia mungkin tidak bisa mengambil data tambahan. Cari bukti yang bisa dibuat sendiri. |

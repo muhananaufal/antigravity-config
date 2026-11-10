@@ -91,6 +91,7 @@ Tiap layar punya lima keadaan, bukan satu
 | Kompatibilitas | Menambah field biasanya aman; mengganti nama, tipe, atau makna tidak. Klien lama (aplikasi HP yang belum diperbarui) masih jalan? |
 | Makna key | Dua key bernama sama dengan isi berbeda; satu key melayani dua makna. |
 | Bentuk error | Semua error satu bentuk; status code membedakan keadaan (belum login, tanpa izin, tidak ditemukan, tidak valid, bentrok). |
+| Jalur penolakan baru | Penolakan baru dari service sampai ke klien sebagai apa? Baca blok `catch` di tiap controller pemanggilnya: jenis exception yang tidak ditangkap di sana jatuh ke handler umum dan dijawab 500, bukan 4xx dengan pesannya. Sebut jenis exception yang harus dipakai. |
 | Dokumentasi | Contoh response dibuat dari eksekusi nyata dengan role sungguhan, dan isi body-nya diperiksa, bukan hanya status code. |
 | Nilai tak dikenal | Enum atau field yang salah ketik: ditolak dengan pesan, atau diam-diam diabaikan. |
 | Nama | Nama field, endpoint, dan pesan mengikuti yang sudah ada di API ini. |
