@@ -41,7 +41,7 @@ Skill ini dokumentasi, bukan perubahan perilaku. Temuan perilaku yang janggal (a
 
 ## §2. Generator saved response
 
-Satu kelas test **di luar testsuite biasa** (mis. `tests/Postman/`), dijalankan manual. Template: `references/generator-template.php`.
+Satu kelas test **di luar testsuite biasa** (mis. `tests/Postman/`), dijalankan manual. Template: `assets/generator-template.php`.
 
 **Kerangka wajib:**
 
@@ -72,7 +72,7 @@ Satu kelas test **di luar testsuite biasa** (mis. `tests/Postman/`), dijalankan 
 
 ## §3. Deskripsi per endpoint
 
-Satu berkas markdown per request: `docs/postman/descriptions/{nn-grup}/{slug nama request}.md` (slug = huruf kecil, selain huruf/angka jadi `-`). Template: `references/description-template.md`.
+Satu berkas markdown per request: `docs/postman/descriptions/{nn-grup}/{slug nama request}.md` (slug = huruf kecil, selain huruf/angka jadi `-`). Template: `assets/description-template.md`.
 
 **Isi wajib, urutan tetap:**
 
