@@ -51,7 +51,8 @@ const newRun = () => ({
   basis: "staging 797a07f (+2 berkas belum commit)", browser: "Chrome lewat Claude in Chrome",
   results: [
     { check: "reimbursement-karyawan-submit", status: "fail", observed: "Simpan menjawab 500 <script>alert(1)</script>", network: [{ method: "POST", url: "/reimburse/store", status: 500 }] },
-    { check: "reimbursement-hrd-list", status: "pass", observed: "Tabel tampil, 12 baris" },
+    // Went from fail to pass and carries an expected 422: that is a fix, not a "new error".
+    { check: "reimbursement-hrd-list", status: "pass", observed: "Tabel tampil, 12 baris", network: [{ method: "POST", url: "/reimburse/filter", status: 422 }] },
     { check: "reimbursement-hrd-delete", status: "skipped", reason: "Tidak bisa dibatalkan; user memilih tidak dijalankan" },
     { check: "field-duty-karyawan-list", status: "pass", observed: "Daftar tampil", console: ["Warning: deprecated API"] },
   ],
@@ -189,6 +190,8 @@ for (const [name, mutate, pattern] of RUN_MUTATIONS) {
     expect("report: observed text is escaped", !html.includes("<script>alert(1)</script>") && html.includes("&lt;script&gt;alert(1)&lt;/script&gt;"));
     expect("report: shows the regression and the skipped reason", /Memburuk/.test(html) && html.includes("user memilih tidak dijalankan"));
     expect("report: lists checks that were not run", html.includes("booking-karyawan-list"));
+    expect("report: no table gives check ids a column of their own", !/<th>ID<\/th><th>Pemeriksaan<\/th>/.test(html) && !/<th>Pemeriksaan<\/th><th>Peran<\/th>/.test(html));
+    expect("report: the comparison names the earlier run by scope and date", html.includes("swipe reimbursement, 1 November 2026"));
     const again = tool("report", goodChecklist, goodNew, "--out", out);
     expect("report: refuses to overwrite", again.code === 2 && /refusing to overwrite/.test(again.text), again.text);
     const replaced = tool("report", goodChecklist, goodNew, "--out", out, "--replace");

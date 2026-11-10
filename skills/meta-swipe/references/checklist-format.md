@@ -178,7 +178,7 @@ Ragu antara `write` dan `irreversible`: pilih `irreversible`. Salah ke arah itu 
 | Kelompok | Artinya | Yang dilakukan |
 | :--- | :--- | :--- |
 | `regressed` | Dulu `pass`, sekarang `fail` atau `blocked` | Laporkan paling atas. Ini jawaban atas "habis ubah fitur A, ada yang berubah". |
-| `newErrors` | Masih `pass`, tetapi ada error console atau jaringan yang dulu tidak ada | Laporkan; sering jadi tanda awal kerusakan. |
+| `newErrors` | `pass` di kedua swipe, tetapi ada error console atau jaringan yang dulu tidak ada | Laporkan; sering jadi tanda awal kerusakan. Pemeriksaan yang baru saja membaik tidak masuk sini: jawaban 422 pada pemeriksaan validasi yang kini lulus adalah buktinya, bukan error baru. |
 | `fixed` | Dulu rusak, sekarang `pass` | Laporkan singkat. |
 | `stillFailing` | Rusak di kedua swipe | Sebut bahwa belum berubah. |
 | `added` | Pemeriksaan baru | Tidak punya pembanding. |

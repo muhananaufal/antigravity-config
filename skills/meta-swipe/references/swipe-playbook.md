@@ -135,6 +135,8 @@ Diamati pada uji coba 10 November 2026 dengan ekstensi Claude in Chrome pada apl
 | Rujukan elemen (ref) berubah setelah halaman berganti | Cari ulang elemennya di tiap halaman; jangan memakai rujukan dari halaman sebelumnya. |
 | Sesi terbawa ke tab baru di jendela yang sama | Tidak perlu login ulang per tab. |
 | Tiap host punya sesi sendiri | `hrd.localhost` dan `karyawan.localhost` bisa terbuka bersamaan sebagai dua peran. Satu host untuk semua peran berarti satu peran pada satu waktu. |
+| Permintaan yang dialihkan tercatat dengan status akhirnya | `POST` yang menjawab 302 lalu membuka halaman tujuan tercatat 200. Jangan mengandalkan catatan jaringan untuk membuktikan ada pengalihan; baca alamat halaman sesudahnya. |
+| Sesi dari swipe sebelumnya masih hidup di browser | Pemeriksaan "tanpa sesi" dijalankan setelah Keluar lebih dulu, dan itu ditulis di `observed`. Jangan menganggap swipe baru mulai dari keadaan belum login. |
 | Pembaca jaringan membersihkan catatannya bila diminta | Bersihkan setelah tiap pemeriksaan supaya error tidak tercampur antar-pemeriksaan. |
 | Jendela tidak bisa dikecilkan ke ukuran HP | Tampilan HP di luar jangkauan; minta tangkapan layar ke user. |
 | Dialog bawaan browser menghentikan alat | Tombol yang memunculkan `confirm` (sering pada Hapus) diperlakukan sebagai aksi yang ditanyakan dulu, dan user diberi tahu risikonya. |

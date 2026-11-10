@@ -276,7 +276,9 @@ function computeDiff(oldRun, newRun) {
     if (was.status === "pass" && bad(now.status)) out.regressed.push(entry);
     else if (bad(was.status) && now.status === "pass") out.fixed.push(entry);
     else if (bad(was.status) && bad(now.status)) out.stillFailing.push(entry);
-    if (now.status === "pass") {
+    // Only a check that passed in both runs can gain "new errors". One that went from failing to
+    // passing is a fix, and what it recorded (say, an expected 422) is its evidence, not a regression.
+    if (now.status === "pass" && was.status === "pass") {
       const known = new Set(errorLines(was));
       const fresh = errorLines(now).filter((line) => !known.has(line));
       if (fresh.length) out.newErrors.push({ check: id, errors: fresh });
@@ -340,6 +342,9 @@ function buildSections(list, run, prev, files) {
   const failing = results.filter((r) => r.status === "fail");
   const diff = prev ? computeDiff(prev, run) : null;
   const title = (id) => esc(checks.get(id).title);
+  // A check is always shown as its title with the id underneath. An id column of its own pushes
+  // everything else off a narrow screen.
+  const named = (id, extra = "") => `<td><b>${title(id)}</b><br><span class="lbl wrap-ok">${extra ? `${esc(extra)} · ` : ""}${esc(id)}</span></td>`;
   const sections = [];
 
   // Summary
@@ -347,7 +352,7 @@ function buildSections(list, run, prev, files) {
     `<li><b>${totals.pass} dari ${results.length} pemeriksaan jalan.</b> ${totals.fail} rusak, ${totals.blocked} terhalang, ${totals.skipped} dilewati.</li>`,
     ...failing.slice(0, 4).map((r) => `<li><b>Rusak: ${title(r.check)}</b> (${esc(roles.get(checks.get(r.check).role).label)}). ${esc(r.observed)}</li>`),
   ];
-  if (diff) found.push(`<li><b>Dibanding swipe ${esc(longDate(prev.date))}:</b> ${diff.regressed.length} memburuk, ${diff.fixed.length} membaik, ${diff.newErrors.length} jalan tetapi muncul error baru.</li>`);
+  if (diff) found.push(`<li><b>Dibanding swipe ${esc(prev.scope)}, ${esc(longDate(prev.date))}:</b> ${diff.regressed.length} memburuk, ${diff.fixed.length} membaik, ${diff.newErrors.length} jalan tetapi muncul error baru.</li>`);
   const limits = [
     `<li><b>Cakupan:</b> ${ranFeatures.length} fitur dan ${ranRoles.length} peran. ${notRun.length} pemeriksaan di daftar periksa tidak dijalankan kali ini.</li>`,
     `<li><b>Data yang dibuat:</b> ${(run.created || []).length} butir, tidak dibersihkan otomatis.</li>`,
@@ -372,15 +377,15 @@ function buildSections(list, run, prev, files) {
   // Changes
   if (diff) {
     const rows = [
-      ...diff.regressed.map((i) => [`<td class="id">${esc(i.check)}</td>`, `<td>${title(i.check)}</td>`, '<td><span class="pill danger">Memburuk</span></td>', `<td>${esc(i.observed)}</td>`]),
-      ...diff.newErrors.map((i) => [`<td class="id">${esc(i.check)}</td>`, `<td>${title(i.check)}</td>`, '<td><span class="pill warn">Error baru</span></td>', `<td>${i.errors.map((e) => `<code>${esc(e)}</code>`).join("<br>")}</td>`]),
-      ...diff.fixed.map((i) => [`<td class="id">${esc(i.check)}</td>`, `<td>${title(i.check)}</td>`, '<td><span class="pill ok">Membaik</span></td>', `<td>${esc(i.observed)}</td>`]),
-      ...diff.stillFailing.map((i) => [`<td class="id">${esc(i.check)}</td>`, `<td>${title(i.check)}</td>`, '<td><span class="pill muted">Masih rusak</span></td>', `<td>${esc(i.observed)}</td>`]),
-      ...diff.added.map((i) => [`<td class="id">${esc(i.check)}</td>`, `<td>${title(i.check)}</td>`, '<td><span class="pill info">Baru</span></td>', "<td>Belum ada di swipe sebelumnya.</td>"]),
-      ...diff.notRerun.map((i) => [`<td class="id">${esc(i.check)}</td>`, `<td>${title(i.check)}</td>`, '<td><span class="pill muted">Tidak diulang</span></td>', "<td>Ada di swipe sebelumnya, tidak dijalankan kali ini.</td>"]),
+      ...diff.regressed.map((i) => [named(i.check), '<td><span class="pill danger">Memburuk</span></td>', `<td>${esc(i.observed)}</td>`]),
+      ...diff.newErrors.map((i) => [named(i.check), '<td><span class="pill warn">Error baru</span></td>', `<td>${i.errors.map((e) => `<code>${esc(e)}</code>`).join("<br>")}</td>`]),
+      ...diff.fixed.map((i) => [named(i.check), '<td><span class="pill ok">Membaik</span></td>', `<td>${esc(i.observed)}</td>`]),
+      ...diff.stillFailing.map((i) => [named(i.check), '<td><span class="pill muted">Masih rusak</span></td>', `<td>${esc(i.observed)}</td>`]),
+      ...diff.added.map((i) => [named(i.check), '<td><span class="pill info">Baru</span></td>', "<td>Belum ada di swipe sebelumnya.</td>"]),
+      ...diff.notRerun.map((i) => [named(i.check), '<td><span class="pill muted">Tidak diulang</span></td>', "<td>Ada di swipe sebelumnya, tidak dijalankan kali ini.</td>"]),
     ];
-    const body = rows.length ? table(["ID", "Pemeriksaan", "Perubahan", "Keterangan"], rows) : "      <p>Tidak ada perubahan: tiap pemeriksaan berstatus sama dengan swipe sebelumnya dan tidak ada error baru.</p>";
-    sections.push(["perubahan", "Perubahan sejak swipe sebelumnya", `Dibandingkan dengan swipe ${esc(longDate(prev.date))} (${esc(prev.basis)}).`, body]);
+    const body = rows.length ? table(["Pemeriksaan", "Perubahan", "Keterangan"], rows) : "      <p>Tidak ada perubahan: tiap pemeriksaan berstatus sama dengan swipe sebelumnya dan tidak ada error baru.</p>";
+    sections.push(["perubahan", "Perubahan sejak swipe sebelumnya", `Dibandingkan dengan swipe ${esc(prev.scope)}, ${esc(longDate(prev.date))} (${esc(prev.basis)}).`, body]);
   }
 
   // Results per role
@@ -402,8 +407,8 @@ function buildSections(list, run, prev, files) {
   sections.push(["hasil", "Hasil per peran", "Tiap baris satu pemeriksaan dari daftar periksa, dengan langkah yang dijalankan.", perRole.join("\n")]);
 
   // Errors
-  const errorRows = results.flatMap((r) => errorLines(r).map((line) => [`<td class="id">${esc(r.check)}</td>`, `<td>${esc(roles.get(checks.get(r.check).role).label)}</td>`, `<td><code>${esc(line)}</code></td>`]));
-  sections.push(["error", "Error console dan jaringan", "Yang terbaca dari console browser dan permintaan jaringan selama tiap pemeriksaan.", errorRows.length ? table(["Pemeriksaan", "Peran", "Error"], errorRows) : "      <p>Tidak ada error console atau permintaan gagal yang tercatat pada pemeriksaan yang dijalankan.</p>"]);
+  const errorRows = results.flatMap((r) => errorLines(r).map((line) => [named(r.check, roles.get(checks.get(r.check).role).label), `<td><code>${esc(line)}</code></td>`]));
+  sections.push(["error", "Error console dan jaringan", "Yang terbaca dari console browser dan permintaan jaringan selama tiap pemeriksaan.", errorRows.length ? table(["Pemeriksaan", "Error"], errorRows) : "      <p>Tidak ada error console atau permintaan gagal yang tercatat pada pemeriksaan yang dijalankan.</p>"]);
 
   // Created data
   const createdRows = (run.created || []).map((c) => [`<td>${esc(roles.get(c.role)?.label || c.role)}</td>`, `<td>${esc(c.what)}</td>`, `<td>${c.where ? `<code>${esc(c.where)}</code>` : ""}</td>`]);
@@ -411,10 +416,10 @@ function buildSections(list, run, prev, files) {
 
   // Not tried
   const idle = [
-    ...results.filter((r) => r.status === "skipped" || r.status === "blocked").map((r) => [`<td class="id">${esc(r.check)}</td>`, `<td>${title(r.check)}</td>`, `<td>${STATUS_PILL[r.status]}</td>`, `<td>${esc(r.reason)}</td>`]),
-    ...notRun.map((c) => [`<td class="id">${esc(c.id)}</td>`, `<td>${esc(c.title)}</td>`, '<td><span class="pill muted">Di luar cakupan</span></td>', "<td>Ada di daftar periksa, tidak diminta kali ini.</td>"]),
+    ...results.filter((r) => r.status === "skipped" || r.status === "blocked").map((r) => [named(r.check), `<td>${STATUS_PILL[r.status]}</td>`, `<td>${esc(r.reason)}</td>`]),
+    ...notRun.map((c) => [named(c.id), '<td><span class="pill muted">Di luar cakupan</span></td>', "<td>Ada di daftar periksa, tidak diminta kali ini.</td>"]),
   ];
-  sections.push(["belum", "Yang tidak dicoba", "Supaya tidak dianggap sudah diperiksa.", idle.length ? table(["ID", "Pemeriksaan", "Status", "Alasan"], idle) : "      <p>Semua pemeriksaan di daftar periksa dijalankan.</p>"]);
+  sections.push(["belum", "Yang tidak dicoba", "Supaya tidak dianggap sudah diperiksa.", idle.length ? table(["Pemeriksaan", "Status", "Alasan"], idle) : "      <p>Semua pemeriksaan di daftar periksa dijalankan.</p>"]);
 
   // Sources
   const sources = [
