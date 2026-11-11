@@ -332,7 +332,7 @@ Di proyek yang dipasangi penjaga push (`skills/meta-board/SKILL.md` bagian 4), a
 | Push branch kerja | `git push origin <branch-kerja>`, setelah exit gate lulus dan user setuju (§10). |
 | Membuka pull request | **HANYA saat user memintanya.** Tujuannya mengikuti alur §1: `feature/*`, `fix/*`, `refactor/*` ke `develop`; `release/*` dan `hotfix/*` ke `main`. Judulnya Conventional Commits. |
 | Me-merge pull request | **HANYA saat user memintanya**, untuk pull request yang ia sebut. Diminta membuka BUKAN izin me-merge. |
-| Mencatat merge | Setelah pull request masuk: `git fetch`, lalu `board merged <id> --into <branch>`. |
+| Mencatat merge | Setelah pull request masuk: `git fetch`, lalu `board merged <kunci> --into <branch>`. |
 | Penjaga menolak sebuah push | Itu berarti tujuannya branch integrasi. Push branch kerjanya dan tunggu user meminta pull request. DILARANG `--no-verify`. |
 
 **Sesudah hotfix: menyinkronkan `main` ke `staging` (dan `develop`).** Hotfix masuk ke `main` lewat pull request, sehingga `main` memuat commit yang belum dikenal `staging`; tanpa sinkronisasi, rilis `staging` ke `main` berikutnya akan bentrok. Agen menyebutkan hal ini setelah hotfix masuk dan mengerjakannya **saat user meminta**:
@@ -468,7 +468,7 @@ git commit -m "feat(scope): deskripsi unit logis 2"
 3. **Kenali lingkungannya:** repo biasa, worktree, atau detached HEAD. Ketiganya butuh penanganan berbeda.
 4. **Pastikan base branch-nya** — dari mana pekerjaan ini bercabang.
 5. **Sajikan opsi, JANGAN pilih sendiri:** merge lokal · push untuk PR · biarkan apa adanya. Keputusan integrasi milik user; menebaknya adalah tindakan tak-terbalik yang diambil tanpa izin.
-6. **Eksekusi pilihannya.** Bila hasilnya merge ke branch integrasi, catat di tiketnya: `board merged <id> --into <branch>` (`skills/meta-board/SKILL.md` bagian 1). Alat memeriksa ke git bahwa commit tiket itu memang sudah ada di branch tujuan. Push untuk PR belum merge; dicatat nanti setelah PR-nya masuk.
+6. **Eksekusi pilihannya.** Bila hasilnya merge ke branch integrasi, catat di tiketnya: `board merged <kunci> --into <branch>` (`skills/meta-board/SKILL.md` bagian 1). Alat memeriksa ke git bahwa commit tiket itu memang sudah ada di branch tujuan. Push untuk PR belum merge; dicatat nanti setelah PR-nya masuk.
 7. **Bersihkan — dengan pagar:**
    - Hapus branch/worktree **hanya** setelah pekerjaannya benar-benar terintegrasi.
    - **Membuang pekerjaan butuh kata persis `discard` dari user.** "ya", "oke", "hapus saja" TIDAK cukup. Penghapusan yang tidak bisa dibatalkan menuntut kata yang tidak bisa disalahartikan.

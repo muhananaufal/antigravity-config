@@ -15,7 +15,7 @@ Satu papan untuk semua proyek. Gunanya satu: keputusan yang sudah diambil dan pe
 | `assets/ticket.example.json` | Tiket lengkap: keputusan user, keputusan agen, pertanyaan terbuka, semua bagian opsional | Menulis tiket pertama di sebuah sesi |
 | `assets/idea.example.json`, `approval.example.json`, `decision.example.json` | Ide, persetujuan ide, jawaban atas pertanyaan terbuka | Kejadian itu muncul |
 
-Alat dipanggil dengan `node ~/.gemini/config/skills/meta-board/scripts/board-tools.mjs <perintah>`, disingkat `board` di bawah. Data ada di `~/.aetheris/board/board.db`; halaman untuk dibaca user ada di `~/.aetheris/board/site/`. Halaman itu diperbarui alat sendiri sesudah tiap perintah yang mengubah data, dan tab yang sedang terbuka memuat ulang dirinya; agen TIDAK perlu menjalankan `report`.
+Alat dipanggil dengan `node ~/.gemini/config/skills/meta-board/scripts/board-tools.mjs <perintah>`, disingkat `board` di bawah. Data ada di `board.db` di folder papan (variabel lingkungan `AETHERIS_BOARD` menunjuk berkasnya; bawaannya `~/.aetheris/board/board.db`); halaman untuk dibaca user adalah `site/index.html` di sebelahnya: satu halaman, dengan tiap tiket terbuka di `index.html#<kunci>`. Halaman itu diperbarui alat sendiri sesudah tiap perintah yang mengubah data, dan tab yang sedang terbuka memuat ulang dirinya; agen TIDAK perlu menjalankan `report`.
 
 ---
 
@@ -39,27 +39,29 @@ Alat dipanggil dengan `node ~/.gemini/config/skills/meta-board/scripts/board-too
 | Sebelum menyajikan panel | `board search "<kata kunci>" --project <nama-folder>`. Keputusan lama yang menyangkut hal yang sama dibuka (`show`) dan disebut di panel; memutuskan ulang hal yang sudah diputuskan tanpa menyebutnya adalah cacat panel. |
 | User menyetujui panel (perubahan kecil ke atas) | Tulis berkas tiket, `board add --file <berkas> --dir <root proyek>`. **Sebelum** membuat branch dan menulis kode. |
 | User melempar ide yang belum mau dikerjakan | `board add` dengan `"status": "idea"`. Cukup judul dan ringkasan. |
-| Ide disetujui setelah panelnya | `board approve <id> --file <berkas>` |
-| Mulai mengerjakan | Pindah ke branch tiket, lalu `board set <id> --status doing` |
-| User menjawab butir "perlu keputusanmu" | `board decide <id> --file <berkas>`; bila menjawab pertanyaan yang sudah tercatat, tambah `--answers K<n>` |
+| Ide disetujui setelah panelnya | `board approve <kunci> --file <berkas>` |
+| Mulai mengerjakan | Pindah ke branch tiket, lalu `board set <kunci> --status doing` |
+| User menjawab butir "perlu keputusanmu" | `board decide <kunci> --file <berkas>`; bila menjawab pertanyaan yang sudah tercatat, tambah `--answers K<n>` |
 | Agen memutuskan sendiri karena user menyerahkan | `board decide` dengan `"decided_by": "agent"` dan `authority` berisi kalimat user yang menyerahkannya |
 | Agen harus memilih sesuatu yang TIDAK pernah diserahkan user (tidak ada di panel, tidak tercakup kalimat mana pun) | Pilih yang paling mudah dibalik dan catat tetap sebagai keputusan agen, dengan `authority` berisi kalimat terdekat **dan `reason` yang terang menyebut bahwa hal ini tidak ditanyakan ke user**. Sebut ke user saat melapor. Bila pilihannya sulit dibalik: jangan memilih; catat sebagai pertanyaan terbuka dan berhenti. |
 | Ada pertanyaan yang belum bisa dijawab user | `board decide` dengan `question` saja |
-| Ketahuan sebuah klaim ternyata dugaan | `board unverified <id> --file <berkas>` |
-| Dugaan sudah dicek | `board verify <id> U<n> --result "<apa yang ditemukan>"` |
-| Dokumen dibuat untuk pekerjaan ini (PRD, handover, laporan swipe) | `board link <id> --label "<apa>" --target "<path atau URL>"` |
-| Akhir sesi, pekerjaan belum selesai | `board note <id> --text "<sampai mana, apa berikutnya>"` |
-| Pekerjaan selesai menurut agen | `board set <id> --status review --evidence "<perintah dan hasilnya>" --commit <hash>` |
-| User menerima hasilnya | `board set <id> --status done --words "<kalimat user>"` |
+| Ketahuan sebuah klaim ternyata dugaan | `board unverified <kunci> --file <berkas>` |
+| Dugaan sudah dicek | `board verify <kunci> U<n> --result "<apa yang ditemukan>"` |
+| Dokumen dibuat untuk pekerjaan ini (PRD, handover, laporan swipe) | `board link <kunci> --label "<apa>" --target "<path atau URL>"` |
+| Akhir sesi, pekerjaan belum selesai | `board note <kunci> --text "<sampai mana, apa berikutnya>"` |
+| Pekerjaan selesai menurut agen | `board set <kunci> --status review --evidence "<perintah dan hasilnya>" --commit <hash>` |
+| User menerima hasilnya | `board set <kunci> --status done --words "<kalimat user>"` |
 | User bilang belum sesuai | Lihat §3 |
-| Pekerjaan sudah di-merge ke branch integrasi (`meta-git` §6), termasuk lewat pull request yang sudah masuk (`git fetch` dulu) | `board merged <id> --into <branch>`. Diterima belum tentu sudah di-merge; keduanya dicatat terpisah. Boleh lebih dari sekali (ke `develop`, lalu ke `main`). |
+| Pekerjaan sudah di-merge ke branch integrasi (`meta-git` §6), termasuk lewat pull request yang sudah masuk (`git fetch` dulu) | `board merged <kunci> --into <branch>`. Diterima belum tentu sudah di-merge; keduanya dicatat terpisah. Boleh lebih dari sekali (ke `develop`, lalu ke `main`). |
 | Penyelidikan bug menemukan akar masalahnya (`meta-debug`) | Perbaikannya lewat panel ringkas, lalu jadi tiket dengan branch `fix/...`; akar masalah dan buktinya masuk `summary` dan `sources` |
 | Sesi brainstorm menghasilkan ide yang belum mau dikerjakan | Tawarkan sekali; bila user mau, `board add` dengan `"status": "idea"` |
 | Perintah mencetak peringatan "the pages were not updated" | Datanya sudah tersimpan; yang gagal hanya halamannya. Jalankan `board report` untuk melihat sebabnya dan sampaikan ke user. Jangan mengulang perintah tulisnya: itu akan mencatat dua kali. |
 
 **Yang TIDAK jadi tiket:** typo, perbaikan satu baris yang panelnya nihil, dan pertanyaan yang hanya dijawab tanpa mengubah apa pun. Bugfix menjadi tiket setelah akar masalahnya ketemu, bukan saat masih diselidiki.
 
-**Proyek tidak didaftarkan.** Ia muncul di papan saat tiket pertamanya dicatat, dinamai menurut folder `--dir`. Berikan root repo, bukan subfolder; kalau tidak, satu proyek terpecah jadi dua. Alat menampilkannya sebagai `<folder induk>/<nama folder>` (mis. `devivace/altrms`), tetapi `--project` hanya memakai nama foldernya (`altrms`).
+**Proyek tidak didaftarkan.** Ia muncul di papan saat tiket pertamanya dicatat, dinamai menurut folder `--dir`. Berikan root repo, bukan subfolder; kalau tidak, satu proyek terpecah jadi dua. Kunci proyeknya `<folder induk>-<nama folder>` (mis. `devivace-altrms`), jadi dua folder bernama sama di folder induk berbeda adalah dua proyek. `--project` menerima kunci itu, atau nama folder saja bila hanya satu proyek yang memakainya.
+
+**Tiket disebut dengan kuncinya: `<kunci proyek>-<nomor>`** (mis. `devivace-altrms-3`), di perintah, di pesan ke user, di handover, dan di commit. Tiap proyek menghitung tiketnya sendiri dari 1, jadi nomor saja tidak menunjuk satu tiket dan ditolak alat.
 
 **Berkas tiket sementara** (`--file`) ditulis ke folder sementara atau scratch, BUKAN ke dalam repo proyek; berkas itu tidak boleh ikut ter-commit.
 
@@ -111,8 +113,8 @@ Satu tiket per poin hampir tidak pernah tepat: tiap tiket terbuka butuh branch s
 
 **Dikembalikan atau tiket baru?** Satu pertanyaan: apakah `done_when`-nya berubah?
 
-- **Tidak berubah** (hasilnya belum memenuhi yang disepakati) → tiket yang sama dikembalikan: `board set <id> --status doing --reason "<apa yang kurang>" --words "<kalimat user>"`.
-- **Berubah atau bertambah** (user ingin hal yang berbeda) → tiket baru dengan `"follows": <id>`, lewat panel seperti biasa. Tiket lama tetap `done`.
+- **Tidak berubah** (hasilnya belum memenuhi yang disepakati) → tiket yang sama dikembalikan: `board set <kunci> --status doing --reason "<apa yang kurang>" --words "<kalimat user>"`.
+- **Berubah atau bertambah** (user ingin hal yang berbeda) → tiket baru dengan `"follows": <nomor tiket lama di proyek yang sama>`, lewat panel seperti biasa. Tiket lama tetap `done`.
 
 Ragu → tanyakan ke user, dengan menyebut butir `done_when` yang dimaksud.
 
