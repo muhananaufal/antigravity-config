@@ -41,7 +41,12 @@ function expect(name, condition, detail) {
   if (condition) console.log(`ok    ${name}`);
   else { failures++; console.log(`FAIL  ${name}${detail ? `\n      ${String(detail).trim().split("\n").slice(0, 8).join("\n      ")}` : ""}`); }
 }
-const count = (text) => (text.match(/^#\d+/gm) || []).length;
+const count = (text) => (text.match(/^[a-z0-9][a-z0-9-]*-\d+ {2}/gm) || []).length;
+const keyOf = (text) => (/added ([a-z0-9][a-z0-9-]*-\d+) /.exec(text) || [])[1];
+const numOf = (key) => Number(String(key).split("-").pop());
+// data.js and stamp.js are "window.__x && window.__x({...});": the JSON sits between the second call and the end.
+const payload = (text, name) => JSON.parse(text.slice(text.indexOf(`${name}(`) + name.length + 1, text.lastIndexOf(");")));
+const loadData = (dir) => payload(fs.readFileSync(path.join(dir, "data.js"), "utf8"), "__boardData");
 
 // What the owner and the agent write stays in the language they wrote it in; only the tool speaks English.
 const LONG = "Batas klaim dihitung per duty, bukan per klaim, supaya Field Duty lima hari tetap bisa diklaim penuh. Kalimat ini sengaja panjang dan lengkap, dan harus tersimpan apa adanya tanpa dipendekkan.";
@@ -91,10 +96,10 @@ const ticket = () => ({
 let id = null, idBlog = null;
 {
   const a = tool(["add", "--file", file(ticket()), "--dir", HRIS]);
-  id = (/#(\d+)/.exec(a.text) || [])[1];
+  id = keyOf(a.text);
   expect("add: ticket with summary, decision and source", a.code === 0 && id, a.text);
   const b = tool(["add", "--file", file({ ...ticket(), title: "Tema blog memakai huruf serif", decisions: [], user_words: "serif aja" }), "--dir", BLOG], { now: "2026-10-02T08:00:00+07:00" });
-  idBlog = (/#(\d+)/.exec(b.text) || [])[1];
+  idBlog = keyOf(b.text);
   expect("add: unknown project is created on the way, key made kebab-case; decisions may be empty", b.code === 0 && /personal\/blog-pribadi/.test(b.text), b.text);
 }
 
@@ -138,8 +143,11 @@ for (const [name, mutate, pattern] of REJECTED) {
   expect("decide: a question without an answer is stored as waiting", p.code === 0 && /K3/.test(p.text) && /waiting/.test(p.text), p.text);
   const bad = tool(["decide", id, "--file", file({ ...ownerDecision(), rejected: [] })]);
   expect("decide: an incomplete decision is refused", bad.code === 1 && /rejected/.test(bad.text), bad.text);
-  const none = tool(["decide", "999", "--file", file(agentDecision())]);
-  expect("decide: a decision cannot exist without its ticket", none.code === 2 && /no ticket #999/.test(none.text), none.text);
+  const none = tool(["decide", "kantor-hris-demo-999", "--file", file(agentDecision())]);
+  expect("decide: a decision cannot exist without its ticket", none.code === 2 && /no ticket kantor-hris-demo-999/.test(none.text), none.text);
+  const bare = tool(["show", "1"]);
+  expect("show: a number alone is refused and the full key is asked for", bare.code === 2 && /full ticket key/.test(bare.text) && /kantor-hris-demo-1/.test(bare.text), bare.text);
+  expect("add: tickets are numbered per project and known by a key with the parent folder", id === "kantor-hris-demo-1" && idBlog === "personal-blog-pribadi-1", `${id} ${idBlog}`);
   const s = tool(["source", id, "--file", file({ claim: "Batas lima foto struk ditulis sebagai konstanta", source: "app/Services/ReimburseService.php:14", status: "read in full" })]);
   expect("source: appends a source", s.code === 0 && /E2/.test(s.text), s.text);
 
@@ -153,7 +161,7 @@ for (const [name, mutate, pattern] of REJECTED) {
 // --- reading stays small -------------------------------------------------------------------------
 {
   const all = tool(["list"]);
-  const rows = all.text.split("\n").filter((line) => /^#\d+/.test(line));
+  const rows = all.text.split("\n").filter((line) => /^[a-z0-9][a-z0-9-]*-\d+ {2}/.test(line));
   expect("list: one short line per ticket", all.code === 0 && rows.length === 2 && rows.every((line) => line.length < 200), all.text);
   expect("list: never prints the long text", !all.text.includes("sengaja panjang"), all.text);
   const one = tool(["list", "--project", "hris-demo"]);
@@ -169,7 +177,7 @@ for (const [name, mutate, pattern] of REJECTED) {
   const badDate = tool(["list", "--created-from", "kemarin"]);
   expect("list: a date that is not YYYY-MM-DD is refused", badDate.code === 2 && /YYYY-MM-DD/.test(badDate.text), badDate.text);
   const found = tool(["search", "konstanta"]);
-  expect("search: a word from a decision leads to its ticket", found.code === 0 && new RegExp(`^#${id}\\b`, "m").test(found.text) && !found.text.includes("sengaja panjang"), found.text);
+  expect("search: a word from a decision leads to its ticket", found.code === 0 && new RegExp(`^${id}\\b`, "m").test(found.text) && !found.text.includes("sengaja panjang"), found.text);
   const scoped = tool(["search", "serif", "--project", "hris-demo"]);
   expect("search: respects the project filter", scoped.code === 0 && count(scoped.text) === 0, scoped.text);
 }
@@ -177,7 +185,7 @@ for (const [name, mutate, pattern] of REJECTED) {
 // --- waiting for the owner -----------------------------------------------------------------------
 {
   const waiting = tool(["list", "--waiting"]);
-  expect("waiting: lists the ticket with an unanswered question and an unseen agent decision", count(waiting.text) === 1 && new RegExp(`^#${id}\\b`, "m").test(waiting.text), waiting.text);
+  expect("waiting: lists the ticket with an unanswered question and an unseen agent decision", count(waiting.text) === 1 && new RegExp(`^${id}\\b`, "m").test(waiting.text), waiting.text);
   const wrong = tool(["review", id, "K1"]);
   expect("review: only applies to decisions made by the agent", wrong.code === 1 && /decided by the owner/.test(wrong.text), wrong.text);
   const seen = tool(["review", id, "K2"]);
@@ -225,7 +233,7 @@ let idIdea = null, idNext = null;
 {
   const idea = { title: "Ekspor rekap klaim ke Excel", summary: "Bagian keuangan ingin mengunduh rekap klaim reimburse per bulan sebagai berkas Excel untuk dicocokkan dengan pembukuan.", status: "idea" };
   const a = tool(["add", "--file", file(idea), "--dir", HRIS]);
-  idIdea = (/#(\d+)/.exec(a.text) || [])[1];
+  idIdea = keyOf(a.text);
   expect("idea: recorded with only a title and a summary", a.code === 0 && idIdea, a.text);
   const skip = tool(["set", idIdea, "--status", "doing"]);
   expect("idea: cannot be worked on before it is approved", skip.code === 1 && /approve/.test(skip.text), skip.text);
@@ -235,17 +243,17 @@ let idIdea = null, idNext = null;
   expect("approve: refused without a type", untyped.code === 1 && /"type"/.test(untyped.text), untyped.text);
   const ok = tool(["approve", idIdea, "--file", file({ done_when: ticket().done_when, sources: ticket().sources, approved_by: "user", user_words: "gass yang excel", type: "feature" })]);
   const listed = tool(["list", "--status", "ready"]);
-  expect("approve: the idea becomes ready work", ok.code === 0 && new RegExp(`^#${idIdea}\\b`, "m").test(listed.text), ok.text + listed.text);
+  expect("approve: the idea becomes ready work", ok.code === 0 && new RegExp(`^${idIdea}\\b`, "m").test(listed.text), ok.text + listed.text);
   const twice = tool(["approve", idIdea, "--file", file({ approved_by: "user", user_words: "gass" })]);
   expect("approve: only an idea is approved", twice.code === 1 && /not an idea/.test(twice.text), twice.text);
 
-  const next = tool(["add", "--file", file({ ...ticket(), title: "Batas klaim bisa diatur per perusahaan", decisions: [], follows: Number(id) }), "--dir", HRIS]);
-  idNext = (/#(\d+)/.exec(next.text) || [])[1];
+  const next = tool(["add", "--file", file({ ...ticket(), title: "Batas klaim bisa diatur per perusahaan", decisions: [], follows: numOf(id) }), "--dir", HRIS]);
+  idNext = keyOf(next.text);
   const older = tool(["show", id]);
   const newer = tool(["show", idNext]);
-  expect("follows: changed criteria are a new ticket, linked both ways", next.code === 0 && new RegExp(`Continued by: #${idNext}`).test(older.text) && new RegExp(`Follows: #${id}`).test(newer.text), next.text);
-  const cross = tool(["add", "--file", file({ ...ticket(), follows: Number(id) }), "--dir", BLOG]);
-  expect("follows: refused across projects", cross.code === 1 && /another project/.test(cross.text), cross.text);
+  expect("follows: changed criteria are a new ticket, linked both ways", next.code === 0 && new RegExp(`Continued by: ${idNext}`).test(older.text) && new RegExp(`Follows: ${id}`).test(newer.text), next.text);
+  const byKey = tool(["add", "--file", file({ ...ticket(), follows: id }), "--dir", HRIS]);
+  expect("follows: takes the number within the project, not a key", byKey.code === 1 && /"follows" must be the number/.test(byKey.text), byKey.text);
   const ghost = tool(["add", "--file", file({ ...ticket(), follows: 999 }), "--dir", HRIS]);
   expect("follows: refused when the earlier ticket does not exist", ghost.code === 1 && /does not exist/.test(ghost.text), ghost.text);
   tool(["set", idBlog, "--status", "cancelled", "--reason", "Blognya tidak jadi dibuat."], { now: "2026-10-05T08:00:00+07:00" });
@@ -255,35 +263,36 @@ let idIdea = null, idNext = null;
   expect("note: a note too short to help the next session is refused", terse.code === 1 && /--text/.test(terse.text), terse.text);
   const noted = tool(["note", idNext, "--text", "Migrasi kolom batas sudah ditulis dan lulus. Berikutnya: layar pengaturan per perusahaan."], { now: "2026-11-15T17:00:00+07:00" });
   const afterNote = tool(["show", idNext]);
-  expect("note: stored in the history, status unchanged", noted.code === 0 && /2026-11-15: note: Migrasi kolom batas/.test(afterNote.text) && /^#\d+\s+\S+\s+ready/m.test(afterNote.text), noted.text + afterNote.text);
+  expect("note: stored in the history, status unchanged", noted.code === 0 && /2026-11-15: note: Migrasi kolom batas/.test(afterNote.text) && /^\S+-\d+\s+\S+\s+ready/m.test(afterNote.text), noted.text + afterNote.text);
 }
 
-// --- export and pages ----------------------------------------------------------------------------
+// --- export and the one page --------------------------------------------------------------------
 {
   const exported = tool(["export", "--project", "hris-demo"]);
   let parsed = null;
   try { parsed = JSON.parse(exported.text); } catch { /* reported below */ }
-  expect("export: valid JSON for one project, decisions nested in the ticket", parsed !== null && parsed.tickets.length === 3 && parsed.tickets[0].decisions.length === 3, exported.text.slice(0, 300));
+  expect("export: a folder name finds its project; decisions nested in the ticket, which carries its key", parsed !== null && parsed.tickets.length === 3 && parsed.tickets[0].decisions.length === 3 && parsed.tickets[0].key === id, exported.text.slice(0, 300));
 
   const site = path.join(TMP, "manual-site"); // not the folder the tool keeps up to date by itself
   const r = tool(["report", "--out", site]);
   const index = path.join(site, "index.html");
-  const page = path.join(site, `ticket-${id}.html`);
-  expect("report: board page and one page per ticket", r.code === 0 && fs.existsSync(index) && fs.existsSync(page) && fs.existsSync(path.join(site, `ticket-${idBlog}.html`)), r.text);
-  if (fs.existsSync(index) && fs.existsSync(page)) {
-    const board = fs.readFileSync(index, "utf8");
-    const detail = fs.readFileSync(page, "utf8");
+  expect("report: one page, one data file and one stamp file, nothing per ticket", r.code === 0 && fs.existsSync(site) && fs.readdirSync(site).sort().join(",") === "data.js,index.html,stamp.js", r.text);
+  if (fs.existsSync(index)) {
+    const shell = fs.readFileSync(index, "utf8");
+    const data = loadData(site);
+    const board = data.filters + data.board;
+    const view = data.tickets[id];
+    const detail = view.body;
     const bodyOf = (html) => html.slice(html.indexOf("<body"));
-    for (const [label, target] of [["board", index], ["ticket", page]]) {
-      const check = spawnSync(process.execPath, [DOC_TOOLS, "check", target], { encoding: "utf8" });
-      expect(`report: ${label} page passes doc-tools check`, check.status === 0, (check.stdout || "") + (check.stderr || ""));
-    }
-    expect("report: board cards link to their ticket page and carry the project for filtering", board.includes(`href="ticket-${id}.html"`) && board.includes('data-project="hris-demo"') && board.includes('data-project="blog-pribadi"'));
+    const check = spawnSync(process.execPath, [DOC_TOOLS, "check", index], { encoding: "utf8" });
+    expect("report: the page passes doc-tools check", check.status === 0, (check.stdout || "") + (check.stderr || ""));
+    expect("report: every ticket is in the data under its key", Object.keys(data.tickets).sort().join(",") === [id, idIdea, idNext, idBlog].sort().join(","), Object.keys(data.tickets).join(","));
+    expect("report: board cards open their ticket by key and carry the project for filtering", board.includes(`href="#${id}"`) && board.includes('data-project="kantor-hris-demo"') && board.includes('data-project="personal-blog-pribadi"'));
     expect("report: the board does not carry ticket details", !board.includes("sengaja panjang"));
     const columns = [...board.matchAll(/<h3>([^<]+) <span class="pill muted" data-count>(\d+)<\/span>/g)].map((m) => `${m[1]}=${m[2]}`).join(", ");
     expect("report: seven columns, cancelled after done, each ticket in the right one", columns === "Idea=0, Waiting for you=0, Ready=2, In progress=0, Needs your check=0, Done=1, Cancelled=1", columns);
     expect("report: cards carry created and updated dates, shown and as data for the range filter",
-      new RegExp(`href="ticket-${id}\\.html"[^>]*data-created="2026-11-10"[^>]*data-updated="2026-11-14"`).test(board) && /Created 10 Nov 2026/.test(board) && /Updated 14 Nov 2026/.test(board), board.slice(board.indexOf("class=\"board\""), board.indexOf("class=\"board\"") + 900));
+      new RegExp(`href="#${id}"[^>]*data-created="2026-11-10"[^>]*data-updated="2026-11-14"`).test(board) && /Created 10 Nov 2026/.test(board) && /Updated 14 Nov 2026/.test(board));
     expect("report: the board has a date range picker for created or updated", /data-date-field="created"/.test(board) && /data-date-field="updated"/.test(board) && /<dialog[^>]*data-range/.test(board) && /data-range-preset="last7"/.test(board));
     const filterRow = (/<div class="filters"[^]*?<dialog/.exec(board) || [""])[0];
     expect("report: project picker, title search and date range sit in one filter row; the date field lives in the dialog",
@@ -291,43 +300,46 @@ let idIdea = null, idNext = null;
       && filterRow.indexOf("data-project-picker") < filterRow.indexOf("data-title-search") && (board.match(/class="filters"/g) || []).length === 1, filterRow.slice(0, 400));
     expect("report: the filter row offers a sort field and a direction", !/<select/.test(filterRow) && /data-sort-picker/.test(filterRow) && ["updated", "created", "title", "number"].every((v) => filterRow.includes(`role="option" data-sort-option="${v}"`)) && /data-sort-dir/.test(filterRow));
     expect("report: every column can show more and less, and cards carry what sorting needs", (board.match(/data-more hidden/g) || []).length === 7 && (board.match(/data-less hidden/g) || []).length === 7
-      && new RegExp(`data-id="${id}" data-ct="\\d+" data-ut="\\d+"`).test(board) && !/Showing the/.test(board));
-    expect("report: the project picker lists every project as an option", /role="option"[^>]*data-board-filter="hris-demo"/.test(board) && /role="option"[^>]*data-board-filter="blog-pribadi"/.test(board));
-    expect("report: the Filters and Board headings are kept for screen readers only", (board.match(/<section id="[a-z]+" class="bare">/g) || []).length === 2 && /section\.bare > h2\s*{[^}]*clip-path/.test(board));
+      && new RegExp(`data-key="${id}" data-num="1" data-ct="\\d+" data-ut="\\d+"`).test(board));
+    expect("report: the project picker lists every project by key, labelled with group and folder", /role="option"[^>]*data-board-filter="kantor-hris-demo"[^>]*>kantor \/ hris-demo</.test(board) && /role="option"[^>]*data-board-filter="personal-blog-pribadi"/.test(board));
+    expect("report: the page's headings are kept for screen readers only", (shell.match(/<section id="[a-z]+" class="bare"( hidden)?>/g) || []).length === 3 && /section\.bare > h2\s*{[^}]*clip-path/.test(shell));
     expect("report: cards show the ticket type", /<span class="pill solid">feature<\/span>/.test(board));
-    expect("report: the board scrolls inside its own box instead of stacking, with pinned column headings", /\.board\s*{[^}]*overflow:\s*auto[^}]*min-height:\s*0/.test(board) && /\.board h3\s*{[^}]*position:\s*sticky/.test(board) && !/class="grid-3"/.test(bodyOf(board)));
+    expect("report: the board scrolls inside its own box instead of stacking, with pinned column headings", /\.board\s*{[^}]*overflow:\s*auto[^}]*min-height:\s*0/.test(shell) && /\.board h3\s*{[^}]*position:\s*sticky/.test(shell) && !/class="grid-3"/.test(board));
     expect("report: board card marks a ticket that was sent back", /Sent back 1×/.test(board));
-    expect("report: ticket page has summary, decisions, sources and history", /id="summary"/.test(detail) && /id="decisions"/.test(detail) && /id="sources"/.test(detail) && /id="history"/.test(detail)
+    expect("report: ticket view has summary, decisions, sources and history", /id="summary"/.test(detail) && /id="decisions"/.test(detail) && /id="sources"/.test(detail) && /id="history"/.test(detail)
       && detail.includes("sengaja panjang dan lengkap") && detail.includes("ReimburseService.php:14") && /Sent back to In progress/.test(detail));
-    expect("report: neither page has a footer line", [board, detail].every((html) => !/<footer class="doc"/.test(html) && !/Generated \d/.test(bodyOf(html))));
-    expect("report: ticket header shows the type", /<b>Type<\/b> feature/.test(detail));
-    const follow = fs.readFileSync(path.join(site, `ticket-${idNext}.html`), "utf8");
-    expect("report: a progress note appears in the ticket history", /Progress note/.test(follow) && /Migrasi kolom batas sudah ditulis/.test(follow));
-    expect("report: ticket page shows when it was created and updated", /<b>Created<\/b> 10 Nov 2026/.test(detail) && /<b>Updated<\/b> 14 Nov 2026/.test(detail));
-    expect("report: ticket page links back to the board and on to its follow-up", detail.includes('href="index.html"') && detail.includes(`href="ticket-${idNext}.html"`));
+    expect("report: the page has no footer line", !/<footer class="doc"/.test(shell) && !/Generated \d/.test(bodyOf(shell)));
+    expect("report: ticket header shows its key, the type, and when it was created and updated", view.eyebrow.startsWith(`Ticket ${id} · kantor / hris-demo`) && /<b>Type<\/b> feature/.test(view.meta) && /<b>Created<\/b> 10 Nov 2026/.test(view.meta) && /<b>Updated<\/b> 14 Nov 2026/.test(view.meta));
+    expect("report: a progress note appears in the ticket history", /Progress note/.test(data.tickets[idNext].body) && /Migrasi kolom batas sudah ditulis/.test(data.tickets[idNext].body));
+    expect("report: the page has a way back to the board, and a ticket links on to its follow-up", /<p class="appbar" data-slot="appbar" hidden><a href="#board">/.test(shell) && detail.includes(`href="#${idNext}"`));
     expect("report: owner's words are escaped, not interpreted", detail.includes("&lt;b&gt;ya&lt;/b&gt;") && !detail.includes("<b>ya</b>"));
     expect("report: shows who decided", /Decided by you/.test(detail) && /Decided by the agent/.test(detail));
-    expect("report: no sidebar, no cover text, theme switch inside the header",
-      [board, detail].every((html) => /nav\.toc[^}]*display:\s*none/.test(html) && !/class="lede"|class="sub"|class="toolbar"/.test(bodyOf(html)) && /<header class="doc">[^]*data-theme-set="dark"[^]*<\/header>/.test(html))
-      && !/class="eyebrow"|class="meta"/.test(bodyOf(board)) && /class="eyebrow">Ticket #/.test(detail));
-    const visible = (html) => bodyOf(html).replace(/<script[^]*?<\/script>/g, "").replace(/<blockquote>[^]*?<\/blockquote>/g, "");
-    expect("report: the pages speak English", [board, detail].every((html) => /<html[^>]*lang="en"/.test(html) && !/Terang|Gelap|Sistem|Ringkasan|Keputusan|Daftar|Selesai|Riwayat|Tiket|Papan|Diputuskan/.test(visible(html))), (/(Terang|Gelap|Sistem|Ringkasan|Keputusan|Daftar|Selesai|Riwayat|Tiket|Papan|Diputuskan)[^<]{0,40}/.exec(visible(board) + visible(detail)) || [])[0]);
-    // Only what changed is written again; with thousands of tickets a full rebuild on every change would be slow.
-    const stamp = (name) => fs.statSync(path.join(site, name)).mtimeMs;
-    const before = { changed: stamp(`ticket-${idIdea}.html`), same: stamp(`ticket-${idBlog}.html`), older: stamp(`ticket-${id}.html`) };
+    expect("report: no sidebar, no cover text, theme switch inside the header, ticket slots empty until a ticket is open",
+      /nav\.toc[^}]*display:\s*none/.test(shell) && !/class="lede"|class="sub"|class="toolbar"/.test(bodyOf(shell)) && /<header class="doc">[^]*data-theme-set="dark"[^]*<\/header>/.test(shell)
+      && /<p class="eyebrow" data-slot="eyebrow" hidden><\/p>/.test(shell) && /<ul class="meta" data-slot="meta" hidden><\/ul>/.test(shell));
+    const visible = (html) => html.replace(/<script[^]*?<\/script>/g, "").replace(/<blockquote>[^]*?<\/blockquote>/g, "");
+    const shown = visible(bodyOf(shell)) + visible(board) + visible(detail);
+    expect("report: the page speaks English", /<html[^>]*lang="en"/.test(shell) && !/Terang|Gelap|Sistem|Ringkasan|Keputusan|Daftar|Selesai|Riwayat|Tiket|Papan|Diputuskan/.test(shown), (/(Terang|Gelap|Sistem|Ringkasan|Keputusan|Daftar|Selesai|Riwayat|Tiket|Papan|Diputuskan)[^<]{0,40}/.exec(shown) || [])[0]);
+
+    // The page only changes with the tool; the data is rewritten every time.
+    const mark = fs.statSync(index).mtimeMs;
     const again = tool(["report", "--out", site]);
-    expect("report: with nothing changed, no ticket page is rewritten", again.code === 0 && /0 ticket page\(s\) written, 4 unchanged/.test(again.text) && stamp(`ticket-${idBlog}.html`) === before.same, again.text);
-    tool(["note", idIdea, "--text", "Kolom ekspor sudah disepakati dengan keuangan. Berikutnya: contoh berkas."], { now: "2026-11-16T09:00:00+07:00" });
-    const one = tool(["report", "--out", site]);
-    expect("report: after one ticket changes, only its page is rewritten", /1 ticket page\(s\) written, 3 unchanged/.test(one.text) && stamp(`ticket-${idIdea}.html`) > before.changed && stamp(`ticket-${idBlog}.html`) === before.same
-      && fs.readFileSync(path.join(site, `ticket-${idIdea}.html`), "utf8").includes("Kolom ekspor sudah disepakati") && /Updated 16 Nov 2026/.test(fs.readFileSync(index, "utf8")), one.text);
-    const followUp = tool(["add", "--file", file({ ...ticket(), title: "Batas klaim untuk karyawan kontrak", decisions: [], follows: Number(id) }), "--dir", HRIS]);
-    const linked = tool(["report", "--out", site]);
-    const newId = (/#(\d+)/.exec(followUp.text) || [])[1];
-    expect("report: a new follow-up also rewrites the ticket it continues, whose page gains the link", /2 ticket page\(s\) written, 3 unchanged/.test(linked.text) && stamp(`ticket-${id}.html`) > before.older && fs.readFileSync(path.join(site, `ticket-${id}.html`), "utf8").includes(`href="ticket-${newId}.html"`), linked.text);
-    const all = tool(["report", "--out", site, "--all"]);
-    expect("report --all: rewrites every page", /5 ticket page\(s\) written, 0 unchanged/.test(all.text) && stamp(`ticket-${idBlog}.html`) > before.same, all.text);
-    fs.writeFileSync(path.join(site, "ticket-1.html"), "<p>not ours</p>");
+    expect("report: the page itself is not rewritten when only the data changes", again.code === 0 && /page unchanged/.test(again.text) && fs.statSync(index).mtimeMs === mark, again.text);
+    const full = tool(["report", "--out", site, "--all"]);
+    expect("report --all: rewrites the page too", /page written/.test(full.text) && fs.statSync(index).mtimeMs > mark, full.text);
+
+    const before = loadData(site).stamps;
+    const followUp = tool(["add", "--file", file({ ...ticket(), title: "Batas klaim untuk karyawan kontrak", decisions: [], follows: numOf(id) }), "--dir", HRIS]);
+    const newKey = keyOf(followUp.text);
+    tool(["report", "--out", site]);
+    const after = loadData(site);
+    expect("report: a new follow-up changes the stamp of the ticket it continues, which now links to it", newKey === "kantor-hris-demo-4" && after.stamps.tickets[id] !== before.tickets[id] && after.stamps.tickets[idBlog] === before.tickets[idBlog] && after.tickets[id].body.includes(`href="#${newKey}"`), newKey);
+
+    fs.writeFileSync(path.join(site, "ticket-1.html"), "<p>a page from before</p><!-- board-tools-report -->");
+    fs.writeFileSync(path.join(site, "ticket-2.html"), "<p>someone else's file</p>");
+    tool(["report", "--out", site]);
+    expect("report: pages left from one-page-per-ticket are cleared, other files are left alone", !fs.existsSync(path.join(site, "ticket-1.html")) && fs.existsSync(path.join(site, "ticket-2.html")));
+    fs.writeFileSync(path.join(site, "data.js"), "// not ours");
     const foreign = tool(["report", "--out", site]);
     expect("report: refuses to overwrite a file it did not write", foreign.code === 2 && /did not write/.test(foreign.text), foreign.text);
   }
@@ -354,7 +366,7 @@ let idIdea = null, idNext = null;
     expect(`add rejects: ${name}`, r.code === 1 && pattern.test(r.text), r.text);
   }
   const added = tool(["add", "--file", file(full()), "--dir", BLOG]);
-  const x = (/#(\d+)/.exec(added.text) || [])[1];
+  const x = keyOf(added.text);
   const shown = tool(["show", x]);
   expect("show: out of scope, not yet verified and links are part of the ticket", added.code === 0 && /^Out of scope:\n- Ekspor ke PDF/m.test(shown.text) && /^Not yet verified:\nU1 \(open\): Pustaka Excel/m.test(shown.text) && /How to check: Jalankan ekspor/.test(shown.text) && /^Links:\nL1: PRD ekspor klaim \| docs\/claims-export-prd\.html/m.test(shown.text), shown.text);
   expect("list: a ticket with an open guess says so", /1 unverified/.test(tool(["list", "--project", "blog-pribadi"]).text));
@@ -378,39 +390,33 @@ let idIdea = null, idNext = null;
 
   const site2 = path.join(TMP, "site2");
   tool(["report", "--out", site2]);
-  const page = fs.readFileSync(path.join(site2, `ticket-${x}.html`), "utf8");
+  const page = loadData(site2).tickets[x].body;
   const order = [...page.matchAll(/<section id="([a-z-]+)"/g)].map((m) => m[1]).join(",");
   expect("report: the ticket page shows the three sections in a fixed order", order === "summary,decisions,done-when,out-of-scope,unverified,sources,links,history", order);
   expect("report: a checked guess shows its result, and links are listed", /Checked/.test(page) && page.includes("memori puncak 180 MB") && page.includes("Laporan swipe ekspor") && page.includes(".swipe/reports/2026-11-17-export.html"));
-  const plain = fs.readFileSync(path.join(site2, `ticket-${id}.html`), "utf8");
+  const plain = loadData(site2).tickets[id].body;
   expect("report: a ticket without them shows no empty sections", !/id="out-of-scope"|id="unverified"|id="links"/.test(plain));
   const open = tool(["add", "--file", file({ ...full(), title: "Impor karyawan dari Excel" }), "--dir", BLOG]);
   tool(["report", "--out", site2]);
-  expect("report: the board card marks a ticket with an open guess", open.code === 0 && /1 to verify/.test(fs.readFileSync(path.join(site2, "index.html"), "utf8")));
+  expect("report: the board card marks a ticket with an open guess", open.code === 0 && /1 to verify/.test(loadData(site2).board));
 }
 
-// --- the pages follow the data by themselves ------------------------------------------------------
+// --- the page follows the data by itself -----------------------------------------------------------
 {
-  // The pages live in a "site" folder beside the board file, so a throwaway board never touches the real one.
+  // The page lives in a "site" folder beside the board file, so a throwaway board never touches the real one.
   const auto = path.join(TMP, "site");
-  const read = (name) => fs.readFileSync(path.join(auto, name), "utf8");
-  expect("auto: every write so far kept the pages beside the board file up to date", fs.existsSync(path.join(auto, "index.html")) && fs.existsSync(path.join(auto, `ticket-${id}.html`)) && fs.existsSync(path.join(auto, "stamp.js")));
-  expect("auto: the write commands stay quiet about it", !/board written|ticket page\(s\)/.test(tool(["note", idNext, "--text", "Catatan untuk memeriksa bahwa halaman ikut berubah sendiri."]).text));
-  expect("auto: a change shows on the ticket page without running report", read(`ticket-${idNext}.html`).includes("halaman ikut berubah sendiri"));
-
-  const stampOf = () => read("stamp.js");
-  const boardStamp = (text) => (/"board":"([^"]+)"/.exec(text) || [])[1];
-  const pageStamp = (html) => (/<meta name="board-stamp" content="([^"]+)">/.exec(html) || [])[1];
-  const before = stampOf();
-  expect("auto: each page carries the stamp the stamp file holds for it", boardStamp(before) && pageStamp(read("index.html")) === boardStamp(before) && before.includes(JSON.stringify(pageStamp(read(`ticket-${id}.html`)))) && /<meta name="board-page" content="board">/.test(read("index.html")) && new RegExp(`<meta name="board-page" content="${id}">`).test(read(`ticket-${id}.html`)));
-  const untouched = pageStamp(read(`ticket-${id}.html`));
+  const stamps = () => payload(fs.readFileSync(path.join(auto, "stamp.js"), "utf8"), "__boardStamp");
+  expect("auto: every write so far kept the page and its data beside the board file", ["index.html", "data.js", "stamp.js"].every((name) => fs.existsSync(path.join(auto, name))));
+  expect("auto: the write commands stay quiet about it", !/board written/.test(tool(["note", idNext, "--text", "Catatan untuk memeriksa bahwa halaman ikut berubah sendiri."]).text));
+  expect("auto: a change shows in the data without running report", loadData(auto).tickets[idNext].body.includes("halaman ikut berubah sendiri"));
+  const before = stamps();
+  expect("auto: the stamp file holds the stamps the data was built with", JSON.stringify(before) === JSON.stringify(loadData(auto).stamps));
   tool(["note", idNext, "--text", "Catatan kedua supaya penanda papan berubah lagi."], { now: "2026-11-20T09:00:00+07:00" });
-  expect("auto: a change moves the board's stamp and that ticket's, and leaves other tickets' alone", boardStamp(stampOf()) !== boardStamp(before) && pageStamp(read(`ticket-${id}.html`)) === untouched);
-  expect("auto: reading commands do not rebuild anything", (() => { const mark = fs.statSync(path.join(auto, "index.html")).mtimeMs; tool(["list"]); tool(["show", id]); tool(["search", "klaim"]); return fs.statSync(path.join(auto, "index.html")).mtimeMs === mark; })());
-  for (const page of ["index.html", `ticket-${id}.html`]) {
-    const check = spawnSync(process.execPath, [DOC_TOOLS, "check", path.join(auto, page)], { encoding: "utf8" });
-    expect(`auto: ${page} still passes doc-tools check with the watcher in it`, check.status === 0, (check.stdout || "") + (check.stderr || ""));
-  }
+  const after = stamps();
+  expect("auto: a change moves the board's stamp and that ticket's, and leaves other tickets' alone", after.board !== before.board && after.tickets[idNext] !== before.tickets[idNext] && after.tickets[id] === before.tickets[id]);
+  expect("auto: reading commands do not rewrite anything", (() => { const mark = fs.statSync(path.join(auto, "data.js")).mtimeMs; tool(["list"]); tool(["show", id]); tool(["search", "klaim"]); return fs.statSync(path.join(auto, "data.js")).mtimeMs === mark; })());
+  const check = spawnSync(process.execPath, [DOC_TOOLS, "check", path.join(auto, "index.html")], { encoding: "utf8" });
+  expect("auto: the page passes doc-tools check with the view and watch scripts in it", check.status === 0, (check.stdout || "") + (check.stderr || ""));
   const plain = tool(["report"]);
   expect("report: without --out it rebuilds the folder beside the board file", plain.code === 0 && plain.text.includes(auto), plain.text);
 
@@ -420,7 +426,49 @@ let idIdea = null, idNext = null;
   fs.writeFileSync(path.join(brokenDir, "site"), "a file where the folder should be");
   const out = spawnSync(process.execPath, ["--no-warnings", TOOL, "add", "--file", file(ticket()), "--dir", HRIS], { encoding: "utf8", env: { ...process.env, AETHERIS_BOARD: path.join(brokenDir, "board.db") } });
   const listed = spawnSync(process.execPath, ["--no-warnings", TOOL, "list"], { encoding: "utf8", env: { ...process.env, AETHERIS_BOARD: path.join(brokenDir, "board.db") } });
-  expect("auto: when the pages cannot be written the ticket is still saved, with a warning", out.status === 0 && /added #1/.test(out.stdout) && /pages were not updated/.test(out.stderr) && /^#1\b/m.test(listed.stdout), out.stdout + out.stderr);
+  expect("auto: when the pages cannot be written the ticket is still saved, with a warning", out.status === 0 && /added kantor-hris-demo-1 /.test(out.stdout) && /pages were not updated/.test(out.stderr) && /^kantor-hris-demo-1\b/m.test(listed.stdout), out.stdout + out.stderr);
+}
+
+// --- one number per project, and boards from before -------------------------------------------------
+{
+  const officeApi = path.join(TMP, "kantor", "api");
+  const ownApi = path.join(TMP, "personal", "api");
+  fs.mkdirSync(officeApi, { recursive: true });
+  fs.mkdirSync(ownApi, { recursive: true });
+  const a = keyOf(tool(["add", "--file", file({ ...ticket(), decisions: [] }), "--dir", officeApi]).text);
+  const b = keyOf(tool(["add", "--file", file({ ...ticket(), decisions: [] }), "--dir", ownApi]).text);
+  expect("keys: two folders with the same name in different groups are two projects, each counting from 1", a === "kantor-api-1" && b === "personal-api-1", `${a} ${b}`);
+  const vague = tool(["list", "--project", "api"]);
+  expect("list: a folder name two projects share is refused, naming both keys", vague.code === 2 && /kantor-api/.test(vague.text) && /personal-api/.test(vague.text), vague.text);
+  expect("list: the full project key picks one", count(tool(["list", "--project", "kantor-api"]).text) === 1);
+
+  // A board written by the earlier version: one number for the whole board, the folder name as the project key.
+  const oldDir = path.join(TMP, "old-board");
+  fs.mkdirSync(path.join(oldDir, "site"), { recursive: true });
+  const { DatabaseSync } = await import("node:sqlite");
+  const old = new DatabaseSync(path.join(oldDir, "board.db"));
+  old.exec(`CREATE TABLE projects (key TEXT PRIMARY KEY, grp TEXT NOT NULL, dir TEXT NOT NULL, created_at TEXT NOT NULL);
+    CREATE TABLE tickets (id INTEGER PRIMARY KEY AUTOINCREMENT, project TEXT NOT NULL REFERENCES projects(key), title TEXT NOT NULL, status TEXT NOT NULL,
+      unanswered INTEGER NOT NULL DEFAULT 0, unseen INTEGER NOT NULL DEFAULT 0, follows INTEGER REFERENCES tickets(id), branch TEXT, type TEXT,
+      data TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);`);
+  const at = "2026-11-01T09:00:00+07:00";
+  const body = (extra) => JSON.stringify({ summary: "Tiket dari papan versi lama yang harus tetap terbaca sesudah pindah ke kunci per proyek.", done_when: ["Tetap terbaca."], sources: [{ claim: "Contoh", source: "uji" }], decisions: [], approved_by: "user", user_words: "gass", type: "feature", history: [{ at, to: "ready" }], ...extra });
+  old.prepare("INSERT INTO projects VALUES (?, ?, ?, ?)").run("legacy", "kantor", oldDir, at);
+  old.prepare("INSERT INTO projects VALUES (?, ?, ?, ?)").run("other", "personal", oldDir, at);
+  const put = old.prepare("INSERT INTO tickets (id, project, title, status, follows, data, created_at, updated_at) VALUES (?, ?, ?, 'ready', ?, ?, ?, ?)");
+  put.run(5, "legacy", "Tiket lama pertama di proyek legacy", null, body({}), at, at);
+  put.run(7, "other", "Tiket lama di proyek lain", null, body({}), at, at);
+  put.run(9, "legacy", "Tiket lama yang melanjutkan tiket pertama", 5, body({ follows: 5 }), at, at);
+  old.close();
+  fs.writeFileSync(path.join(oldDir, "site", "ticket-5.html"), "<p>a page from before</p><!-- board-tools-report -->");
+  const env = { ...process.env, AETHERIS_BOARD: path.join(oldDir, "board.db"), BOARD_NOW: "2026-11-21T09:00:00+07:00" };
+  const run = (args) => { const o = spawnSync(process.execPath, ["--no-warnings", TOOL, ...args], { encoding: "utf8", env }); return { code: o.status, text: (o.stdout || "") + (o.stderr || "") }; };
+  const listed = run(["list"]);
+  expect("migration: an older board gets keys with the parent folder and numbers per project, in creation order", /^kantor-legacy-1 /m.test(listed.text) && /^kantor-legacy-2 /m.test(listed.text) && /^personal-other-1 /m.test(listed.text) && count(listed.text) === 3, listed.text);
+  expect("migration: a follow-up still points at the ticket it continues", /^Follows: kantor-legacy-1$/m.test(run(["show", "kantor-legacy-2"]).text));
+  run(["note", "kantor-legacy-1", "--text", "Catatan sesudah papan lama pindah ke kunci per proyek."]);
+  expect("migration: the first write builds the one page and clears the old per-ticket pages", fs.existsSync(path.join(oldDir, "site", "data.js")) && !fs.existsSync(path.join(oldDir, "site", "ticket-5.html")));
+  expect("migration: running again changes nothing", run(["list"]).text === listed.text);
 }
 
 fs.rmSync(TMP, { recursive: true, force: true });

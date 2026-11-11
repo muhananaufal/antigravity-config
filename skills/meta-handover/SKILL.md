@@ -157,7 +157,7 @@ Sesi yang bergeser tipe (debugging yang berakhir jadi perancangan fitur) memakai
 | Langkah berikutnya | Aksi, prasyarat, ukuran (kecil, sedang, besar), urut prioritas. Aksi pertama cukup rinci untuk langsung dikerjakan. | Urutan dan waktu, atau tabel |
 | Keputusan yang menunggu user | Pertanyaan, dua pilihan konkret, bawaan bila tidak dijawab | Pilihan, keputusan |
 | Koreksi dari user di sesi ini | Apa yang dikoreksi dan aturan yang lahir darinya | Callout |
-| Rujukan | Berkas, dokumen, dan perintah penting. Pekerjaan yang punya tiket papan disebut dengan **nomor tiketnya**; isi tiket (keputusan, kriteria selesai) tidak disalin ulang ke handover, dan handover ini ditautkan ke tiketnya (`skills/meta-board/SKILL.md` §1). | Daftar sumber |
+| Rujukan | Berkas, dokumen, dan perintah penting. Pekerjaan yang punya tiket papan disebut dengan **kunci tiketnya** (mis. `devivace-altrms-3`); isi tiket (keputusan, kriteria selesai) tidak disalin ulang ke handover, dan handover ini ditautkan ke tiketnya (`skills/meta-board/SKILL.md` §1). | Daftar sumber |
 
 ---
 

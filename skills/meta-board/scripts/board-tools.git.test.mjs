@@ -70,7 +70,7 @@ const ticket = (extra = {}) => ({
   branch: "feature/claim-limit",
   ...extra,
 });
-const idOf = (result) => (/#(\d+)/.exec(result.text) || [])[1];
+const idOf = (result) => (/added ([a-z0-9][a-z0-9-]*-\d+) /.exec(result.text) || [])[1];
 
 const SHOP = makeRepo("shop");
 
@@ -90,10 +90,10 @@ let id = null;
   const shown = tool(["show", id]);
   expect("add: branch stored and type derived from its prefix", ok.code === 0 && /^Branch: feature\/claim-limit$/m.test(shown.text) && /^Type: feature$/m.test(shown.text), ok.text + shown.text);
   const twin = tool(["add", "--file", file(ticket({ title: "Another ticket on the same branch" })), "--dir", SHOP]);
-  expect("add: two open tickets cannot share a branch", twin.code === 1 && new RegExp(`#${id}`).test(twin.text) && /same branch/.test(twin.text), twin.text);
+  expect("add: two open tickets cannot share a branch", twin.code === 1 && new RegExp(`${id}\\b`).test(twin.text) && /same branch/.test(twin.text), twin.text);
   const typed = tool(["list", "--type", "feature"]);
   const other = tool(["list", "--type", "fix"]);
-  expect("list: filters by type", /^#\d+/m.test(typed.text) && !/^#\d+/m.test(other.text), typed.text + other.text);
+  expect("list: filters by type", /^\S+-\d+ {2}/m.test(typed.text) && !/^\S+-\d+ {2}/m.test(other.text), typed.text + other.text);
 }
 
 // --- work starts on the ticket's branch ----------------------------------------------------------
@@ -181,15 +181,16 @@ const hookFile = path.join(SHOP, ".git", "hooks", "pre-commit");
   const again = tool(["merged", id, "--into", "main"]);
   expect("merged: the same branch is recorded once", again.code === 1 && /already/.test(again.text), again.text);
   const open = tool(["list", "--status", "ready", "--project", "shop"]);
-  const openId = (/^#(\d+)/m.exec(open.text) || [])[1];
+  const openId = (/^(\S+-\d+) {2}/m.exec(open.text) || [])[1];
   const tooSoon = tool(["merged", openId, "--into", "main"]);
   expect("merged: only work that was handed over can be recorded as merged", tooSoon.code === 1 && /review or done/.test(tooSoon.text), tooSoon.text);
 
   const site = path.join(TMP, "site-merged");
   tool(["report", "--out", site]);
-  const page = fs.readFileSync(path.join(site, `ticket-${id}.html`), "utf8");
-  const board = fs.readFileSync(path.join(site, "index.html"), "utf8");
-  expect("merged: the ticket page and the board card both say where the work was merged", /<b>Merged into<\/b> <code>main<\/code>/.test(page) && /Merged into main/.test(page) && /Merged into main<\/span>/.test(board));
+  const text = fs.readFileSync(path.join(site, "data.js"), "utf8");
+  const data = JSON.parse(text.slice(text.indexOf("__boardData(", text.indexOf("&&")) + "__boardData(".length, text.lastIndexOf(");")));
+  const view = data.tickets[id];
+  expect("merged: the ticket view and the board card both say where the work was merged", /<b>Merged into<\/b> <code>main<\/code>/.test(view.meta) && /Merged into main/.test(view.body) && /Merged into main<\/span>/.test(data.board));
   git(SHOP, ["checkout", "-q", "feature/claim-limit"]);
 }
 

@@ -47,7 +47,7 @@ function add(project, title, at, extra = {}) {
 add("alpha", "Export claims to Excel", "2026-11-02T09:00:00+07:00");
 add("alpha", "Claim limit per month", "2026-11-05T09:00:00+07:00");
 add("beta", "Excel import for employees", "2026-11-09T09:00:00+07:00");
-tool(["set", "2", "--status", "doing"], "2026-11-20T09:00:00+07:00");
+tool(["set", "work-alpha-2", "--status", "doing"], "2026-11-20T09:00:00+07:00");
 const site = path.join(TMP, "site");
 tool(["report", "--out", site], "2026-11-21T09:00:00+07:00");
 
@@ -70,7 +70,11 @@ const browser = await launch();
 try {
   await browser.viewport(1280, 900);
   await browser.colorScheme("light");
-  await browser.open(path.join(site, "index.html"));
+  // The page draws itself from data.js after loading, so a check waits until the view is there.
+  const drawn = async (probe) => { for (let i = 0; i < 80; i++) { if (await browser.evaluate(probe).catch(() => false)) return true; await sleep(100); } return false; };
+  const openBoard = async (file) => { await browser.open(file); await drawn("Boolean(window.__board) && Boolean(document.querySelector('.board'))"); };
+  const openTicket = async (dir, key) => { await browser.open(path.join(dir, "index.html")); await drawn("Boolean(window.__board)"); await browser.evaluate(`location.hash = ${JSON.stringify("#" + key)}`); await drawn(`document.body.classList.contains("view-ticket")`); };
+  await openBoard(path.join(site, "index.html"));
   const visible = () => browser.evaluate(`[...document.querySelectorAll("a.ticket")].filter((a) => !a.hidden).map((a) => a.querySelector("h4").textContent.split(" · ")[0]).sort().join(",")`);
   const click = (selector) => browser.evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`);
   const key = (name) => browser.evaluate(`document.activeElement.dispatchEvent(new KeyboardEvent("keydown", { key: ${JSON.stringify(name)}, bubbles: true, cancelable: true }))`);
@@ -81,7 +85,7 @@ try {
     await browser.screenshot(path.join(SHOTS, `${name}.png`), { x: 0, y: 0, ...size });
   };
 
-  report("all three tickets show at first", (await visible()) === "#1,#2,#3", await visible());
+  report("all three tickets show at first", (await visible()) === "work-alpha-1,work-alpha-2,work-beta-1", await visible());
   await shot("board-1280");
 
   // Sorting: the Ready column holds #1 (2 Nov, "Export claims to Excel") and #3 (9 Nov, "Excel import for employees").
@@ -100,7 +104,7 @@ try {
   await sortBy("created");
   await click("[data-sort-dir]");
   report("sorting by created date, ascending", (await ready()) === "1,3", await ready());
-  await browser.open(path.join(site, "index.html"));
+  await openBoard(path.join(site, "index.html"));
   report("the chosen sort survives a reload", (await ready()) === "1,3" && (await sortNow()) === "created|Sort: created", await ready());
   await sortBy("updated");
   await click("[data-sort-dir]");
@@ -124,13 +128,13 @@ try {
   report("no match says so", (await listed()) === "" && !(await browser.evaluate(`document.querySelector("[data-project-none]").hidden`)));
   await typeInto("[data-project-search]", "bet");
   await key("Enter");
-  report("Enter picks the first match and closes the list", (await visible()) === "#3" && (await browser.evaluate(`document.querySelector("[data-project-panel]").hidden`)) && /work \/ beta/.test(await browser.evaluate(`document.querySelector("[data-project-open]").textContent`)), await visible());
+  report("Enter picks the first match and closes the list", (await visible()) === "work-beta-1" && (await browser.evaluate(`document.querySelector("[data-project-panel]").hidden`)) && /work \/ beta/.test(await browser.evaluate(`document.querySelector("[data-project-open]").textContent`)), await visible());
   await click("[data-project-open]");
   await key("ArrowDown");
   await key("ArrowDown");
-  report("arrow keys walk the options", (await browser.evaluate(`document.activeElement.getAttribute("data-board-filter")`)) === "alpha");
+  report("arrow keys walk the options", (await browser.evaluate(`document.activeElement.getAttribute("data-board-filter")`)) === "work-alpha");
   await key("Escape");
-  report("Escape closes without changing the choice", (await browser.evaluate(`document.querySelector("[data-project-panel]").hidden`)) && (await visible()) === "#3", await visible());
+  report("Escape closes without changing the choice", (await browser.evaluate(`document.querySelector("[data-project-panel]").hidden`)) && (await visible()) === "work-beta-1", await visible());
   await click("[data-project-open]");
   await browser.evaluate(`document.querySelector("h1").click()`);
   report("a click outside closes the list", await browser.evaluate(`document.querySelector("[data-project-panel]").hidden`));
@@ -144,15 +148,15 @@ try {
   report("Escape closes the sort dropdown", await browser.evaluate(`document.querySelector("[data-sort-panel]").hidden`));
   await shot("picker-closed-1280");
 
-  await click('[data-board-filter="alpha"]');
-  report("project filter keeps only that project", (await visible()) === "#1,#2", await visible());
+  await click('[data-board-filter="work-alpha"]');
+  report("project filter keeps only that project", (await visible()) === "work-alpha-1,work-alpha-2", await visible());
   report("column counters follow the filter", (await browser.evaluate(`[...document.querySelectorAll("[data-count]")].reduce((sum, b) => sum + Number(b.textContent), 0)`)) === 2);
   await click('[data-board-filter=""]');
 
   await browser.evaluate(`(() => { const box = document.querySelector("[data-title-search]"); box.value = "excel  EXPORT"; box.dispatchEvent(new Event("input", { bubbles: true })); })()`);
-  report("title search matches every word, any order, any case", (await visible()) === "#1", await visible());
+  report("title search matches every word, any order, any case", (await visible()) === "work-alpha-1", await visible());
   await browser.evaluate(`(() => { const box = document.querySelector("[data-title-search]"); box.value = "excel"; box.dispatchEvent(new Event("input", { bubbles: true })); })()`);
-  report("title search with one word finds both", (await visible()) === "#1,#3", await visible());
+  report("title search with one word finds both", (await visible()) === "work-alpha-1,work-beta-1", await visible());
   await browser.evaluate(`(() => { const box = document.querySelector("[data-title-search]"); box.value = ""; box.dispatchEvent(new Event("input", { bubbles: true })); })()`);
 
   // Date range on the created date: pick 4 Nov, then 6 Nov.
@@ -170,15 +174,15 @@ try {
   const rhythm = await browser.evaluate(`(() => { const d = document.querySelector("dialog.range"); const blocks = [...d.children].map((c) => c.getBoundingClientRect()); const between = blocks.slice(1).map((b, i) => Math.round(b.top - blocks[i].bottom)); const gapOf = (sel) => { const b = [...d.querySelectorAll(sel)].map((el) => el.getBoundingClientRect()); return b.slice(1).map((x, i) => Math.round(x.left - b[i].right)); }; return { between, presets: gapOf("[data-range-preset]"), arrows: gapOf("[data-range-shift]"), actions: gapOf("[data-range-cancel], [data-range-apply]") }; })()`);
   report("the dialog keeps one rhythm between its blocks and between its buttons", rhythm.between.every((gap) => gap === 20) && [...rhythm.presets, ...rhythm.arrows, ...rhythm.actions].every((gap) => gap === 12), rhythm);
   await shot("range-dialog-1280");
-  report("nothing is filtered before Apply", (await visible()) === "#1,#2,#3", await visible());
+  report("nothing is filtered before Apply", (await visible()) === "work-alpha-1,work-alpha-2,work-beta-1", await visible());
   await click("[data-range-apply]");
-  report("created range keeps the ticket created inside it", (await visible()) === "#2", await visible());
+  report("created range keeps the ticket created inside it", (await visible()) === "work-alpha-2", await visible());
   report("the button shows the chosen range", (await browser.evaluate(`document.querySelector("[data-range-open]").textContent`)) === "Created: 4 Nov 2026 – 6 Nov 2026");
 
   // The date the range applies to is chosen in the dialog and takes effect with Apply.
   await click("[data-range-open]");
   await click('[data-date-field="updated"]');
-  report("choosing the updated date changes nothing before Apply", (await visible()) === "#2", await visible());
+  report("choosing the updated date changes nothing before Apply", (await visible()) === "work-alpha-2", await visible());
   await click("[data-range-apply]");
   report("the same range on the updated date hides a ticket updated later", (await visible()) === "", await visible());
   report("the button names the date it filters on", /^Updated: 4 Nov 2026/.test(await browser.evaluate(`document.querySelector("[data-range-open]").textContent`)));
@@ -195,7 +199,7 @@ try {
   await key("PageDown");
   report("PageDown moves one month and keeps the day in view", (await browser.evaluate(`document.activeElement.getAttribute("data-day")`)) === "2026-12-05");
   await click("[data-range-cancel]");
-  report("Cancel leaves the applied range alone", (await visible()) === "#2", await visible());
+  report("Cancel leaves the applied range alone", (await visible()) === "work-alpha-2", await visible());
 
   // Presets, then Clear.
   await click("[data-range-open]");
@@ -203,18 +207,18 @@ try {
   report("a preset fills both ends", await browser.evaluate(`document.querySelectorAll("[data-range-grid] .edge").length >= 1`));
   await click("[data-range-clear]");
   await click("[data-range-apply]");
-  report("Clear then Apply removes the range", (await visible()) === "#1,#2,#3" && /Any date/.test(await browser.evaluate(`document.querySelector("[data-range-open]").textContent`)), await visible());
+  report("Clear then Apply removes the range", (await visible()) === "work-alpha-1,work-alpha-2,work-beta-1" && /Any date/.test(await browser.evaluate(`document.querySelector("[data-range-open]").textContent`)), await visible());
 
   // Filters are remembered across a reload.
-  await click('[data-board-filter="beta"]');
-  await browser.open(path.join(site, "index.html"));
-  report("the chosen project survives a reload", (await visible()) === "#3", await visible());
+  await click('[data-board-filter="work-beta"]');
+  await openBoard(path.join(site, "index.html"));
+  report("the chosen project survives a reload", (await visible()) === "work-beta-1", await visible());
   await click('[data-board-filter=""]');
 
   // Phone width, with the longest labels the row can get: a project chosen and a date range applied.
-  await browser.evaluate(`localStorage.setItem("board-filters", JSON.stringify({ project: "alpha", field: "created", from: "2026-11-01", to: "2026-11-30", title: "" }))`);
+  await browser.evaluate(`localStorage.setItem("board-filters", JSON.stringify({ project: "work-alpha", field: "created", from: "2026-11-01", to: "2026-11-30", title: "" }))`);
   await browser.viewport(390, 800);
-  await browser.open(path.join(site, "index.html"));
+  await openBoard(path.join(site, "index.html"));
   await sleep(150);
   const layout = await browser.evaluate(`(() => { const board = document.querySelector(".board"); const cols = [...board.querySelectorAll("[data-column]")].map((c) => c.getBoundingClientRect()); return { sameRow: cols.length === 7 && cols.every((c) => Math.abs(c.top - cols[0].top) < 2), scrolls: board.scrollWidth > board.clientWidth + 50, pageWide: document.documentElement.scrollWidth <= innerWidth + 1, width: Math.round(cols[0].width) }; })()`);
   report("on a phone the columns sit side by side and the board scrolls sideways, the page does not", layout.sameRow && layout.scrolls && layout.pageWide, layout);
@@ -232,7 +236,7 @@ try {
   // A crowded column shows ten cards and offers the rest in steps.
   await browser.viewport(1280, 900);
   await browser.evaluate(`localStorage.removeItem("board-filters")`);
-  await browser.open(path.join(crowded, "index.html"));
+  await openBoard(path.join(crowded, "index.html"));
   const shownCards = () => browser.evaluate(`[...document.querySelectorAll("a.ticket")].filter((a) => !a.hidden).length`);
   const text = (selector) => browser.evaluate(`(() => { const el = [...document.querySelectorAll(${JSON.stringify(selector)})].find((b) => !b.hidden); return el ? el.textContent : ""; })()`);
   report("a column of 23 shows 10 and counts all 23", (await shownCards()) === 10 && (await browser.evaluate(`[...document.querySelectorAll("[data-count]")].map((b) => b.textContent).join(",")`)).includes("23"), await shownCards());
@@ -262,7 +266,7 @@ try {
   await click("[data-less]:not([hidden])");
 
   await browser.colorScheme("dark");
-  await browser.open(path.join(site, "ticket-2.html"));
+  await openTicket(site, "work-alpha-2");
   report("ticket page shows created and updated dates", /Created\s*5 Nov 2026/.test(await browser.evaluate(`document.querySelector("header.doc").textContent`)) && /Updated\s*20 Nov 2026/.test(await browser.evaluate(`document.querySelector("header.doc").textContent`)));
   await click('[data-theme-set="light"]');
   report("the theme switch works from inside the header", (await browser.evaluate(`document.documentElement.getAttribute("data-theme")`)) === "light");
@@ -276,38 +280,40 @@ try {
   const column = (name) => browser.evaluate(`[...[...document.querySelectorAll("[data-column]")].find((c) => c.querySelector("h3").textContent.startsWith(${JSON.stringify(name)})).querySelectorAll("a.ticket")].map((a) => a.getAttribute("data-id")).sort().join(",")`);
 
   await browser.colorScheme("light");
-  await browser.open(path.join(site, "index.html"));
-  await click('[data-board-filter="alpha"]');
+  await openBoard(path.join(site, "index.html"));
+  await click('[data-board-filter="work-alpha"]');
   await mark();
-  tool(["set", "1", "--status", "doing"], "2026-11-22T09:00:00+07:00");
+  tool(["set", "work-alpha-1", "--status", "doing"], "2026-11-22T09:00:00+07:00");
   const moved = await until(async () => !(await samePage()) && (await column("In progress")) === "1,2", 12);
   report("an open board shows a change by itself within a few seconds", moved, `same page: ${await samePage()}, in progress: ${await column("In progress").catch(() => "?")}`);
-  report("the chosen project filter is still in place after it reloaded itself", (await visible()) === "#1,#2", await visible());
+  report("the chosen project filter is still in place after it reloaded itself", (await visible()) === "work-alpha-1,work-alpha-2", await visible());
 
   await click("[data-range-open]");
   await mark();
-  tool(["note", "1", "--text", "A note written while the date dialog was open on the board."], "2026-11-22T10:00:00+07:00");
+  tool(["note", "work-alpha-1", "--text", "A note written while the date dialog was open on the board."], "2026-11-22T10:00:00+07:00");
   await sleep(7000);
   report("it does not reload under an open dialog", (await samePage()) && (await browser.evaluate(`document.querySelector("dialog[data-range]").open`)));
   await click("[data-range-cancel]");
   report("it catches up once the dialog is closed", await until(async () => !(await samePage()), 12));
+  await drawn("Boolean(document.querySelector('.board'))");
   await click('[data-board-filter=""]');
 
-  await browser.open(path.join(site, "ticket-2.html"));
+  await openTicket(site, "work-alpha-2");
   await mark();
-  tool(["note", "1", "--text", "A change to another ticket must not reload this page."], "2026-11-22T11:00:00+07:00");
+  tool(["note", "work-alpha-1", "--text", "A change to another ticket must not reload this page."], "2026-11-22T11:00:00+07:00");
   await sleep(7000);
   report("a ticket page ignores changes to other tickets", await samePage());
-  tool(["note", "2", "--text", "This note should appear on the open ticket page by itself."], "2026-11-22T12:00:00+07:00");
+  tool(["note", "work-alpha-2", "--text", "This note should appear on the open ticket page by itself."], "2026-11-22T12:00:00+07:00");
   report("an open ticket page shows its own change by itself", await until(async () => (await browser.evaluate(`document.body.textContent.includes("should appear on the open ticket page by itself")`)), 12));
 
   // A long board keeps its place when it reloads itself.
   board = CROWDED_DB;
-  await browser.open(path.join(crowded, "index.html"));
+  await openBoard(path.join(crowded, "index.html"));
   await browser.evaluate(`document.querySelector(".board").scrollTop = 320`);
   await mark();
-  tool(["note", "5", "--text", "A change on the crowded board, to see the scroll position survive."], "2026-11-22T13:00:00+07:00");
+  tool(["note", "work-gamma-5", "--text", "A change on the crowded board, to see the scroll position survive."], "2026-11-22T13:00:00+07:00");
   const reloaded = await until(async () => !(await samePage()), 12);
+  await drawn("Boolean(document.querySelector('.board'))");
   await sleep(300);
   const top = await browser.evaluate(`document.querySelector(".board").scrollTop`);
   report("after reloading itself the board is scrolled where it was", reloaded && Math.abs(top - 320) <= 4, `reloaded: ${reloaded}, scrollTop: ${top}`);
