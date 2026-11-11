@@ -75,6 +75,8 @@ const ticket = () => ({
   sources: [{ claim: "Klaim disimpan per foto struk, bukan per duty", source: "app/Services/ReimburseService.php:88", status: "read in full" }],
   approved_by: "user",
   user_words: "gass",
+  // These folders are not git repositories, so the type is stated instead of derived from a branch.
+  type: "feature",
 });
 
 // --- projects are created on first use -----------------------------------------------------------
@@ -114,6 +116,10 @@ const REJECTED = [
   ["title too short to be read by a person", (t) => { t.title = "klaim"; }, /title/],
   ["a new ticket that starts as done", (t) => { t.status = "done"; }, /reached with "set"/],
   ["a status from the old vocabulary", (t) => { t.status = "siap"; }, /status must be one of/],
+  ["ticket without a type in a folder without git", (t) => { delete t.type; }, /"type"/],
+  ["a type that is not on the list", (t) => { t.type = "urgent"; }, /type must be one of/],
+  ["a branch in a folder that is not a git repository", (t) => { t.branch = "feature/claim-limit"; }, /not a git repository/],
+  ["free-form tags", (t) => { t.tags = ["reimburse"]; }, /tags/],
 ];
 for (const [name, mutate, pattern] of REJECTED) {
   const data = ticket();
@@ -225,7 +231,9 @@ let idIdea = null, idNext = null;
   expect("idea: cannot be worked on before it is approved", skip.code === 1 && /approve/.test(skip.text), skip.text);
   const thin = tool(["approve", idIdea, "--file", file({ approved_by: "user", user_words: "gass" })]);
   expect("approve: refused without acceptance criteria and sources", thin.code === 1 && /done_when/.test(thin.text) && /sources/.test(thin.text), thin.text);
-  const ok = tool(["approve", idIdea, "--file", file({ done_when: ticket().done_when, sources: ticket().sources, approved_by: "user", user_words: "gass yang excel" })]);
+  const untyped = tool(["approve", idIdea, "--file", file({ done_when: ticket().done_when, sources: ticket().sources, approved_by: "user", user_words: "gass yang excel" })]);
+  expect("approve: refused without a type", untyped.code === 1 && /"type"/.test(untyped.text), untyped.text);
+  const ok = tool(["approve", idIdea, "--file", file({ done_when: ticket().done_when, sources: ticket().sources, approved_by: "user", user_words: "gass yang excel", type: "feature" })]);
   const listed = tool(["list", "--status", "ready"]);
   expect("approve: the idea becomes ready work", ok.code === 0 && new RegExp(`^#${idIdea}\\b`, "m").test(listed.text), ok.text + listed.text);
   const twice = tool(["approve", idIdea, "--file", file({ approved_by: "user", user_words: "gass" })]);
@@ -241,6 +249,13 @@ let idIdea = null, idNext = null;
   const ghost = tool(["add", "--file", file({ ...ticket(), follows: 999 }), "--dir", HRIS]);
   expect("follows: refused when the earlier ticket does not exist", ghost.code === 1 && /does not exist/.test(ghost.text), ghost.text);
   tool(["set", idBlog, "--status", "cancelled", "--reason", "Blognya tidak jadi dibuat."], { now: "2026-10-05T08:00:00+07:00" });
+
+  // A progress note records where the work stands without moving the ticket.
+  const terse = tool(["note", idNext, "--text", "lanjut"]);
+  expect("note: a note too short to help the next session is refused", terse.code === 1 && /--text/.test(terse.text), terse.text);
+  const noted = tool(["note", idNext, "--text", "Migrasi kolom batas sudah ditulis dan lulus. Berikutnya: layar pengaturan per perusahaan."], { now: "2026-11-15T17:00:00+07:00" });
+  const afterNote = tool(["show", idNext]);
+  expect("note: stored in the history, status unchanged", noted.code === 0 && /2026-11-15: note: Migrasi kolom batas/.test(afterNote.text) && /^#\d+\s+\S+\s+ready/m.test(afterNote.text), noted.text + afterNote.text);
 }
 
 // --- export and pages ----------------------------------------------------------------------------
@@ -270,10 +285,20 @@ let idIdea = null, idNext = null;
     expect("report: cards carry created and updated dates, shown and as data for the range filter",
       new RegExp(`href="ticket-${id}\\.html"[^>]*data-created="2026-11-10"[^>]*data-updated="2026-11-14"`).test(board) && /Created 10 Nov 2026/.test(board) && /Updated 14 Nov 2026/.test(board), board.slice(board.indexOf("class=\"board\""), board.indexOf("class=\"board\"") + 900));
     expect("report: the board has a date range picker for created or updated", /data-date-field="created"/.test(board) && /data-date-field="updated"/.test(board) && /<dialog[^>]*data-range/.test(board) && /data-range-preset="last7"/.test(board));
+    const filterRow = (/<div class="filters"[^]*?<dialog/.exec(board) || [""])[0];
+    expect("report: project picker, title search, date field and range sit in one filter row",
+      /data-project-picker/.test(filterRow) && /data-project-search/.test(filterRow) && /data-title-search/.test(filterRow) && /data-date-field="created"/.test(filterRow) && /data-range-open/.test(filterRow)
+      && filterRow.indexOf("data-project-picker") < filterRow.indexOf("data-title-search") && (board.match(/class="filters"/g) || []).length === 1, filterRow.slice(0, 400));
+    expect("report: the project picker lists every project as an option", /role="option"[^>]*data-board-filter="hris-demo"/.test(board) && /role="option"[^>]*data-board-filter="blog-pribadi"/.test(board));
+    expect("report: the Filters and Board headings are kept for screen readers only", (board.match(/<section id="[a-z]+" class="bare">/g) || []).length === 2 && /section\.bare > h2\s*{[^}]*clip-path/.test(board));
+    expect("report: cards show the ticket type", /<span class="pill solid">feature<\/span>/.test(board));
     expect("report: the board scrolls sideways instead of stacking", /\.board\s*{[^}]*overflow-x:\s*auto/.test(board) && !/class="grid-3"/.test(bodyOf(board)));
     expect("report: board card marks a ticket that was sent back", /Sent back 1×/.test(board));
     expect("report: ticket page has summary, decisions, sources and history", /id="summary"/.test(detail) && /id="decisions"/.test(detail) && /id="sources"/.test(detail) && /id="history"/.test(detail)
       && detail.includes("sengaja panjang dan lengkap") && detail.includes("ReimburseService.php:14") && /Sent back to In progress/.test(detail));
+    expect("report: ticket header shows the type", /<b>Type<\/b> feature/.test(detail));
+    const follow = fs.readFileSync(path.join(site, `ticket-${idNext}.html`), "utf8");
+    expect("report: a progress note appears in the ticket history", /Progress note/.test(follow) && /Migrasi kolom batas sudah ditulis/.test(follow));
     expect("report: ticket page shows when it was created and updated", /<b>Created<\/b> 10 Nov 2026/.test(detail) && /<b>Updated<\/b> 14 Nov 2026/.test(detail));
     expect("report: ticket page links back to the board and on to its follow-up", detail.includes('href="index.html"') && detail.includes(`href="ticket-${idNext}.html"`));
     expect("report: owner's words are escaped, not interpreted", detail.includes("&lt;b&gt;ya&lt;/b&gt;") && !detail.includes("<b>ya</b>"));

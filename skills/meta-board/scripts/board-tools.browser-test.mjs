@@ -37,7 +37,7 @@ function add(project, title, at, extra = {}) {
   fs.writeFileSync(file, JSON.stringify({
     title, summary: "A ticket made for the browser test, with a summary long enough to be accepted.",
     done_when: ["The filter shows or hides this card as expected."], sources: [{ claim: "Made for the test", source: "board-tools.browser-test.mjs" }],
-    approved_by: "user", user_words: "ok", ...extra,
+    approved_by: "user", user_words: "ok", type: "feature", ...extra,
   }));
   tool(["add", "--file", file, "--dir", dir], at);
 }
@@ -74,6 +74,35 @@ try {
   report("all three tickets show at first", (await visible()) === "#1,#2,#3", await visible());
   await shot("board-1280");
 
+  // The filters sit in one row on a wide screen.
+  const row = await browser.evaluate(`(() => { const tops = ["[data-project-open]", "[data-title-search]", "[data-date-field]", "[data-range-open]"].map((s) => { const r = document.querySelector(s).getBoundingClientRect(); return Math.round(r.top + r.height / 2); }); return Math.max(...tops) - Math.min(...tops); })()`);
+  report("project picker, title search, date field and range share one row", row <= 4, row);
+  report("the Filters and Board headings take no room", await browser.evaluate(`[...document.querySelectorAll("section.bare > h2")].every((h) => h.getBoundingClientRect().width <= 1)`));
+
+  // The project picker: opens, narrows as you type, picks with the keyboard, closes with Escape.
+  const typeInto = (selector, text) => browser.evaluate(`(() => { const box = document.querySelector(${JSON.stringify(selector)}); box.value = ${JSON.stringify(text)}; box.dispatchEvent(new Event("input", { bubbles: true })); })()`);
+  const listed = () => browser.evaluate(`[...document.querySelectorAll("[data-project-panel] [role=option]")].filter((b) => !b.parentNode.hidden).map((b) => b.textContent).join("|")`);
+  report("the project list starts closed", await browser.evaluate(`document.querySelector("[data-project-panel]").hidden`));
+  await click("[data-project-open]");
+  report("the picker opens with the search box focused", await browser.evaluate(`!document.querySelector("[data-project-panel]").hidden && document.activeElement.matches("[data-project-search]")`));
+  await typeInto("[data-project-search]", "BET");
+  report("typing narrows the project list", (await listed()) === "work / beta", await listed());
+  await typeInto("[data-project-search]", "zzz");
+  report("no match says so", (await listed()) === "" && !(await browser.evaluate(`document.querySelector("[data-project-none]").hidden`)));
+  await typeInto("[data-project-search]", "bet");
+  await key("Enter");
+  report("Enter picks the first match and closes the list", (await visible()) === "#3" && (await browser.evaluate(`document.querySelector("[data-project-panel]").hidden`)) && /work \/ beta/.test(await browser.evaluate(`document.querySelector("[data-project-open]").textContent`)), await visible());
+  await click("[data-project-open]");
+  await key("ArrowDown");
+  await key("ArrowDown");
+  report("arrow keys walk the options", (await browser.evaluate(`document.activeElement.getAttribute("data-board-filter")`)) === "alpha");
+  await key("Escape");
+  report("Escape closes without changing the choice", (await browser.evaluate(`document.querySelector("[data-project-panel]").hidden`)) && (await visible()) === "#3", await visible());
+  await click("[data-project-open]");
+  await browser.evaluate(`document.querySelector("h1").click()`);
+  report("a click outside closes the list", await browser.evaluate(`document.querySelector("[data-project-panel]").hidden`));
+  await shot("picker-closed-1280");
+
   await click('[data-board-filter="alpha"]');
   report("project filter keeps only that project", (await visible()) === "#1,#2", await visible());
   report("column counters follow the filter", (await browser.evaluate(`[...document.querySelectorAll("[data-count]")].reduce((sum, b) => sum + Number(b.textContent), 0)`)) === 2);
@@ -101,7 +130,7 @@ try {
   report("nothing is filtered before Apply", (await visible()) === "#1,#2,#3", await visible());
   await click("[data-range-apply]");
   report("created range keeps the ticket created inside it", (await visible()) === "#2", await visible());
-  report("the button shows the chosen range", /4 Nov 2026 – 6 Nov 2026/.test(await browser.evaluate(`document.querySelector("[data-range-open]").textContent`)));
+  report("the button shows the chosen range", (await browser.evaluate(`document.querySelector("[data-range-open] .range-long").textContent`)) === "4 Nov 2026 – 6 Nov 2026" && (await browser.evaluate(`getComputedStyle(document.querySelector("[data-range-open] .range-short")).display`)) === "none");
 
   await click('[data-date-field="updated"]');
   report("the same range on the updated date hides a ticket updated later", (await visible()) === "", await visible());
@@ -132,12 +161,21 @@ try {
   report("the chosen project survives a reload", (await visible()) === "#3", await visible());
   await click('[data-board-filter=""]');
 
-  // Phone width: columns stay side by side and the board scrolls sideways.
+  // Phone width, with the longest labels the row can get: a project chosen and a date range applied.
+  await browser.evaluate(`localStorage.setItem("board-filters", JSON.stringify({ project: "alpha", field: "created", from: "2026-11-01", to: "2026-11-30", title: "" }))`);
   await browser.viewport(390, 800);
+  await browser.open(path.join(site, "index.html"));
   await sleep(150);
+  report("on a phone the range label drops the year", (await browser.evaluate(`getComputedStyle(document.querySelector("[data-range-open] .range-long")).display`)) === "none" && (await browser.evaluate(`document.querySelector("[data-range-open] .range-short").textContent`)) === "1 Nov – 30 Nov");
   const layout = await browser.evaluate(`(() => { const board = document.querySelector(".board"); const cols = [...board.children].map((c) => c.getBoundingClientRect()); return { sameRow: cols.every((c) => Math.abs(c.top - cols[0].top) < 2), scrolls: board.scrollWidth > board.clientWidth + 50, pageWide: document.documentElement.scrollWidth <= innerWidth + 1, width: Math.round(cols[0].width) }; })()`);
   report("on a phone the columns sit side by side and the board scrolls sideways, the page does not", layout.sameRow && layout.scrolls && layout.pageWide, layout);
+  const phone = await browser.evaluate(`(() => { const box = (s) => document.querySelector(s).getBoundingClientRect(); const search = box("[data-title-search]"); const rest = ["[data-project-open]", "[data-date-field]", "[data-range-open]"].map(box); return { searchFirst: rest.every((r) => r.top > search.bottom - 1), restOneRow: Math.max(...rest.map((r) => r.top)) - Math.min(...rest.map((r) => r.top)) <= 4, fits: rest.every((r) => r.right <= innerWidth) && search.right <= innerWidth, searchWide: search.width > innerWidth * 0.8 }; })()`);
+  report("on a phone the title search takes the first row and the other three share the second", phone.searchFirst && phone.restOneRow && phone.fits && phone.searchWide, phone);
+  await click("[data-project-open]");
+  const panel = await browser.evaluate(`(() => { const r = document.querySelector("[data-project-panel]").getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth; })()`);
+  report("on a phone the project list stays inside the screen", panel);
   await shot("board-390");
+  await key("Escape");
 
   await browser.viewport(1280, 900);
   await browser.colorScheme("dark");

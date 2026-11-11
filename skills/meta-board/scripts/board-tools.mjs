@@ -41,6 +41,16 @@ const STATUS_LABEL = { idea: "Idea", ready: "Ready", doing: "In progress", revie
 // Board columns in order. "waiting" is not a status: it holds open tickets with a question for the owner.
 const COLUMNS = [["idea", "Idea"], ["waiting", "Waiting for you"], ["ready", "Ready"], ["doing", "In progress"], ["review", "Needs your check"], ["done", "Done"], ["cancelled", "Cancelled"]];
 const CLOSED_LIMIT = 30;
+// Work branches follow meta-git: the prefix is the ticket's type. A folder without git has no branch,
+// so its tickets state the type, and may also be docs or chore.
+const BRANCH_TYPES = ["feature", "fix", "refactor", "hotfix", "release"];
+const TYPES = [...BRANCH_TYPES, "docs", "chore"];
+const BRANCH_RULE = new RegExp(`^(${BRANCH_TYPES.join("|")})/[a-z0-9][a-z0-9._-]*$`);
+const BRANCH_HINT = `${BRANCH_TYPES.map((t) => `${t}/`).join(", ")} followed by lowercase letters, digits, dots or dashes`;
+// Integration branches carry no ticket of their own, so the commit guard leaves them alone.
+const UNGUARDED = ["main", "master", "develop", "staging", "HEAD"];
+const GUARD_MARK = "board-tools commit guard";
+const CHAINED = "pre-commit.before-board";
 const CREDENTIAL_KEY = /pass(word|wd)?$|secret|token|api[-_]?key|cookie|authorization|credential/i;
 const CREDENTIAL_QUERY = /[?&](token|access_token|password|passwd|secret|api_?key|key|signature)=[^&\s]+/i;
 const URL_WITH_LOGIN = /[a-z][a-z0-9+.-]*:\/\/[^/\s:@]+:[^/\s@]+@/i;
@@ -84,6 +94,7 @@ async function openDb() {
       title TEXT NOT NULL, status TEXT NOT NULL,
       unanswered INTEGER NOT NULL DEFAULT 0, unseen INTEGER NOT NULL DEFAULT 0,
       follows INTEGER REFERENCES tickets(id),
+      branch TEXT, type TEXT,
       data TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS tickets_project ON tickets(project, status);
@@ -113,6 +124,14 @@ function readJson(file) {
   if (!fs.existsSync(file)) throw new UsageError(`file not found: ${file}`);
   try { return JSON.parse(fs.readFileSync(file, "utf8").replace(/^﻿/, "")); } catch (error) { throw new UsageError(`${file} is not valid JSON: ${error.message}`); }
 }
+
+/** Runs git in a folder. Never throws: a missing git or a failing command is `ok: false`. */
+function git(dir, args) {
+  const out = spawnSync("git", ["-C", dir, ...args], { encoding: "utf8" });
+  return { ok: out.status === 0, out: (out.stdout || "").trim(), err: (out.stderr || "").trim() };
+}
+
+const isRepo = (dir) => fs.existsSync(dir) && git(dir, ["rev-parse", "--is-inside-work-tree"]).out === "true";
 
 /** A project is named after its folder and grouped by the folder above it. */
 function projectOf(dir) {
@@ -163,7 +182,22 @@ function validateSource(source, trail, problems) {
   if (!source || !isText(source.claim) || !isText(source.source)) problems.push(`${trail} needs "claim" and "source" (a file and line, a URL, or a command and its result)`);
 }
 
-function validateTicket(ticket) {
+/** The type and branch of agreed work. In a git repository the branch decides the type; elsewhere the type is stated. */
+function validateKind(ticket, repo, problems) {
+  if (ticket.tags !== undefined) problems.push('free-form "tags" are not used; the only label is the type, taken from the branch');
+  if (ticket.type !== undefined && !TYPES.includes(ticket.type)) { problems.push(`type must be one of ${TYPES.join(", ")}`); return; }
+  if (!repo) {
+    if (ticket.branch !== undefined) problems.push("this project folder is not a git repository, so its tickets have no branch; state the type instead");
+    else if (ticket.type === undefined) problems.push(`a ticket in a folder without git needs "type": one of ${TYPES.join(", ")}`);
+    return;
+  }
+  if (!isText(ticket.branch)) { problems.push(`a ticket in a git repository needs "branch": the work branch agreed for it (${BRANCH_HINT})`); return; }
+  if (!BRANCH_RULE.test(ticket.branch)) { problems.push(`branch "${ticket.branch}" does not follow the naming rule: ${BRANCH_HINT}`); return; }
+  const fromBranch = ticket.branch.split("/")[0];
+  if (ticket.type !== undefined && ticket.type !== fromBranch) problems.push(`type "${ticket.type}" disagrees with branch "${ticket.branch}", which makes this a ${fromBranch} ticket; leave "type" out and it is taken from the branch`);
+}
+
+function validateTicket(ticket, { repo = false } = {}) {
   const problems = [];
   if (ticket === null || typeof ticket !== "object" || Array.isArray(ticket)) return ["the ticket must be a JSON object"];
   findCredentials(ticket, "", problems);
@@ -186,6 +220,7 @@ function validateTicket(ticket) {
   if (ticket.approved_by === "user" && !isText(ticket.user_words)) problems.push('a ticket approved by the owner needs "user_words", the owner\'s approval verbatim');
   if (ticket.approved_by === "agent" && !isText(ticket.authority)) problems.push('a ticket opened by the agent needs "authority", the owner\'s sentence that allowed it, verbatim');
   if (["review", "done", "cancelled"].includes(ticket.status)) problems.push(`a new ticket starts as idea, ready or doing; "${ticket.status}" is reached with "set"`);
+  validateKind(ticket, repo, problems);
   return problems;
 }
 
@@ -214,10 +249,16 @@ function columnOf(t) {
 }
 
 function rowToTicket(row) {
-  return { id: row.id, project: row.project, group: row.grp, title: row.title, status: row.status, created_at: row.created_at, updated_at: row.updated_at, ...JSON.parse(row.data) };
+  return { id: row.id, project: row.project, group: row.grp, dir: row.dir, title: row.title, status: row.status, created_at: row.created_at, updated_at: row.updated_at, ...JSON.parse(row.data) };
 }
 
-const SELECT = "SELECT t.*, p.grp FROM tickets t JOIN projects p ON p.key = t.project";
+const SELECT = "SELECT t.*, p.grp, p.dir FROM tickets t JOIN projects p ON p.key = t.project";
+
+/** Another open ticket of the project on the same branch, if any: without a number in the branch name they could not be told apart. */
+function branchTwin(db, project, branch, exceptId) {
+  if (!branch) return null;
+  return db.prepare("SELECT id FROM tickets WHERE project = ? AND branch = ? AND status NOT IN ('done', 'cancelled') AND id != ?").get(project, branch, exceptId ?? 0) || null;
+}
 
 function getTicket(db, idText) {
   const id = Number(idText);
@@ -228,9 +269,10 @@ function getTicket(db, idText) {
 }
 
 function save(db, ticket) {
-  const { id, project, group, title, status, created_at: created, updated_at: updated, ...data } = ticket;
+  const { id, project, group, dir, title, status, created_at: created, updated_at: updated, ...data } = ticket;
   const c = counts(data);
-  db.prepare("UPDATE tickets SET status = ?, unanswered = ?, unseen = ?, data = ?, updated_at = ? WHERE id = ?").run(status, c.unanswered, c.unseen, JSON.stringify(data), now(), id);
+  db.prepare("UPDATE tickets SET status = ?, unanswered = ?, unseen = ?, branch = ?, type = ?, data = ?, updated_at = ? WHERE id = ?")
+    .run(status, c.unanswered, c.unseen, data.branch ?? null, data.type ?? null, JSON.stringify(data), now(), id);
   db.prepare("DELETE FROM tickets_fts WHERE rowid = ?").run(id);
   db.prepare("INSERT INTO tickets_fts (rowid, title, body) VALUES (?, ?, ?)").run(id, title, searchable(data));
 }
@@ -280,11 +322,14 @@ async function cmdProject(args) {
 async function cmdAdd(args) {
   const ticket = readJson(option(args, "--file"));
   const dir = option(args, "--dir");
-  const problems = validateTicket(ticket);
+  const problems = validateTicket(ticket, { repo: isRepo(projectOf(dir).dir) });
   if (problems.length) throw new Refused(problems.join("\n"));
   const db = await openDb();
   const project = ensureProject(db, dir);
   const { title, status = "ready", ...data } = ticket;
+  if (data.branch) data.type = data.branch.split("/")[0];
+  const twin = branchTwin(db, project.key, data.branch);
+  if (twin) throw new Refused(`ticket #${twin.id} is already open on the same branch (${data.branch}); one branch carries one open ticket, so finish that one or agree on another branch`);
   if (data.follows !== undefined) {
     const earlier = db.prepare("SELECT project FROM tickets WHERE id = ?").get(data.follows);
     if (!earlier) throw new Refused(`"follows" points at ticket #${data.follows}, which does not exist`);
@@ -294,8 +339,8 @@ async function cmdAdd(args) {
   data.decisions = (data.decisions || []).map((d) => (isPending(d) ? d : { ...d, decided_at: stamp }));
   data.history = [{ at: stamp, to: status }];
   const c = counts(data);
-  const result = db.prepare("INSERT INTO tickets (project, title, status, unanswered, unseen, follows, data, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
-    .run(project.key, title.trim(), status, c.unanswered, c.unseen, data.follows ?? null, JSON.stringify(data), stamp, stamp);
+  const result = db.prepare("INSERT INTO tickets (project, title, status, unanswered, unseen, follows, branch, type, data, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+    .run(project.key, title.trim(), status, c.unanswered, c.unseen, data.follows ?? null, data.branch ?? null, data.type ?? null, JSON.stringify(data), stamp, stamp);
   const id = Number(result.lastInsertRowid);
   db.prepare("INSERT INTO tickets_fts (rowid, title, body) VALUES (?, ?, ?)").run(id, title, searchable(data));
   if (project.created) console.log(`created project: ${project.grp}/${project.key}`);
@@ -313,8 +358,11 @@ async function cmdApprove(args) {
   const stamp = now();
   const { decisions: added = [], title, status, ...fields } = patch;
   const merged = { ...ticket, ...fields, status: "ready", decisions: [...(ticket.decisions || []), ...(Array.isArray(added) ? added : [])] };
-  const problems = validateTicket(merged);
+  const problems = validateTicket(merged, { repo: isRepo(ticket.dir) });
   if (problems.length) throw new Refused(problems.join("\n"));
+  if (merged.branch) merged.type = merged.branch.split("/")[0];
+  const twin = branchTwin(db, ticket.project, merged.branch, ticket.id);
+  if (twin) throw new Refused(`ticket #${twin.id} is already open on the same branch (${merged.branch}); one branch carries one open ticket`);
   merged.decisions = merged.decisions.map((d) => (isPending(d) || d.decided_at ? d : { ...d, decided_at: stamp }));
   merged.history = [...(ticket.history || []), { at: stamp, from: "idea", to: "ready", words: merged.approved_by === "user" ? merged.user_words : merged.authority }];
   save(db, merged);
@@ -374,12 +422,151 @@ async function cmdReview(args) {
   return 0;
 }
 
+/**
+ * The commit a ticket points at when it is handed over for checking. A sentence saying "tested" proves nothing,
+ * so the repository is asked: the commit exists, was made after the ticket, sits on the ticket's branch,
+ * and nothing tracked is left uncommitted. Returns the full hash.
+ */
+function checkedCommit(ticket, ref) {
+  if (!isText(ref)) throw new Refused(`#${ticket.id} is tied to branch ${ticket.branch}, so "review" needs --commit: the commit that holds the finished work`);
+  const resolved = git(ticket.dir, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]);
+  if (!resolved.ok || !resolved.out) throw new Refused(`${ref} is not a commit in ${ticket.dir}`);
+  const hash = resolved.out;
+  const committed = Number(git(ticket.dir, ["show", "-s", "--format=%ct", hash]).out);
+  if (!(committed * 1000 >= Date.parse(ticket.created_at))) throw new Refused(`commit ${hash.slice(0, 10)} was made before the ticket was created, so it cannot be this ticket's work`);
+  if (!git(ticket.dir, ["merge-base", "--is-ancestor", hash, ticket.branch]).ok) throw new Refused(`commit ${hash.slice(0, 10)} is not on ${ticket.branch}`);
+  const dirty = git(ticket.dir, ["status", "--porcelain", "--untracked-files=no"]);
+  if (dirty.out) throw new Refused(`there are uncommitted changes in ${ticket.dir}; commit them first:\n${dirty.out}`);
+  return hash;
+}
+
+/** A progress note: where the work stands and what comes next. It moves nothing; it is for the next session. */
+async function cmdNote(args) {
+  const text = option(args, "--text");
+  if (!args[0]) throw new UsageError("usage: note <id> --text <where the work stands and what comes next>");
+  if (words(text) < 5) throw new Refused("--text must say where the work stands and what comes next, in a full sentence");
+  const problems = [];
+  findCredentials({ text }, "", problems);
+  if (problems.length) throw new Refused(problems.join("\n"));
+  const db = await openDb();
+  const ticket = getTicket(db, args[0]);
+  ticket.history = [...(ticket.history || []), { at: now(), note: text.trim() }];
+  save(db, ticket);
+  console.log(`#${ticket.id}: note added`);
+  return 0;
+}
+
+/* ---------- commit guard ---------- */
+
+/** Where a repository keeps its hooks, and whether that place is shared with the team through the working tree. */
+function hooksOf(dir) {
+  if (!isRepo(dir)) throw new Refused(`${dir} is not a git repository, so there are no commits to guard`);
+  const top = git(dir, ["rev-parse", "--show-toplevel"]).out;
+  const gitDir = path.resolve(top, git(dir, ["rev-parse", "--git-dir"]).out);
+  const configured = git(dir, ["config", "--get", "core.hooksPath"]).out;
+  const hooks = path.resolve(top, git(dir, ["rev-parse", "--git-path", "hooks"]).out);
+  const inside = (parent, child) => { const rel = path.relative(parent, child); return !rel.startsWith("..") && !path.isAbsolute(rel); };
+  return { hooks, configured, shared: Boolean(configured) && inside(path.resolve(top), hooks) && !inside(gitDir, hooks) };
+}
+
+function guardScript() {
+  const tool = fileURLToPath(import.meta.url).replace(/\\/g, "/");
+  return `#!/bin/sh
+# ${GUARD_MARK}: refuses a commit on a work branch that has no ticket in progress.
+# Installed by "board-tools hook install"; remove it with "board-tools hook remove".
+hooks_dir=$(dirname "$0")
+if [ -f "$hooks_dir/${CHAINED}" ]; then
+  "$hooks_dir/${CHAINED}" "$@" || exit $?
+fi
+# The owner working alone can set BOARD_SKIP=1. Agents may not.
+[ -n "$BOARD_SKIP" ] && exit 0
+if ! command -v node >/dev/null 2>&1; then
+  echo "board guard: node was not found, so the board was not checked; commit allowed" >&2
+  exit 0
+fi
+node --no-warnings "${tool}" hook check --dir "$(git rev-parse --show-toplevel)"
+code=$?
+[ "$code" -eq 1 ] && exit 1
+[ "$code" -ne 0 ] && echo "board guard: the board could not be checked; commit allowed" >&2
+exit 0
+`;
+}
+
+async function cmdHook(args) {
+  const [action] = args.splice(0, 1);
+  const dir = path.resolve(option(args, "--dir") || process.cwd());
+
+  if (action === "check") {
+    // Exit 0 lets the commit through, 1 refuses it, 2 means the board could not be asked (the guard then lets it through).
+    try {
+      const branch = git(dir, ["rev-parse", "--abbrev-ref", "HEAD"]).out;
+      if (!branch || UNGUARDED.includes(branch)) return 0;
+      const gitDir = path.resolve(dir, git(dir, ["rev-parse", "--git-dir"]).out);
+      if (fs.existsSync(path.join(gitDir, "MERGE_HEAD"))) return 0;
+      const project = projectOf(dir).key;
+      const db = await openDb();
+      if (db.prepare("SELECT id FROM tickets WHERE project = ? AND branch = ? AND status IN ('doing', 'review')").get(project, branch)) return 0;
+      const waiting = db.prepare("SELECT id, status FROM tickets WHERE project = ? AND branch = ? AND status = 'ready'").get(project, branch);
+      console.error(`board guard: no ticket in progress for branch ${branch} in project ${project}.`);
+      console.error(waiting
+        ? `  Ticket #${waiting.id} is ready but not started: board-tools set ${waiting.id} --status doing`
+        : "  Record the approved work first (board-tools add), then start it (board-tools set <id> --status doing).");
+      return 1;
+    } catch (error) {
+      console.error(`board guard: ${error.message}`);
+      return 2;
+    }
+  }
+
+  if (action === "install") {
+    const existing = option(args, "--existing");
+    if (existing !== undefined && !["chain", "replace", "skip"].includes(existing)) throw new UsageError("--existing must be chain, replace or skip");
+    const where = hooksOf(dir);
+    const hook = path.join(where.hooks, "pre-commit");
+    if (where.shared) {
+      // Hooks kept in the working tree (core.hooksPath pointing inside it) are committed and reach the whole team.
+      throw new Refused(`this repository keeps its hooks in ${where.hooks} (core.hooksPath = ${where.configured}), inside the working tree, where they are shared with everyone who clones it; the guard is not installed there. This project stays unguarded.`);
+    }
+    const current = fs.existsSync(hook) ? fs.readFileSync(hook, "utf8") : null;
+    if (current !== null && !current.includes(GUARD_MARK)) {
+      if (existing === undefined) {
+        throw new Refused(`${hook} already holds another hook. Choose what happens to it:\n--existing chain    keep it; it runs first, then the guard\n--existing replace  the guard takes its place; the old hook is kept as a backup beside it\n--existing skip     leave this project unguarded`);
+      }
+      if (existing === "skip") { console.log(`left alone: ${hook} (this project is not guarded)`); return 0; }
+      if (existing === "chain") {
+        if (fs.existsSync(path.join(where.hooks, CHAINED))) throw new Refused(`${path.join(where.hooks, CHAINED)} already exists; remove the earlier guard first with "hook remove"`);
+        fs.renameSync(hook, path.join(where.hooks, CHAINED));
+      } else {
+        fs.renameSync(hook, path.join(where.hooks, `pre-commit.backup-${now().slice(0, 19).replace(/[-:T]/g, "")}`));
+      }
+    }
+    fs.mkdirSync(where.hooks, { recursive: true });
+    fs.writeFileSync(hook, guardScript(), { mode: 0o755 });
+    console.log(`commit guard installed: ${hook}`);
+    return 0;
+  }
+
+  if (action === "remove") {
+    const where = hooksOf(dir);
+    const hook = path.join(where.hooks, "pre-commit");
+    if (!fs.existsSync(hook) || !fs.readFileSync(hook, "utf8").includes(GUARD_MARK)) { console.log("no commit guard installed here"); return 0; }
+    fs.rmSync(hook);
+    const chained = path.join(where.hooks, CHAINED);
+    if (fs.existsSync(chained)) fs.renameSync(chained, hook);
+    console.log(`commit guard removed: ${hook}`);
+    return 0;
+  }
+
+  throw new UsageError("usage: hook <install|check|remove> [--dir <path>] [--existing chain|replace|skip]");
+}
+
 async function cmdSet(args) {
   const status = option(args, "--status");
   const evidence = option(args, "--evidence");
   const reason = option(args, "--reason");
   const said = option(args, "--words");
-  if (!args[0] || !status) throw new UsageError("usage: set <id> --status <status> [--evidence <text>] [--reason <text>] [--words <the owner's sentence>]");
+  const commitRef = option(args, "--commit");
+  if (!args[0] || !status) throw new UsageError("usage: set <id> --status <status> [--evidence <text>] [--commit <hash>] [--reason <text>] [--words <the owner's sentence>]");
   if (!STATUSES.includes(status)) throw new Refused(`status must be one of ${STATUSES.join(", ")}`);
   const db = await openDb();
   const ticket = getTicket(db, args[0]);
@@ -388,9 +575,16 @@ async function cmdSet(args) {
   if (status === "idea") throw new Refused("a ticket cannot go back to being an idea");
   if (from === "idea" && status !== "cancelled") throw new Refused('an idea becomes work through "approve", which records the acceptance criteria, sources and the owner\'s approval');
   const step = { at: now(), from, to: status };
+  if (status === "doing" && from === "ready" && ticket.branch) {
+    // Work on a ticket happens on its branch, so the start is checked against the repository itself.
+    const current = git(ticket.dir, ["rev-parse", "--abbrev-ref", "HEAD"]);
+    if (!current.ok) throw new Refused(`cannot read the current branch of ${ticket.dir}: ${current.err || "git failed"}`);
+    if (current.out !== ticket.branch) throw new Refused(`#${ticket.id} belongs to branch ${ticket.branch}, but the repository is on ${current.out}; switch to ${ticket.branch} before starting`);
+  }
   if (status === "review") {
     // The agent's side of "done": there is something to point at.
-    if (!isText(evidence)) throw new Refused('status "review" needs --evidence: the command and result, commit, or swipe report that shows the work is done');
+    if (!isText(evidence)) throw new Refused('status "review" needs --evidence: the command and result, or swipe report, that shows the work is done');
+    if (ticket.branch) step.commit = checkedCommit(ticket, commitRef);
   } else if (status === "done") {
     // The owner's side of "done": the evidence exists and the owner accepted it.
     if (!isText(evidence) && !isText(ticket.evidence)) throw new Refused('status "done" needs --evidence, or a ticket that already carries evidence from "review"');
@@ -402,6 +596,7 @@ async function cmdSet(args) {
   } else if (status === "cancelled" && !isText(reason)) {
     throw new Refused('status "cancelled" needs --reason');
   }
+  if (step.commit) ticket.commit = step.commit;
   if (isText(evidence)) { ticket.evidence = evidence.trim(); ticket.finished_at = step.at; step.evidence = ticket.evidence; }
   if (isText(reason)) step.reason = reason.trim();
   if (isText(said)) step.words = said.trim();
@@ -418,9 +613,9 @@ async function cmdSet(args) {
 async function cmdList(args) {
   const filters = [];
   const values = [];
-  for (const [name, column] of [["--project", "t.project"], ["--group", "p.grp"], ["--status", "t.status"]]) {
+  for (const [name, column] of [["--project", "t.project"], ["--group", "p.grp"], ["--status", "t.status"], ["--type", "t.type"]]) {
     const value = option(args, name);
-    if (value !== undefined) { filters.push(`${column} = ?`); values.push(name === "--status" ? value : kebab(value)); }
+    if (value !== undefined) { filters.push(`${column} = ?`); values.push(name === "--status" || name === "--type" ? value : kebab(value)); }
   }
   // Stored stamps start with the owner's local date, so a date range is a comparison on that prefix.
   for (const [name, column, operator] of [["--created-from", "created_at", ">="], ["--created-to", "created_at", "<="], ["--updated-from", "updated_at", ">="], ["--updated-to", "updated_at", "<="]]) {
@@ -440,8 +635,9 @@ async function cmdList(args) {
   return 0;
 }
 
-const historyText = (h) => [`${h.at.slice(0, 10)}: ${h.from ? `${h.from} to ${h.to}` : `recorded as ${h.to}`}${h.returned ? " (sent back)" : ""}`,
-  h.reason ? `reason: ${h.reason}` : "", h.evidence ? `evidence: ${h.evidence}` : "", h.words ? `owner's words: "${h.words}"` : ""].filter(Boolean).join("; ");
+const historyText = (h) => (h.note ? `${h.at.slice(0, 10)}: note: ${h.note}`
+  : [`${h.at.slice(0, 10)}: ${h.from ? `${h.from} to ${h.to}` : `recorded as ${h.to}`}${h.returned ? " (sent back)" : ""}`,
+    h.reason ? `reason: ${h.reason}` : "", h.evidence ? `evidence: ${h.evidence}` : "", h.commit ? `commit: ${h.commit}` : "", h.words ? `owner's words: "${h.words}"` : ""].filter(Boolean).join("; "));
 
 const byText = (d) => (isPending(d) ? "waiting for the owner" : d.decided_by === "agent" ? `decided by the agent, ${d.reviewed ? "seen" : "not yet seen"} by the owner` : "decided by the owner");
 
@@ -451,6 +647,8 @@ async function cmdShow(args) {
   const out = [`#${t.id}  ${t.group}/${t.project}  ${t.status}`, `Title: ${t.title}`, `Created: ${t.created_at}`, `Updated: ${t.updated_at}`];
   const add = (label, value) => { if (isText(value)) out.push("", `${label}:`, value.trim()); };
   const followers = db.prepare("SELECT id FROM tickets WHERE follows = ? ORDER BY id").all(t.id).map((row) => `#${row.id}`);
+  if (t.type) out.push(`Type: ${t.type}`);
+  if (t.branch) out.push(`Branch: ${t.branch}`);
   if (t.follows) out.push(`Follows: #${t.follows}`);
   if (followers.length) out.push(`Continued by: ${followers.join(", ")}`);
   add("Summary", t.summary);
@@ -520,10 +718,34 @@ const PAGE_STYLE = `<style id="page-style">
   header.doc .meta { margin: 12px 0 0; }
   @media print { header.doc .theme-switch { display: none; } }
   .appbar { margin: 0 0 16px; font-weight: 600; }
-  .filters { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: center; margin: 12px 0; }
-  .filters .chips { margin: 0; }
-  .title-search { font: 500 15px var(--body); color: var(--ink); background: var(--surface); border: 1px solid var(--line-strong); border-radius: 999px; padding: 9px 16px; min-height: 40px; width: min(320px, 100%); }
-  .title-search:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  section.bare { margin-top: 20px; }
+  section.bare > h2 { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .filters { display: flex; flex-wrap: wrap; gap: 10px 12px; align-items: center; }
+  .filters .chips { margin: 0; flex-wrap: nowrap; }
+  .filters input[type="search"] { font: 500 15px var(--body); color: var(--ink); background: var(--surface); border: 1px solid var(--line-strong); border-radius: 999px; padding: 9px 16px; min-height: 40px; }
+  .filters input[type="search"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .title-search { flex: 1 1 220px; max-width: 360px; min-width: 0; }
+  .picker { position: relative; }
+  .picker > button::after { content: "\\25BE"; margin-left: 8px; }
+  .picker-panel { position: absolute; z-index: 5; top: calc(100% + 6px); left: 0; width: min(320px, 86vw); background: var(--surface); border: 1px solid var(--line-strong); border-radius: 16px; padding: 10px; box-shadow: 0 12px 32px rgb(0 0 0 / .18); }
+  .picker-panel input[type="search"] { width: 100%; }
+  .picker-panel ul { list-style: none; margin: 8px 0 0; padding: 0; max-height: 280px; overflow-y: auto; }
+  .picker-panel [role="option"] { display: block; width: 100%; text-align: left; border: 0; background: none; color: inherit; font: 500 15px var(--body); padding: 9px 12px; border-radius: 10px; cursor: pointer; }
+  .picker-panel [role="option"]:hover, .picker-panel [role="option"]:focus-visible { background: var(--accent-soft); outline: none; }
+  .picker-panel [role="option"][aria-selected="true"] { font-weight: 700; color: var(--accent); }
+  /* On a phone the four controls do not fit one row: the title search takes the first row, the rest share the second. */
+  .range-short { display: none; }
+  @media (max-width: 720px) {
+    .title-search { order: -1; flex-basis: 100%; max-width: none; }
+    .filters { flex-wrap: wrap; gap: 10px 8px; }
+    .filters .chip { padding: 8px 11px; font-size: 13px; }
+    .filters .chips { gap: 4px; flex: none; }
+    .filters [data-range-open] { flex: none; }
+    .picker { flex: 1 1 0; min-width: 0; }
+    .picker > button { width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .range-long { display: none; }
+    .range-short { display: inline; }
+  }
   .board { display: flex; gap: 16px; align-items: flex-start; overflow-x: auto; padding-bottom: 12px; scroll-snap-type: x proximity; }
   .board > div { flex: 0 0 min(300px, 82vw); scroll-snap-align: start; }
   .board h3 { margin-top: 0; }
@@ -587,6 +809,22 @@ const PAGE_SCRIPT = `<script id="page-script">
   var searchBox = bar.querySelector("[data-title-search]");
   try { var saved = JSON.parse(localStorage.getItem(KEY) || "{}"); for (var k in state) if (typeof saved[k] === "string") state[k] = saved[k]; } catch (e) { /* filters still work without storage */ }
   var projectButtons = all("[data-board-filter]", bar);
+  var picker = bar.querySelector("[data-project-picker]");
+  var projectOpen = picker.querySelector("[data-project-open]");
+  var projectPanel = picker.querySelector("[data-project-panel]");
+  var projectSearch = picker.querySelector("[data-project-search]");
+  var projectNone = picker.querySelector("[data-project-none]");
+  var shownOptions = function () { return projectButtons.filter(function (b) { return !b.parentNode.hidden; }); };
+  function narrowProjects() {
+    var wanted = projectSearch.value.trim().toLowerCase();
+    projectButtons.forEach(function (b) { b.parentNode.hidden = wanted !== "" && b.textContent.toLowerCase().indexOf(wanted) === -1; });
+    projectNone.hidden = shownOptions().length > 0;
+  }
+  function togglePicker(open) {
+    projectPanel.hidden = !open;
+    projectOpen.setAttribute("aria-expanded", String(open));
+    if (open) { projectSearch.value = ""; narrowProjects(); projectSearch.focus(); }
+  }
   var fieldButtons = all("[data-date-field]", bar);
   var openButton = bar.querySelector("[data-range-open]");
   var dialog = document.querySelector("dialog[data-range]");
@@ -599,9 +837,17 @@ const PAGE_SCRIPT = `<script id="page-script">
     if (!projectButtons.some(function (b) { return b.getAttribute("data-board-filter") === state.project; })) state.project = "";
     if (state.field !== "updated") state.field = "created";
     var to = state.to || state.from;
-    projectButtons.forEach(function (b) { b.setAttribute("aria-pressed", String(b.getAttribute("data-board-filter") === state.project)); });
+    projectButtons.forEach(function (b) {
+      var chosen = b.getAttribute("data-board-filter") === state.project;
+      b.setAttribute("aria-selected", String(chosen));
+      if (chosen) projectOpen.textContent = b.textContent;
+    });
+    projectOpen.setAttribute("aria-pressed", String(state.project !== ""));
     fieldButtons.forEach(function (b) { b.setAttribute("aria-pressed", String(b.getAttribute("data-date-field") === state.field)); });
-    openButton.textContent = state.from ? (to === state.from ? show(state.from) : show(state.from) + " – " + show(to)) : "Any date";
+    // Two lengths of the same label: with the year on a wide screen, without it on a phone, where the row is tight.
+    var brief = function (date) { return show(date).slice(0, -5); };
+    if (!state.from) openButton.textContent = "Any date";
+    else openButton.innerHTML = '<span class="range-long">' + (to === state.from ? show(state.from) : show(state.from) + " – " + show(to)) + '</span><span class="range-short">' + (to === state.from ? brief(state.from) : brief(state.from) + " – " + brief(to)) + "</span>";
     openButton.setAttribute("aria-pressed", String(Boolean(state.from)));
     var wanted = state.title.trim().toLowerCase().split(/\\s+/).filter(Boolean);
     if (searchBox.value !== state.title) searchBox.value = state.title;
@@ -665,7 +911,19 @@ const PAGE_SCRIPT = `<script id="page-script">
   var MOVES = { ArrowLeft: function (d) { return addDays(d, -1); }, ArrowRight: function (d) { return addDays(d, 1); }, ArrowUp: function (d) { return addDays(d, -7); }, ArrowDown: function (d) { return addDays(d, 7); },
     PageUp: function (d) { return addMonths(d, -1); }, PageDown: function (d) { return addMonths(d, 1); }, Home: function (d) { return addDays(d, -weekday(d)); }, End: function (d) { return addDays(d, 6 - weekday(d)); } };
 
-  projectButtons.forEach(function (b) { b.addEventListener("click", function () { state.project = b.getAttribute("data-board-filter"); apply(); }); });
+  projectButtons.forEach(function (b) { b.addEventListener("click", function () { state.project = b.getAttribute("data-board-filter"); togglePicker(false); apply(); projectOpen.focus(); }); });
+  projectOpen.addEventListener("click", function () { togglePicker(projectPanel.hidden); });
+  projectSearch.addEventListener("input", narrowProjects);
+  // Arrow keys walk the options that are still listed, Enter in the search box takes the first one, Escape closes.
+  picker.addEventListener("keydown", function (event) {
+    var options = shownOptions();
+    var at = options.indexOf(document.activeElement);
+    if (event.key === "Escape") { if (!projectPanel.hidden) { event.preventDefault(); togglePicker(false); projectOpen.focus(); } }
+    else if (event.key === "ArrowDown" && !projectPanel.hidden) { event.preventDefault(); if (options.length) options[Math.min(at + 1, options.length - 1)].focus(); }
+    else if (event.key === "ArrowUp" && !projectPanel.hidden) { event.preventDefault(); if (at <= 0) projectSearch.focus(); else options[at - 1].focus(); }
+    else if (event.key === "Enter" && document.activeElement === projectSearch) { event.preventDefault(); if (options.length) options[0].click(); }
+  });
+  document.addEventListener("click", function (event) { if (!projectPanel.hidden && !picker.contains(event.target)) togglePicker(false); });
   fieldButtons.forEach(function (b) { b.addEventListener("click", function () { state.field = b.getAttribute("data-date-field"); apply(); }); });
   searchBox.addEventListener("input", function () { state.title = searchBox.value; apply(); });
   openButton.addEventListener("click", function () {
@@ -694,14 +952,15 @@ const PAGE_SCRIPT = `<script id="page-script">
 })();
 </script>`;
 
-const section = (id, number, heading, body) => `    <section id="${id}">
+const section = (id, number, heading, body, bare = false) => `    <section id="${id}"${bare ? ' class="bare"' : ""}>
       <h2><span class="num">${String(number).padStart(2, "0")}</span>${heading}</h2>
 ${body}
     </section>`;
 
 function boardCard(t) {
   const c = counts(t);
-  const pills = [`<span class="pill info">${esc(t.group)} / ${esc(t.project)}</span>`,
+  const pills = [t.type ? `<span class="pill solid">${esc(t.type)}</span>` : "",
+    `<span class="pill info">${esc(t.group)} / ${esc(t.project)}</span>`,
     columnOf(t) !== t.status ? `<span class="pill accent">${STATUS_LABEL[t.status]}</span>` : "",
     c.unanswered ? `<span class="pill warn">${c.unanswered} question${c.unanswered > 1 ? "s" : ""} for you</span>` : "",
     c.unseen ? `<span class="pill warn">${c.unseen} agent decision${c.unseen > 1 ? "s" : ""} to review</span>` : "",
@@ -746,31 +1005,36 @@ const RANGE_DIALOG = `      <dialog class="range" data-range aria-labelledby="ra
       </dialog>`;
 
 function boardSections(tickets, projects) {
-  const chips = ['<button class="chip" type="button" data-board-filter="" aria-pressed="true">All projects</button>',
-    ...projects.map((p) => `<button class="chip" type="button" data-board-filter="${esc(p.key)}" aria-pressed="false">${esc(p.grp)} / ${esc(p.key)}</button>`)].join("\n          ");
+  const options = ['<li><button type="button" role="option" data-board-filter="" aria-selected="true">All projects</button></li>',
+    ...projects.map((p) => `<li><button type="button" role="option" data-board-filter="${esc(p.key)}" aria-selected="false">${esc(p.grp)} / ${esc(p.key)}</button></li>`)].join("\n              ");
   const columns = COLUMNS.map(([key, title]) => {
     const inColumn = tickets.filter((t) => columnOf(t) === key);
     const closed = key === "done" || key === "cancelled";
     const shown = closed ? inColumn.slice(0, CLOSED_LIMIT) : inColumn;
     return boardColumn(title, shown, shown.length < inColumn.length ? `Showing the ${shown.length} most recent of ${inColumn.length}.` : "");
   }).join("\n");
-  return [section("filters", 0, "Filters", `      <div data-board-filters>
-        <div class="chips" role="group" aria-label="Project">
-          ${chips}
-        </div>
-        <div class="filters">
-          <input class="title-search" type="search" data-title-search placeholder="Search by title" aria-label="Search by title" autocomplete="off">
-          <div class="chips" role="group" aria-label="Date to filter on">
-            <button class="chip" type="button" data-date-field="created" aria-pressed="true">Created</button>
-            <button class="chip" type="button" data-date-field="updated" aria-pressed="false">Updated</button>
+  return [section("filters", 0, "Filters", `      <div class="filters" data-board-filters>
+        <div class="picker" data-project-picker>
+          <button class="chip" type="button" data-project-open aria-haspopup="listbox" aria-expanded="false">All projects</button>
+          <div class="picker-panel" data-project-panel hidden>
+            <input type="search" data-project-search placeholder="Find a project" aria-label="Find a project" autocomplete="off">
+            <ul role="listbox" aria-label="Project">
+              ${options}
+            </ul>
+            <p class="column-empty" data-project-none hidden>No project matches.</p>
           </div>
-          <button class="chip" type="button" data-range-open aria-haspopup="dialog" aria-pressed="false">Any date</button>
         </div>
+        <input class="title-search" type="search" data-title-search placeholder="Search by title" aria-label="Search by title" autocomplete="off">
+        <div class="chips" role="group" aria-label="Date to filter on">
+          <button class="chip" type="button" data-date-field="created" aria-pressed="true">Created</button>
+          <button class="chip" type="button" data-date-field="updated" aria-pressed="false">Updated</button>
+        </div>
+        <button class="chip" type="button" data-range-open aria-haspopup="dialog" aria-pressed="false">Any date</button>
       </div>
-${RANGE_DIALOG}`),
+${RANGE_DIALOG}`, true),
   section("board", 1, "Board", `      <div class="board">
 ${columns}
-      </div>`)].join("\n\n");
+      </div>`, true)].join("\n\n");
 }
 
 function decisionCard(d, index) {
@@ -793,8 +1057,9 @@ function decisionCard(d, index) {
 }
 
 function historyRow(h) {
+  if (h.note) return `          <tr><td class="nowrap">${showDate(h.at)}</td><td>Progress note</td><td>${esc(h.note)}</td></tr>`;
   const what = h.returned ? `Sent back to ${STATUS_LABEL[h.to]}` : h.from ? `${STATUS_LABEL[h.from]} to ${STATUS_LABEL[h.to]}` : `Recorded as ${STATUS_LABEL[h.to]}`;
-  const notes = [h.reason ? `<b>Reason.</b> ${esc(h.reason)}` : "", h.evidence ? `<b>Evidence.</b> ${esc(h.evidence)}` : "", h.words ? `<b>Your words.</b> "${esc(h.words)}"` : ""].filter(Boolean).join("<br>");
+  const notes = [h.reason ? `<b>Reason.</b> ${esc(h.reason)}` : "", h.evidence ? `<b>Evidence.</b> ${esc(h.evidence)}` : "", h.commit ? `<b>Commit.</b> <code>${esc(h.commit.slice(0, 10))}</code>` : "", h.words ? `<b>Your words.</b> "${esc(h.words)}"` : ""].filter(Boolean).join("<br>");
   return `          <tr><td class="nowrap">${showDate(h.at)}</td><td>${h.returned ? `<span class="pill danger">${what}</span>` : what}</td><td>${notes}</td></tr>`;
 }
 
@@ -884,7 +1149,8 @@ async function cmdReport(args) {
         tab: `#${t.id} ${esc(t.title)}`,
         title: esc(t.title),
         eyebrow: `Ticket #${t.id} · ${esc(t.group)} / ${esc(t.project)} · ${STATUS_LABEL[t.status]}`,
-        meta: `<li><b>Created</b> ${showDate(t.created_at)}</li>\n          <li><b>Updated</b> ${showDate(t.updated_at)}</li>`,
+        meta: [t.type ? `<li><b>Type</b> ${esc(t.type)}</li>` : "", t.branch ? `<li><b>Branch</b> <code>${esc(t.branch)}</code></li>` : "",
+          `<li><b>Created</b> ${showDate(t.created_at)}</li>`, `<li><b>Updated</b> ${showDate(t.updated_at)}</li>`].filter(Boolean).join("\n          "),
         appbar: '<a href="index.html">&larr; Back to the board</a>',
         sections: ticketSections(t, tickets.filter((other) => other.follows === t.id).map((other) => other.id).sort((a, b) => a - b)),
         foot,
@@ -913,7 +1179,7 @@ async function cmdReport(args) {
   }
 }
 
-const COMMANDS = { project: cmdProject, add: cmdAdd, approve: cmdApprove, decide: cmdDecide, source: cmdSource, review: cmdReview, set: cmdSet, list: cmdList, show: cmdShow, search: cmdSearch, export: cmdExport, report: cmdReport };
+const COMMANDS = { project: cmdProject, add: cmdAdd, approve: cmdApprove, decide: cmdDecide, source: cmdSource, review: cmdReview, set: cmdSet, note: cmdNote, hook: cmdHook, list: cmdList, show: cmdShow, search: cmdSearch, export: cmdExport, report: cmdReport };
 const [command, ...rest] = process.argv.slice(2);
 try {
   if (!COMMANDS[command]) throw new UsageError(`usage: board-tools.mjs <${Object.keys(COMMANDS).join("|")}> ...`);
