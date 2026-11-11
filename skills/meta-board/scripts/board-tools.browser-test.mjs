@@ -244,6 +244,14 @@ try {
   report("Show less returns to ten", (await shownCards()) === 10 && (await text("[data-less]")) === "");
   await shot("crowded-1280");
 
+  // Scrolling down a long column keeps every column heading, with its counter, in view.
+  await click("[data-more]:not([hidden])");
+  const sticky = await browser.evaluate(`(() => { const board = document.querySelector(".board"); board.scrollTop = 700; const top = board.getBoundingClientRect().top; const heads = [...board.querySelectorAll("h3")].map((h) => Math.round(h.getBoundingClientRect().top - top)); const firstCard = board.querySelector("a.ticket:not([hidden])").getBoundingClientRect().top - top; return { scrolled: board.scrollTop > 300, heads, cardGone: firstCard < 0, opaque: getComputedStyle(board.querySelector("h3")).backgroundColor !== "rgba(0, 0, 0, 0)", counter: board.querySelectorAll("h3 [data-count]").length }; })()`);
+  report("column headings and their counters stay at the top of the board while the cards scroll under them", sticky.scrolled && sticky.cardGone && sticky.opaque && sticky.counter === 7 && sticky.heads.slice(0, 4).every((y) => y === 0), sticky);
+  await shot("crowded-scrolled-1280");
+  await browser.evaluate(`document.querySelector(".board").scrollTop = 0`);
+  await click("[data-less]:not([hidden])");
+
   await browser.colorScheme("dark");
   await browser.open(path.join(site, "ticket-2.html"));
   report("ticket page shows created and updated dates", /Created\s*5 Nov 2026/.test(await browser.evaluate(`document.querySelector("header.doc").textContent`)) && /Updated\s*20 Nov 2026/.test(await browser.evaluate(`document.querySelector("header.doc").textContent`)));

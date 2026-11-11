@@ -295,7 +295,7 @@ let idIdea = null, idNext = null;
     expect("report: the project picker lists every project as an option", /role="option"[^>]*data-board-filter="hris-demo"/.test(board) && /role="option"[^>]*data-board-filter="blog-pribadi"/.test(board));
     expect("report: the Filters and Board headings are kept for screen readers only", (board.match(/<section id="[a-z]+" class="bare">/g) || []).length === 2 && /section\.bare > h2\s*{[^}]*clip-path/.test(board));
     expect("report: cards show the ticket type", /<span class="pill solid">feature<\/span>/.test(board));
-    expect("report: the board scrolls sideways instead of stacking", /\.board\s*{[^}]*overflow-x:\s*auto/.test(board) && !/class="grid-3"/.test(bodyOf(board)));
+    expect("report: the board scrolls inside its own box instead of stacking, with pinned column headings", /\.board\s*{[^}]*overflow:\s*auto[^}]*max-height/.test(board) && /\.board h3\s*{[^}]*position:\s*sticky/.test(board) && !/class="grid-3"/.test(bodyOf(board)));
     expect("report: board card marks a ticket that was sent back", /Sent back 1×/.test(board));
     expect("report: ticket page has summary, decisions, sources and history", /id="summary"/.test(detail) && /id="decisions"/.test(detail) && /id="sources"/.test(detail) && /id="history"/.test(detail)
       && detail.includes("sengaja panjang dan lengkap") && detail.includes("ReimburseService.php:14") && /Sent back to In progress/.test(detail));
@@ -311,8 +311,21 @@ let idIdea = null, idNext = null;
       && !/class="eyebrow"|class="meta"/.test(bodyOf(board)) && /class="eyebrow">Ticket #/.test(detail));
     const visible = (html) => bodyOf(html).replace(/<script[^]*?<\/script>/g, "").replace(/<blockquote>[^]*?<\/blockquote>/g, "");
     expect("report: the pages speak English", [board, detail].every((html) => /<html[^>]*lang="en"/.test(html) && !/Terang|Gelap|Sistem|Ringkasan|Keputusan|Daftar|Selesai|Riwayat|Tiket|Papan|Diputuskan/.test(visible(html))), (/(Terang|Gelap|Sistem|Ringkasan|Keputusan|Daftar|Selesai|Riwayat|Tiket|Papan|Diputuskan)[^<]{0,40}/.exec(visible(board) + visible(detail)) || [])[0]);
+    // Only what changed is written again; with thousands of tickets a full rebuild on every change would be slow.
+    const stamp = (name) => fs.statSync(path.join(site, name)).mtimeMs;
+    const before = { changed: stamp(`ticket-${idIdea}.html`), same: stamp(`ticket-${idBlog}.html`), older: stamp(`ticket-${id}.html`) };
     const again = tool(["report", "--out", site]);
-    expect("report: regenerating replaces its own output", again.code === 0, again.text);
+    expect("report: with nothing changed, no ticket page is rewritten", again.code === 0 && /0 ticket page\(s\) written, 4 unchanged/.test(again.text) && stamp(`ticket-${idBlog}.html`) === before.same, again.text);
+    tool(["note", idIdea, "--text", "Kolom ekspor sudah disepakati dengan keuangan. Berikutnya: contoh berkas."], { now: "2026-11-16T09:00:00+07:00" });
+    const one = tool(["report", "--out", site]);
+    expect("report: after one ticket changes, only its page is rewritten", /1 ticket page\(s\) written, 3 unchanged/.test(one.text) && stamp(`ticket-${idIdea}.html`) > before.changed && stamp(`ticket-${idBlog}.html`) === before.same
+      && fs.readFileSync(path.join(site, `ticket-${idIdea}.html`), "utf8").includes("Kolom ekspor sudah disepakati") && /Updated 16 Nov 2026/.test(fs.readFileSync(index, "utf8")), one.text);
+    const followUp = tool(["add", "--file", file({ ...ticket(), title: "Batas klaim untuk karyawan kontrak", decisions: [], follows: Number(id) }), "--dir", HRIS]);
+    const linked = tool(["report", "--out", site]);
+    const newId = (/#(\d+)/.exec(followUp.text) || [])[1];
+    expect("report: a new follow-up also rewrites the ticket it continues, whose page gains the link", /2 ticket page\(s\) written, 3 unchanged/.test(linked.text) && stamp(`ticket-${id}.html`) > before.older && fs.readFileSync(path.join(site, `ticket-${id}.html`), "utf8").includes(`href="ticket-${newId}.html"`), linked.text);
+    const all = tool(["report", "--out", site, "--all"]);
+    expect("report --all: rewrites every page", /5 ticket page\(s\) written, 0 unchanged/.test(all.text) && stamp(`ticket-${idBlog}.html`) > before.same, all.text);
     fs.writeFileSync(path.join(site, "ticket-1.html"), "<p>not ours</p>");
     const foreign = tool(["report", "--out", site]);
     expect("report: refuses to overwrite a file it did not write", foreign.code === 2 && /did not write/.test(foreign.text), foreign.text);

@@ -17,7 +17,7 @@
 //   node board-tools.mjs show <id>                          the full text of one ticket
 //   node board-tools.mjs search <words> [--project p]       ticket numbers and titles only
 //   node board-tools.mjs export [--project p]               JSON
-//   node board-tools.mjs report --out <dir>                 index.html (the board) and one page per ticket
+//   node board-tools.mjs report --out <dir> [--all]         index.html (the board) and one page per ticket; only changed tickets are rewritten
 //
 // The board lives at ~/.aetheris/board/board.db; AETHERIS_BOARD overrides the path.
 // Reading is deliberately narrow: `list` and `search` print one short line per ticket, and only `show`
@@ -29,6 +29,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -753,9 +754,11 @@ const PAGE_STYLE = `<style id="page-style">
     .filters .chip { white-space: nowrap; }
     .title-search { width: 220px; max-width: none; }
   }
-  .board { display: flex; gap: 16px; align-items: flex-start; overflow-x: auto; padding-bottom: 12px; scroll-snap-type: x proximity; }
+  /* The board scrolls in both directions inside its own box, never taller than the screen, so the column
+     headings can stay pinned to its top while the cards move under them. */
+  .board { display: flex; gap: 16px; align-items: stretch; overflow: auto; max-height: calc(100vh - 24px); padding-bottom: 12px; scroll-snap-type: x proximity; }
   .board > div { flex: 0 0 min(300px, 82vw); scroll-snap-align: start; }
-  .board h3 { margin: 0 0 14px; display: flex; align-items: center; gap: 8px; }
+  .board h3 { position: sticky; top: 0; z-index: 2; background: var(--canvas); margin: 0; padding: 4px 0 14px; display: flex; align-items: center; gap: 8px; }
   .board .stack { margin: 0; }
   a.ticket { display: block; color: inherit; text-decoration: none; padding: 18px; }
   a.ticket:hover, a.ticket:focus-visible { border-color: var(--accent); }
@@ -1181,7 +1184,7 @@ function swap(html, pattern, replacement) {
   return next;
 }
 
-function makePage(template, { tab, title, eyebrow, meta, appbar, sections, foot }) {
+function makePage(template, { tab, title, eyebrow, meta, appbar, sections, foot, stamp = "" }) {
   const start = template.indexOf('<section id="ringkasan">');
   const end = template.indexOf('<footer class="doc">');
   if (start === -1 || end === -1) throw new UsageError("the doc-tools template changed shape: cannot find the first section or the footer");
@@ -1202,12 +1205,13 @@ function makePage(template, { tab, title, eyebrow, meta, appbar, sections, foot 
   for (const [key, value] of Object.entries({ JUDUL_TAB: tab, JUDUL: title, KAKI: foot })) html = swap(html, `{{${key}}}`, value);
   html = swap(html, "</head>", `${PAGE_STYLE}\n</head>`);
   if (appbar) html = swap(html, "<main>", `<main>\n    <p class="appbar">${appbar}</p>`);
-  return swap(html, "</body>", `${PAGE_SCRIPT}\n<!-- ${REPORT_MARK} -->\n</body>`);
+  return swap(html, "</body>", `${PAGE_SCRIPT}\n<!-- ${REPORT_MARK}${stamp ? ` ${stamp}` : ""} -->\n</body>`);
 }
 
 async function cmdReport(args) {
   const out = option(args, "--out");
-  if (!out) throw new UsageError("usage: report --out <dir>");
+  const everything = flag(args, "--all");
+  if (!out) throw new UsageError("usage: report --out <dir> [--all]");
   const dir = path.resolve(out);
   if (fs.existsSync(dir) && !fs.statSync(dir).isDirectory()) throw new UsageError(`--out must be a folder: ${dir}`);
   const db = await openDb();
@@ -1223,16 +1227,29 @@ async function cmdReport(args) {
     const template = fs.readFileSync(seed, "utf8");
     fs.rmSync(seed);
 
+    // The board page is rebuilt every time. A ticket page is rebuilt only when what it shows has changed:
+    // the ticket itself, the tickets that continue it, or the look of the pages. Each page carries a stamp of
+    // those three, so thousands of unchanged tickets cost one file read each instead of a rebuild.
+    const build = createHash("sha1").update(template).update(PAGE_STYLE).update(PAGE_SCRIPT).digest("hex").slice(0, 12);
     const pages = [["index.html", makePage(template, { tab: "Board", title: "Board", sections: boardSections(tickets, projects), foot })]];
+    let unchanged = 0;
     for (const t of tickets) {
-      pages.push([`ticket-${t.id}.html`, makePage(template, {
+      const name = `ticket-${t.id}.html`;
+      const target = path.join(dir, name);
+      const followers = tickets.filter((other) => other.follows === t.id).map((other) => other.id).sort((a, b) => a - b);
+      const stamp = `build=${build} updated=${t.updated_at} followers=${followers.join(",")}`;
+      const current = fs.existsSync(target) ? fs.readFileSync(target, "utf8") : null;
+      if (current !== null && !current.includes(REPORT_MARK)) throw new UsageError(`refusing to overwrite a file this tool did not write: ${target}`);
+      if (!everything && current !== null && current.includes(`<!-- ${REPORT_MARK} ${stamp} -->`)) { unchanged++; continue; }
+      pages.push([name, makePage(template, {
+        stamp,
         tab: `#${t.id} ${esc(t.title)}`,
         title: esc(t.title),
         eyebrow: `Ticket #${t.id} · ${esc(t.group)} / ${esc(t.project)} · ${STATUS_LABEL[t.status]}`,
         meta: [t.type ? `<li><b>Type</b> ${esc(t.type)}</li>` : "", t.branch ? `<li><b>Branch</b> <code>${esc(t.branch)}</code></li>` : "",
           `<li><b>Created</b> ${showDate(t.created_at)}</li>`, `<li><b>Updated</b> ${showDate(t.updated_at)}</li>`].filter(Boolean).join("\n          "),
         appbar: '<a href="index.html">&larr; Back to the board</a>',
-        sections: ticketSections(t, tickets.filter((other) => other.follows === t.id).map((other) => other.id).sort((a, b) => a - b)),
+        sections: ticketSections(t, followers),
         foot,
       })]);
     }
@@ -1252,7 +1269,8 @@ async function cmdReport(args) {
     for (const [name] of pages) fs.copyFileSync(path.join(scratch, name), path.join(dir, name));
     const waiting = tickets.filter((t) => ["waiting", "review"].includes(columnOf(t))).length;
     console.log(`board written: ${path.join(dir, "index.html")}`);
-    console.log(`${projects.length} project(s), ${tickets.length} ticket page(s), ${waiting} waiting for the owner`);
+    console.log(`${pages.length - 1} ticket page(s) written, ${unchanged} unchanged`);
+    console.log(`${projects.length} project(s), ${tickets.length} ticket(s), ${waiting} waiting for the owner`);
     return 0;
   } finally {
     fs.rmSync(scratch, { recursive: true, force: true });
