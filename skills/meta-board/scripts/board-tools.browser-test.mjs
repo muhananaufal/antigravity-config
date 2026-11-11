@@ -77,6 +77,8 @@ try {
   // The filters sit in one row on a wide screen.
   const row = await browser.evaluate(`(() => { const tops = ["[data-project-open]", "[data-title-search]", "[data-date-field]", "[data-range-open]"].map((s) => { const r = document.querySelector(s).getBoundingClientRect(); return Math.round(r.top + r.height / 2); }); return Math.max(...tops) - Math.min(...tops); })()`);
   report("project picker, title search, date field and range share one row", row <= 4, row);
+  const gaps = await browser.evaluate(`(() => { const boxes = ["[data-project-open]", "[data-title-search]", '[data-date-field="created"]', '[data-date-field="updated"]', "[data-range-open]"].map((s) => document.querySelector(s).getBoundingClientRect()); return boxes.slice(1).map((b, i) => Math.round(b.left - boxes[i].right)); })()`);
+  report("the five filter controls are evenly spaced", gaps.every((gap) => gap === gaps[0]) && gaps[0] >= 10, gaps);
   report("the Filters and Board headings take no room", await browser.evaluate(`[...document.querySelectorAll("section.bare > h2")].every((h) => h.getBoundingClientRect().width <= 1)`));
 
   // The project picker: opens, narrows as you type, picks with the keyboard, closes with Escape.
@@ -126,6 +128,8 @@ try {
   report("two clicks mark the ends and the days between", await browser.evaluate(`document.querySelector('[data-day="2026-11-04"]').classList.contains("edge") && document.querySelector('[data-day="2026-11-05"]').classList.contains("in-range") && document.querySelector('[data-day="2026-11-06"]').classList.contains("edge")`));
   const fit = await browser.evaluate(`(() => { const d = document.querySelector("dialog.range").getBoundingClientRect(); return [...document.querySelectorAll("dialog.range table, dialog.range .range-row, dialog.range .chips")].every((el) => { const r = el.getBoundingClientRect(); return r.left >= d.left - 1 && r.right <= d.right + 1; }); })()`);
   report("everything in the dialog fits inside it", fit);
+  const rhythm = await browser.evaluate(`(() => { const d = document.querySelector("dialog.range"); const blocks = [...d.children].map((c) => c.getBoundingClientRect()); const between = blocks.slice(1).map((b, i) => Math.round(b.top - blocks[i].bottom)); const gapOf = (sel) => { const b = [...d.querySelectorAll(sel)].map((el) => el.getBoundingClientRect()); return b.slice(1).map((x, i) => Math.round(x.left - b[i].right)); }; return { between, presets: gapOf("[data-range-preset]"), arrows: gapOf("[data-range-shift]"), actions: gapOf("[data-range-cancel], [data-range-apply]") }; })()`);
+  report("the dialog keeps one rhythm between its blocks and between its buttons", rhythm.between.every((gap) => gap === 20) && [...rhythm.presets, ...rhythm.arrows, ...rhythm.actions].every((gap) => gap === 12), rhythm);
   await shot("range-dialog-1280");
   report("nothing is filtered before Apply", (await visible()) === "#1,#2,#3", await visible());
   await click("[data-range-apply]");

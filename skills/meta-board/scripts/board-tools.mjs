@@ -713,15 +713,24 @@ const showDate = (iso) => { const [y, m, d] = day(iso).split("-").map(Number); r
 // cards that are links, and a board that scrolls sideways. Everything else comes from the shared doc-style.
 const PAGE_STYLE = `<style id="page-style">
   .wrap { grid-template-columns: minmax(0, 1fr); }
+  /* The board wants the width of the screen; a ticket reads best at the width of its text. */
+  .wrap:has(.board) { max-width: 1840px; }
+  .wrap:not(:has(.board)) { max-width: 940px; }
   nav.toc, .toc-mobile { display: none; }
   header.doc h1 { margin-bottom: 0; }
   header.doc .meta { margin: 12px 0 0; }
   @media print { header.doc .theme-switch { display: none; } }
   .appbar { margin: 0 0 16px; font-weight: 600; }
   section.bare { margin-top: 20px; }
+  section.bare + section.bare { margin-top: 28px; }
+  #decisions .stack { gap: 16px; }
+  #decisions .card > p { margin: 10px 0 0; }
+  #decisions .card > ul { margin: 6px 0 0; }
+  #decisions .card > blockquote { margin: 14px 0 0; }
   section.bare > h2 { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-  .filters { display: flex; flex-wrap: wrap; gap: 10px 12px; align-items: center; }
-  .filters .chips { margin: 0; flex-wrap: nowrap; }
+  /* One gap for all five controls, so Created and Updated do not sit closer together than their neighbours. */
+  .filters { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+  .filters .chips { margin: 0; flex-wrap: nowrap; gap: 12px; }
   .filters input[type="search"] { font: 500 15px var(--body); color: var(--ink); background: var(--surface); border: 1px solid var(--line-strong); border-radius: 999px; padding: 9px 16px; min-height: 40px; }
   .filters input[type="search"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .title-search { flex: 1 1 220px; max-width: 360px; min-width: 0; }
@@ -737,9 +746,9 @@ const PAGE_STYLE = `<style id="page-style">
   .range-short { display: none; }
   @media (max-width: 720px) {
     .title-search { order: -1; flex-basis: 100%; max-width: none; }
-    .filters { flex-wrap: wrap; gap: 10px 8px; }
+    .filters { gap: 10px 8px; }
     .filters .chip { padding: 8px 11px; font-size: 13px; }
-    .filters .chips { gap: 4px; flex: none; }
+    .filters .chips { gap: 8px; flex: none; }
     .filters [data-range-open] { flex: none; }
     .picker { flex: 1 1 0; min-width: 0; }
     .picker > button { width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -748,23 +757,28 @@ const PAGE_STYLE = `<style id="page-style">
   }
   .board { display: flex; gap: 16px; align-items: flex-start; overflow-x: auto; padding-bottom: 12px; scroll-snap-type: x proximity; }
   .board > div { flex: 0 0 min(300px, 82vw); scroll-snap-align: start; }
-  .board h3 { margin-top: 0; }
-  a.ticket { display: block; color: inherit; text-decoration: none; }
+  .board h3 { margin: 0 0 14px; display: flex; align-items: center; gap: 8px; }
+  .board .stack { margin: 0; }
+  a.ticket { display: block; color: inherit; text-decoration: none; padding: 18px; }
   a.ticket:hover, a.ticket:focus-visible { border-color: var(--accent); }
-  a.ticket h4 { margin-top: 0; }
-  a.ticket p { margin: 8px 0 0; }
-  a.ticket .pill { white-space: normal; }
-  a.ticket .dates { color: var(--muted); font-size: 13px; }
+  a.ticket h4 { margin: 0; line-height: 1.4; }
+  a.ticket .pills { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0 0; }
+  a.ticket .pill { white-space: normal; vertical-align: 0; }
+  a.ticket .dates { color: var(--muted); font-size: 13px; margin: 12px 0 0; }
   .column-empty { color: var(--muted); font-size: 14px; }
-  dialog.range { border: 1px solid var(--line); border-radius: 20px; background: var(--surface); color: var(--ink); padding: 22px; width: min(660px, calc(100vw - 2rem)); }
+  dialog.range { border: 1px solid var(--line); border-radius: 20px; background: var(--surface); color: var(--ink); padding: 24px; width: min(700px, calc(100vw - 2rem)); }
   dialog.range::backdrop { background: rgb(0 0 0 / .45); }
-  .range-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+  /* The dialog keeps one rhythm: 12px between buttons, 20px between its four blocks. */
+  .range-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; margin: 0 0 20px; }
   .range-row h3 { margin: 0; }
-  .range-row.foot { margin: 16px 0 0; padding-top: 14px; border-top: 1px solid var(--line); }
-  .range-row > span { display: flex; gap: 8px; }
-  .range-months { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
+  .range-row.foot { margin: 20px 0 0; padding-top: 20px; border-top: 1px solid var(--line); }
+  .range-row > span { display: flex; gap: 12px; }
+  dialog.range .chips { margin: 0 0 20px; gap: 12px; }
+  .range-months { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 32px; }
+  .range-months p { margin: 0 0 10px; }
   @media (max-width: 620px) { .range-months { grid-template-columns: minmax(0, 1fr); } }
-  .range-months p { text-align: center; font-weight: 600; margin: 0 0 6px; }
+  .range-months p { text-align: center; font-weight: 600; }
+  .range-months th { padding-bottom: 8px; }
   .range-months table { width: 100%; min-width: 0; font-size: 14px; table-layout: fixed; border-collapse: collapse; text-align: center; border: 0; background: none; }
   .range-months th { font-size: 12px; color: var(--muted); padding: 0 0 4px; background: none; border: 0; text-align: center; }
   .range-months td { padding: 0; border: 0; }
@@ -967,7 +981,7 @@ function boardCard(t) {
     c.returned ? `<span class="pill danger">Sent back ${c.returned}×</span>` : ""].filter(Boolean).join(" ");
   return `          <a class="card ticket" href="ticket-${t.id}.html" data-project="${esc(t.project)}" data-created="${day(t.created_at)}" data-updated="${day(t.updated_at)}">
             <h4>#${t.id} · ${esc(t.title)}</h4>
-            <p>${pills}</p>
+            <p class="pills">${pills}</p>
             <p class="dates">Created ${showDate(t.created_at)} · Updated ${showDate(t.updated_at)}</p>
           </a>`;
 }
