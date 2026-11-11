@@ -1,0 +1,55 @@
+{
+  "title": "Batas tiga duty yang diklaim per karyawan per bulan",
+  "summary": "Karyawan hanya bisa mengajukan reimburse transport untuk tiga duty dalam satu bulan. Pengajuan untuk duty keempat ditolak dengan pesan yang menjelaskan batasnya. Klaim tambahan pada duty yang sudah diklaim tetap diterima.",
+  "body": "Diminta bagian keuangan karena klaim transport bulan lalu melebihi anggaran. Panel disetujui dengan batas dihitung per duty, bukan per klaim.",
+  "branch": "feature/reimburse-monthly-limit",
+  "done_when": [
+    "Karyawan dengan tiga duty yang sudah diklaim bulan ini melihat pesan \"Batas klaim bulan ini sudah tercapai\" saat mengajukan untuk duty keempat.",
+    "Klaim kedua pada duty yang sudah diklaim tetap tersimpan.",
+    "Karyawan yang klaimnya ditolak HRD bisa mengajukan lagi tanpa terhitung dua kali."
+  ],
+  "decisions": [
+    {
+      "question": "Batas tiga per bulan itu menghitung klaim atau duty?",
+      "chosen": "Dihitung per duty.",
+      "reason": "Field Duty lebih dari tiga hari punya satu klaim per hari, jadi batas per klaim membuatnya tidak bisa diklaim penuh.",
+      "rejected": [
+        { "option": "Dihitung per klaim", "reason": "Dinas lima hari akan tertahan di hari keempat padahal itu satu penugasan." }
+      ],
+      "decided_by": "user",
+      "user_words": "per duty aja ya, biar yang dinas panjang ngga kepotong"
+    },
+    {
+      "question": "Angka tiga disimpan di mana?",
+      "chosen": "Sebagai konstanta di ReimburseService, seperti batas lima foto struk.",
+      "reason": "Pemilik tidak meminta angka yang bisa diatur, dan modul ini sudah memakai pola konstanta untuk batas sejenis.",
+      "rejected": [
+        { "option": "Kolom pengaturan per perusahaan", "reason": "Butuh migrasi dan layar pengaturan yang tidak diminta." }
+      ],
+      "decided_by": "agent",
+      "authority": "yang kecil-kecil pakai bawaanmu saja"
+    },
+    {
+      "question": "Apakah klaim yang ditolak HRD ikut dihitung ke batas?"
+    }
+  ],
+  "out_of_scope": [
+    "Batas berdasarkan nominal rupiah tidak dikerjakan; yang diminta hanya batas jumlah duty.",
+    "Tampilan sisa kuota di aplikasi HP tidak dikerjakan di tiket ini."
+  ],
+  "unverified": [
+    {
+      "claim": "Aplikasi HP menampilkan pesan galat dari server apa adanya.",
+      "check": "Kirim pengajuan keempat lewat aplikasi HP di lingkungan uji dan lihat pesan yang tampil."
+    }
+  ],
+  "sources": [
+    { "claim": "Klaim disimpan satu baris per foto struk, bukan per duty", "source": "app/Services/ReimburseService.php:88", "status": "dibaca utuh" },
+    { "claim": "Batas lima foto struk ditulis sebagai konstanta", "source": "app/Services/ReimburseService.php:14", "status": "dibaca utuh" }
+  ],
+  "links": [
+    { "label": "Catatan permintaan dari keuangan", "target": "docs/reimburse-limit-request.md" }
+  ],
+  "approved_by": "user",
+  "user_words": "gass, yang soal klaim ditolak nanti saya jawab"
+}

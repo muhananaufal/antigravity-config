@@ -194,4 +194,5 @@ Dari uji coba 10 November 2026 pada aplikasi contoh lokal dengan ekstensi Claude
 - [ ] `diff` dijalankan bila ada run sebelumnya.
 - [ ] Laporan dibuat `swipe-tools report`, dirender, dan gambarnya dibaca.
 - [ ] Laporan ke user menyebut yang tidak dicoba dan data yang dibuat.
+- [ ] Bila swipe ini untuk sebuah tiket papan: laporannya ditautkan ke tiket itu (`board link`, `skills/meta-board/SKILL.md` §1).
 - [ ] Tab yang dibuka untuk swipe ditutup.

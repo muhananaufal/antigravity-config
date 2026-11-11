@@ -155,12 +155,13 @@ flowchart TD
 
 1. **Pahami masalah dulu.** Request tanpa masalah yang jelas ditolak halus (`AGENTS.md` §4). Kalimat ambigu soal cakupan (global atau per user, semua peran atau satu) ditanyakan balik dengan dua contoh konkret, bukan ditafsirkan.
 2. **Klasifikasikan (§0b)** dan nyatakan kelasnya beserta alasannya.
-3. **Buat peta keterkaitan (§0c).** Baca kode yang tersentuh, modul kembarannya, `LEARNED.md`, dan riwayatnya. Panel di atas tebakan adalah teater.
+3. **Buat peta keterkaitan (§0c).** Baca kode yang tersentuh, modul kembarannya, `LEARNED.md`, dan riwayatnya. Panel di atas tebakan adalah teater. Cari juga keputusan lama soal hal yang sama di papan (`skills/meta-board/SKILL.md` §1) dan sebut di panel bila ada.
 4. **Sapu semua lensa.** Buka berkas acuan lensa yang terpicu dan jalankan katalog kasus tepinya terhadap request ini. Katalog itu daftar hal untuk **dicek**, bukan daftar untuk disalin ke panel.
 5. **Saring (§2).** Yang lolos hanya temuan dengan skenario, akibat, bukti, dan usul.
 6. **Tulis kriteria selesai** untuk kelas Terbatas ke atas: tiga sampai lima hal yang bisa diamati dan membuktikan permintaannya terpenuhi (§4).
 7. **Sajikan (§4)**, tutup dengan rekomendasi + **pembatal** — kondisi yang, bila benar, membatalkan rekomendasi itu.
 8. **BERHENTI.** Eksekusi hanya setelah persetujuan user.
+9. **Setelah disetujui: catat tiketnya dulu** (`skills/meta-board/SKILL.md`, wajib dibuka), baru eksekusi. "Selesai kalau", keputusan user, "yang sengaja tidak dikerjakan", dan "belum saya verifikasi" dari panel ini menjadi isi tiketnya.
 
 ---
 
@@ -260,4 +261,5 @@ Aturannya mengikuti `AGENTS.md` §6.1:
 [ ] Lensa legal dan domain bertanya, tidak memutuskan; tidak ada isi aturan dari ingatan
 [ ] Ada "saya batalkan saran ini kalau"
 [ ] Setelah mengirim: berhenti
+[ ] Setelah disetujui: tiket papan dicatat sebelum kode ditulis
 ```

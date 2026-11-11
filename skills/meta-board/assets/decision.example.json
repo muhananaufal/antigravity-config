@@ -1,0 +1,10 @@
+{
+  "question": "Apakah klaim yang ditolak HRD ikut dihitung ke batas?",
+  "chosen": "Tidak. Klaim yang ditolak tidak dihitung.",
+  "reason": "Batas ini dimaksudkan menahan pengeluaran, dan klaim yang ditolak tidak mengeluarkan uang.",
+  "rejected": [
+    { "option": "Semua pengajuan dihitung apa pun hasilnya", "reason": "Karyawan yang salah unggah struk akan kehilangan jatah tanpa menerima apa pun." }
+  ],
+  "decided_by": "user",
+  "user_words": "yang ditolak jangan dihitung"
+}

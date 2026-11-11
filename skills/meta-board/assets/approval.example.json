@@ -1,0 +1,15 @@
+{
+  "branch": "feature/claims-export-excel",
+  "done_when": [
+    "HRD mengunduh rekap bulan berjalan dan mendapat satu baris per klaim dengan nama, tanggal, dan nominal.",
+    "Karyawan biasa yang membuka alamat unduhnya mendapat halaman tidak diizinkan."
+  ],
+  "sources": [
+    { "claim": "Daftar klaim HRD sudah punya query dengan saringan bulan", "source": "app/Http/Controllers/Hrd/ReimburseController.php:41", "status": "dibaca utuh" }
+  ],
+  "out_of_scope": [
+    "Ekspor ke PDF tidak dikerjakan."
+  ],
+  "approved_by": "user",
+  "user_words": "oke kerjakan yang excel dulu"
+}

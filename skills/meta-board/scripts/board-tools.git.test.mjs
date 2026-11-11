@@ -201,6 +201,21 @@ const hookFile = path.join(SHOP, ".git", "hooks", "pre-commit");
   expect("hook install: refuses a hooks folder that lives in the working tree, whatever the option", ask.code === 1 && forced.code === 1 && /core\.hooksPath/.test(forced.text) && !fs.existsSync(path.join(dir, ".husky", "pre-commit")), ask.text + forced.text);
 }
 
+// --- the examples the skill points at are accepted by the tool as they stand ----------------------
+{
+  const ASSETS = path.join(HERE, "..", "assets");
+  const dir = makeRepo("examples");
+  const added = tool(["add", "--file", path.join(ASSETS, "ticket.example.json"), "--dir", dir]);
+  const ticketId = idOf(added);
+  const answered = tool(["decide", ticketId, "--answers", "K3", "--file", path.join(ASSETS, "decision.example.json")]);
+  const idea = tool(["add", "--file", path.join(ASSETS, "idea.example.json"), "--dir", dir]);
+  const approved = tool(["approve", idOf(idea), "--file", path.join(ASSETS, "approval.example.json")]);
+  const shown = tool(["show", ticketId]);
+  expect("examples: the full ticket, the answer to its open question, the idea and its approval are all accepted",
+    added.code === 0 && answered.code === 0 && idea.code === 0 && approved.code === 0 && /^Type: feature$/m.test(shown.text) && /^Out of scope:/m.test(shown.text) && /^Not yet verified:/m.test(shown.text) && /^Links:/m.test(shown.text),
+    added.text + answered.text + idea.text + approved.text);
+}
+
 // --- a folder without git ------------------------------------------------------------------------
 {
   const plain = path.join(TMP, "notes");

@@ -50,7 +50,7 @@
 │   ├── LEARNED.md              # Living Brain — pelajaran yang sudah dibayar mahal
 │   └── tool-claude-code.md     # Adaptor Claude Code (terjemahan mekanisme tool)
 │
-├── skills/                     # Delapan skill aktif.
+├── skills/                     # Sembilan skill aktif.
 │   ├── meta-panel/             # ★ GERBANG UTAMA — klasifikasi + Panel 10 lensa
 │   │   └── references/         # Peta keterkaitan, satu berkas per lensa, pohon keputusan stack
 │   ├── meta-debug/             # Debugging sistematis — akar masalah sebelum perbaikan
@@ -59,7 +59,8 @@
 │   ├── meta-api-docs/          # Dokumentasi API dari eksekusi nyata
 │   ├── meta-prd/               # Dokumen HTML (PRD, RFC, ADR, laporan) dengan satu gaya
 │   ├── meta-handover/          # Serah terima sesi — bawaan HTML lewat meta-prd
-│   └── meta-swipe/             # Mencoba aplikasi di browser per peran, dengan daftar periksa
+│   ├── meta-swipe/             # Mencoba aplikasi di browser per peran, dengan daftar periksa
+│   └── meta-board/             # Papan tiket dan catatan keputusan lintas proyek
 │
 └── plugins/                    # Plugin pihak ketiga (Apache-2.0) — ter-gitignore
 ```
@@ -178,6 +179,16 @@ Mencoba aplikasi web lewat browser sebagai tiap peran, **hanya bila diminta**.
 - **Daftar periksa di repo proyek** (`.swipe/checklist.json`) dan satu berkas hasil per swipe, supaya swipe berikutnya mengulang langkah yang sama dan menunjukkan apa yang berubah.
 - **`scripts/swipe-tools.mjs`:** `init`, `validate`, `plan`, `diff`, `report`. Laporan HTML dibangun dari data, bukan ditulis tangan.
 - **Pagar:** hanya alamat lokal atau dev yang disebut user, password tidak diketik maupun ditulis, aksi yang tidak bisa dibalik ditanyakan dulu, data buatan swipe tidak dibersihkan otomatis.
+
+### `meta-board`
+
+Satu papan tiket untuk semua proyek, supaya pekerjaan yang disetujui dan keputusan yang diambil tidak hilang bersama percakapannya.
+
+- **Tiket satu-satunya wadah:** ringkasan, keputusan (dengan kalimat user apa adanya dan tanda siapa yang memutuskan), kriteria selesai, yang sengaja tidak dikerjakan, dugaan yang belum dicek, sumber, tautan, dan riwayat.
+- **Data di luar semua repo** (`~/.aetheris/board/board.db`, SQLite bawaan Node); halaman papan dan halaman per tiket dibangun dari data itu dengan gaya `meta-prd`.
+- **`scripts/board-tools.mjs`** memaksa aturannya: tiket terikat ke branch-nya, mulai kerja ditolak di branch lain, `review` butuh commit yang benar-benar ada di branch itu, `done` butuh kalimat penerimaan user. Agen hanya membaca lewat `list`, `search`, dan `show`, jadi ongkos bacanya tidak naik dengan jumlah tiket.
+- **Penjaga commit (opsional per proyek):** hook lokal yang menolak commit di branch kerja tanpa tiket yang sedang dikerjakan.
+- **Uji:** `board-tools.test.mjs`, `board-tools.git.test.mjs`, dan `board-tools.browser-test.mjs` (butuh Edge atau Chrome).
 
 ---
 

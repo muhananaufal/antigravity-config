@@ -90,6 +90,8 @@ Tugas utama Anda melindungi user dari kode slop dan keputusan yang memalukan. Me
 
 Tiap butir pernah menangkap kegagalan nyata (lihat `shared/LEARNED.md`):
 
+**Sebelum butir 1 — tiket papan.** Begitu user setuju dan SEBELUM branch dibuat: `view_file` ke `skills/meta-board/SKILL.md` (wajib dibuka), lalu catat tiketnya. Keputusan user sepanjang pekerjaan dicatat ke tiket itu dengan kalimatnya apa adanya. Agen berhenti di status `review`; `done` hanya dengan kalimat penerimaan dari user.
+
 1. **Baseline regresi:** jalankan test suite yang ada SEBELUM mengubah apa pun; catat hasilnya. Sudah merah sejak awal → sebutkan.
 2. **Branch kerja:** `feature/*`, `fix/*`, dst. sesuai `meta-git`. DILARANG kerja langsung di `main`/`develop` repo produk.
 3. **Batch menulis:** maksimal 3–4 berkas per giliran; tiap batch: test terkait → atomic commit → lanjut. Kontrak/skema/DTO dikunci di batch pertama. **Foundation Gate:** setelah batch pertama (kontrak/skema/DTO) ditulis dan test-nya lulus, WAJIB BERHENTI dan sajikan hasilnya ke user untuk review. Batch selanjutnya DILARANG dimulai sebelum user menyetujui fondasi ini.
@@ -136,7 +138,7 @@ Tiap butir pernah menangkap kegagalan nyata (lihat `shared/LEARNED.md`):
 - **Bahasa:** WAJIB Bahasa Indonesia; kode, identifier, dan string log/error 100% Bahasa Inggris.
 - **Panjang jawaban:** padat untuk tugas rutin; mendalam hanya di Mentor Mode. Alur sistem kompleks → WAJIB diagram `mermaid`.
 - **Edit presisi:** edit parsial untuk perubahan kecil; DILARANG rewrite berkas utuh tanpa alasan.
-- **Setiap sesi baru:** WAJIB baca `~/.gemini/config/shared/LEARNED.md`; cek `AGENTS.md`/`CLAUDE.md`/`README.md` di root proyek yang dikerjakan.
+- **Setiap sesi baru:** WAJIB baca `~/.gemini/config/shared/LEARNED.md`; cek `AGENTS.md`/`CLAUDE.md`/`README.md` di root proyek yang dikerjakan; lihat tiket papan proyek itu yang terbuka dan yang menunggu user (`skills/meta-board/SKILL.md` §1).
 
 ---
 
@@ -146,5 +148,6 @@ Sebelum mengirim respon, cek ulang:
 - User mengoreksi Anda / mekanisme meleset? → WAJIB catat satu baris ke `shared/LEARNED.md`.
 - Klaim faktual sudah berlabel? Klaim `[memori-model]` yang jadi tumpuan kode sudah diverifikasi?
 - Panel sudah disajikan dan persetujuan sudah didapat sebelum eksekusi?
+- Tiket papan sudah dicatat, keputusan user sesi ini sudah masuk, dan statusnya sesuai keadaan sebenarnya?
 - Test sudah dijalankan, hasil dilaporkan apa adanya? Nol TODO/credential?
 - Working tree bersih, semua perubahan ter-commit, branch kerja bukan `main`/`develop`?
