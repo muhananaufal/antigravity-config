@@ -26,7 +26,7 @@ Alat dipanggil dengan `node ~/.gemini/config/skills/meta-board/scripts/board-too
 3. **Agen DILARANG menandai `done`.** Agen berhenti di `review`. `done`, pengembalian, dan `cancelled` hanya dengan kalimat user tentang tiket itu.
 4. **Isi ditulis untuk dibaca manusia berbulan-bulan lagi:** kalimat lengkap dalam bahasa percakapan dengan user, tanpa singkatan internal, tanpa nama lensa atau istilah skill.
 5. **Papan DILARANG disunting di luar alat**, dan halaman HTML-nya DILARANG disunting tangan.
-6. **DILARANG memakai `BOARD_SKIP` atau `--no-verify`** untuk melewati penjaga commit. Itu jalan keluar user saat bekerja sendiri.
+6. **DILARANG memakai `BOARD_SKIP` atau `--no-verify`** untuk melewati penjaga commit maupun penjaga push. `BOARD_SKIP` adalah jalan keluar user saat bekerja sendiri, dan hanya untuk commit.
 7. **DILARANG membaca seluruh papan.** `list` dan `search` dulu, `show` hanya untuk tiket yang memang dibutuhkan.
 
 ---
@@ -52,7 +52,7 @@ Alat dipanggil dengan `node ~/.gemini/config/skills/meta-board/scripts/board-too
 | Pekerjaan selesai menurut agen | `board set <id> --status review --evidence "<perintah dan hasilnya>" --commit <hash>` |
 | User menerima hasilnya | `board set <id> --status done --words "<kalimat user>"` |
 | User bilang belum sesuai | Lihat §3 |
-| Pekerjaan sudah di-merge ke branch integrasi (`meta-git` §6) | `board merged <id> --into <branch>`. Diterima belum tentu sudah di-merge; keduanya dicatat terpisah. Boleh lebih dari sekali (ke `develop`, lalu ke `main`). |
+| Pekerjaan sudah di-merge ke branch integrasi (`meta-git` §6), termasuk lewat pull request yang sudah masuk (`git fetch` dulu) | `board merged <id> --into <branch>`. Diterima belum tentu sudah di-merge; keduanya dicatat terpisah. Boleh lebih dari sekali (ke `develop`, lalu ke `main`). |
 | Penyelidikan bug menemukan akar masalahnya (`meta-debug`) | Perbaikannya lewat panel ringkas, lalu jadi tiket dengan branch `fix/...`; akar masalah dan buktinya masuk `summary` dan `sources` |
 | Sesi brainstorm menghasilkan ide yang belum mau dikerjakan | Tawarkan sekali; bila user mau, `board add` dengan `"status": "idea"` |
 | Setiap kali ada yang berubah | `board report --out ~/.aetheris/board/site` (hanya halaman yang berubah yang ditulis ulang) |
@@ -118,9 +118,18 @@ Ragu → tanyakan ke user, dengan menyebut butir `done_when` yang dimaksud.
 
 ---
 
-## §4. Penjaga Commit
+## §4. Penjaga Commit dan Penjaga Push
 
-Di proyek yang dipasangi, commit di branch kerja tanpa tiket `doing` atau `review` ditolak git.
+Satu pemasangan memasang dua penjaga di proyek itu:
+
+- **Penjaga commit:** commit di branch kerja tanpa tiket `doing` atau `review` ditolak.
+- **Penjaga push:** push langsung ke branch integrasi ditolak; branch itu dicapai lewat pull request (`skills/meta-git/SKILL.md`, "Jalur Pull Request"). Bawaannya `main`, `master`, `develop`, `staging`. Tidak ada tombol lewati.
+
+Aturannya:
+
+- **Proyek dengan nama branch staging atau produksi yang berbeda:** tanyakan namanya ke user saat memasang, lalu `board project protect --dir <root proyek> --branches <a,b,c>`. Jangan menebak dari nama branch yang kebetulan ada.
+- **Push ditolak penjaga:** push branch kerjanya saja. Membuka dan me-merge pull request HANYA saat user memintanya.
+- **Proyek yang memang user push langsung ke `main`** (mis. repo konfigurasi pribadi): tidak dipasangi; itu keputusan user per proyek.
 
 - **Menawarkan pemasangan:** sekali, saat proyek pertama kali masuk papan dan foldernya repo git. Setelah user setuju: `board hook install --dir <root proyek>`.
 - **Sudah ada hook lain:** alat berhenti dan menyebut tiga pilihan (`chain`, `replace`, `skip`). **User yang memilih**; sampaikan pilihannya, jangan memutuskan sendiri.

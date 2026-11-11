@@ -193,6 +193,67 @@ const hookFile = path.join(SHOP, ".git", "hooks", "pre-commit");
   git(SHOP, ["checkout", "-q", "feature/claim-limit"]);
 }
 
+// --- the push guard: integration branches are reached through pull requests -----------------------
+{
+  const dir = makeRepo("pushy");
+  const remote = path.join(TMP, "pushy-remote.git");
+  git(TMP, ["init", "-q", "--bare", "-b", "main", remote]);
+  git(dir, ["remote", "add", "origin", remote]);
+  git(dir, ["push", "-q", "origin", "main"]); // before the guard exists: the remote needs a main to protect
+  git(dir, ["checkout", "-q", "-b", "feature/export"]);
+  fs.writeFileSync(path.join(dir, "export.txt"), "x\n");
+  git(dir, ["add", "."]);
+  git(dir, ["commit", "-q", "-m", "feat: export"]);
+  const installed = tool(["hook", "install", "--dir", dir]);
+  const prePush = path.join(dir, ".git", "hooks", "pre-push");
+  expect("hook install: also writes the push guard", installed.code === 0 && fs.existsSync(prePush) && /board-tools push guard/.test(fs.readFileSync(prePush, "utf8")) && fs.existsSync(path.join(dir, ".git", "hooks", "pre-commit")), installed.text);
+  const remoteHas = (ref) => git(TMP, ["--git-dir", remote, "rev-parse", "--verify", "--quiet", ref]).code === 0;
+
+  const work = git(dir, ["push", "origin", "feature/export"]);
+  expect("push guard: a work branch is pushed as usual", work.code === 0 && remoteHas("refs/heads/feature/export"), work.text);
+  const before = git(TMP, ["--git-dir", remote, "rev-parse", "main"]).text.trim();
+  const direct = git(dir, ["push", "origin", "feature/export:main"]);
+  const after = git(TMP, ["--git-dir", remote, "rev-parse", "main"]).text.trim();
+  expect("push guard: a direct push to main is refused and points at a pull request", direct.code !== 0 && /pull request/.test(direct.text) && /main/.test(direct.text) && before === after, direct.text);
+  for (const branch of ["develop", "staging", "master"]) {
+    const refused = git(dir, ["push", "origin", `feature/export:${branch}`]);
+    expect(`push guard: a direct push to ${branch} is refused`, refused.code !== 0 && !remoteHas(`refs/heads/${branch}`), refused.text);
+  }
+  const removal = git(dir, ["push", "origin", "--delete", "main"]);
+  expect("push guard: deleting a protected branch on the remote is refused", removal.code !== 0 && remoteHas("refs/heads/main"), removal.text);
+  git(dir, ["tag", "v0.1.0"]);
+  const tag = git(dir, ["push", "origin", "v0.1.0"]);
+  expect("push guard: tags are not branches and are pushed as usual", tag.code === 0 && remoteHas("refs/tags/v0.1.0"), tag.text);
+  const noSkip = git(dir, ["push", "origin", "feature/export:staging"], { env: { BOARD_SKIP: "1" } });
+  expect("push guard: there is no skip switch", noSkip.code !== 0, noSkip.text);
+
+  // A project whose staging and production branches have other names.
+  const listed = tool(["project", "protect", "--dir", dir]);
+  expect("project protect: shows the default list", listed.code === 0 && /main, master, develop, staging/.test(listed.text) && /default/.test(listed.text), listed.text);
+  const bad = tool(["project", "protect", "--dir", dir, "--branches", "uat, feature/x y"]);
+  expect("project protect: a name git would not accept as a branch is refused", bad.code === 1 && /branch name/.test(bad.text), bad.text);
+  const set = tool(["project", "protect", "--dir", dir, "--branches", "main, uat, prod"]);
+  expect("project protect: the list can be replaced for one project", set.code === 0 && /main, uat, prod/.test(set.text), set.text);
+  const uat = git(dir, ["push", "origin", "feature/export:uat"]);
+  const staging = git(dir, ["push", "origin", "feature/export:staging"]);
+  expect("push guard: follows the project's own list", uat.code !== 0 && /pull request/.test(uat.text) && staging.code === 0, uat.text + staging.text);
+  const reset = tool(["project", "protect", "--dir", dir, "--default"]);
+  expect("project protect: --default goes back to the standard list", reset.code === 0 && /main, master, develop, staging/.test(reset.text), reset.text);
+
+  const removed = tool(["hook", "remove", "--dir", dir]);
+  expect("hook remove: takes both guards away", removed.code === 0 && !fs.existsSync(prePush) && !fs.existsSync(path.join(dir, ".git", "hooks", "pre-commit")), removed.text);
+  const free = git(dir, ["push", "origin", "feature/export:develop"]);
+  expect("push guard: without the guard a direct push goes through again", free.code === 0, free.text);
+
+  // An existing pre-push hook is treated like an existing pre-commit hook.
+  fs.writeFileSync(prePush, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  const ask = tool(["hook", "install", "--dir", dir]);
+  expect("hook install: stops for an existing pre-push hook too, and installs nothing halfway", ask.code === 1 && /pre-push/.test(ask.text) && /chain/.test(ask.text) && !fs.existsSync(path.join(dir, ".git", "hooks", "pre-commit")), ask.text);
+  const chained = tool(["hook", "install", "--dir", dir, "--existing", "chain"]);
+  const stillRefused = git(dir, ["push", "origin", "feature/export:main"]);
+  expect("hook install --existing chain: the old pre-push hook is kept and the guard still refuses", chained.code === 0 && fs.existsSync(path.join(dir, ".git", "hooks", "pre-push.before-board")) && stillRefused.code !== 0, chained.text + stillRefused.text);
+}
+
 // --- hooks that are already there ----------------------------------------------------------------
 {
   const dir = makeRepo("legacy");

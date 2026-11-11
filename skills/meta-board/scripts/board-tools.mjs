@@ -16,7 +16,8 @@
 //   node board-tools.mjs review <id> K<n>                   the owner has seen a decision the agent made
 //   node board-tools.mjs note <id> --text <text>            where the work stands and what comes next
 //   node board-tools.mjs merged <id> --into <branch>        the work is on that branch; checked against git
-//   node board-tools.mjs hook <install|check|remove> [--dir <path>] [--existing chain|replace|skip]
+//   node board-tools.mjs hook <install|remove> [--dir <path>] [--existing chain|replace|skip]   the commit guard and the push guard
+//   node board-tools.mjs project protect [--dir <path>] [--branches a,b,c | --default]        branches the push guard refuses
 //   node board-tools.mjs set <id> --status <status> [--evidence <text>] [--reason <text>] [--words <owner's sentence>]
 //   node board-tools.mjs list [--project p] [--group g] [--status s] [--waiting] [--limit n]
 //                             [--created-from d] [--created-to d] [--updated-from d] [--updated-to d]
@@ -57,6 +58,8 @@ const BRANCH_RULE = new RegExp(`^(${BRANCH_TYPES.join("|")})/[a-z0-9][a-z0-9._-]
 const BRANCH_HINT = `${BRANCH_TYPES.map((t) => `${t}/`).join(", ")} followed by lowercase letters, digits, dots or dashes`;
 // Integration branches carry no ticket of their own, so the commit guard leaves them alone.
 const UNGUARDED = ["main", "master", "develop", "staging", "HEAD"];
+// Integration branches the push guard refuses a direct push to, unless a project sets its own list.
+const PROTECTED = ["main", "master", "develop", "staging"];
 const GUARD_MARK = "board-tools commit guard";
 const CHAINED = "pre-commit.before-board";
 const CREDENTIAL_KEY = /pass(word|wd)?$|secret|token|api[-_]?key|cookie|authorization|credential/i;
@@ -108,6 +111,9 @@ async function openDb() {
     CREATE INDEX IF NOT EXISTS tickets_project ON tickets(project, status);
     CREATE VIRTUAL TABLE IF NOT EXISTS tickets_fts USING fts5(title, body);
   `);
+  // Columns added after the first boards were created are added here, so an older board file keeps working.
+  const columns = db.prepare("PRAGMA table_info(projects)").all().map((column) => column.name);
+  if (!columns.includes("protected")) db.exec("ALTER TABLE projects ADD COLUMN protected TEXT");
   return db;
 }
 
@@ -349,7 +355,26 @@ async function cmdProject(args) {
     if (!rows.length) console.log("no projects yet");
     return 0;
   }
-  throw new UsageError("usage: project <ensure|list> [--dir <path>]");
+  if (action === "protect") {
+    // Which branches of this project the push guard refuses. Most projects use the standard list;
+    // one whose staging or production branch has another name gets its own.
+    const branches = option(args, "--branches");
+    const standard = flag(args, "--default");
+    const project = ensureProject(db, option(args, "--dir"));
+    if (branches !== undefined) {
+      const list = branches.split(",").map((name) => name.trim()).filter(Boolean);
+      const bad = list.filter((name) => !/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(name) || name.includes(".."));
+      if (!list.length || bad.length) throw new Refused(`not a usable branch name: ${bad.join(", ") || "(empty list)"}; give the names separated by commas, for example: main, uat, prod`);
+      db.prepare("UPDATE projects SET protected = ? WHERE key = ?").run([...new Set(list)].join(","), project.key);
+    } else if (standard) {
+      db.prepare("UPDATE projects SET protected = NULL WHERE key = ?").run(project.key);
+    }
+    const row = db.prepare("SELECT protected FROM projects WHERE key = ?").get(project.key);
+    const own = isText(row.protected);
+    console.log(`${project.grp}/${project.key} protects: ${(own ? row.protected.split(",") : PROTECTED).join(", ")}${own ? "" : " (the default list)"}`);
+    return 0;
+  }
+  throw new UsageError("usage: project <ensure|list|protect> [--dir <path>] [--branches a,b,c | --default]");
 }
 
 async function cmdAdd(args) {
@@ -575,13 +600,39 @@ function hooksOf(dir) {
   return { hooks, configured, shared: Boolean(configured) && inside(path.resolve(top), hooks) && !inside(gitDir, hooks) };
 }
 
-function guardScript() {
+// The two guards. Each is one hook file; an earlier hook of the same name can be kept and run first.
+const GUARDS = [
+  { hook: "pre-commit", mark: GUARD_MARK, what: "commit guard" },
+  { hook: "pre-push", mark: "board-tools push guard", what: "push guard" },
+];
+const chainedName = (hook) => (hook === "pre-commit" ? CHAINED : `${hook}.before-board`);
+
+function guardScript(hook) {
   const tool = fileURLToPath(import.meta.url).replace(/\\/g, "/");
-  return `#!/bin/sh
-# ${GUARD_MARK}: refuses a commit on a work branch that has no ticket in progress.
+  const head = (mark, purpose) => `#!/bin/sh
+# ${mark}: ${purpose}
 # Installed by "board-tools hook install"; remove it with "board-tools hook remove".
 hooks_dir=$(dirname "$0")
-if [ -f "$hooks_dir/${CHAINED}" ]; then
+`;
+  if (hook === "pre-push") {
+    // git feeds the refs being pushed on stdin; an earlier hook would consume them, so they are kept and replayed.
+    return `${head("board-tools push guard", "refuses a direct push to an integration branch; those are reached through a pull request.")}refs=$(cat)
+if [ -f "$hooks_dir/${chainedName(hook)}" ]; then
+  printf '%s\\n' "$refs" | "$hooks_dir/${chainedName(hook)}" "$@" || exit $?
+fi
+# There is no skip switch: an urgent fix goes through a hotfix branch and a pull request like any other.
+if ! command -v node >/dev/null 2>&1; then
+  echo "board guard: node was not found, so the push was not checked; push allowed" >&2
+  exit 0
+fi
+printf '%s\\n' "$refs" | node --no-warnings "${tool}" hook check-push --dir "$(git rev-parse --show-toplevel)"
+code=$?
+[ "$code" -eq 1 ] && exit 1
+[ "$code" -ne 0 ] && echo "board guard: the push could not be checked; push allowed" >&2
+exit 0
+`;
+  }
+  return `${head(GUARD_MARK, "refuses a commit on a work branch that has no ticket in progress.")}if [ -f "$hooks_dir/${CHAINED}" ]; then
   "$hooks_dir/${CHAINED}" "$@" || exit $?
 fi
 # The owner working alone can set BOARD_SKIP=1. Agents may not.
@@ -596,6 +647,16 @@ code=$?
 [ "$code" -ne 0 ] && echo "board guard: the board could not be checked; commit allowed" >&2
 exit 0
 `;
+}
+
+/** The integration branches of a project: its own list when one was set, the standard one otherwise. Never throws. */
+async function protectedBranches(dir) {
+  try {
+    const db = await openDb();
+    const row = db.prepare("SELECT protected FROM projects WHERE key = ?").get(projectOf(dir).key);
+    if (row && isText(row.protected)) return { list: row.protected.split(","), own: true };
+  } catch { /* a board that cannot be read must not unprotect the branches: fall through to the standard list */ }
+  return { list: PROTECTED, own: false };
 }
 
 async function cmdHook(args) {
@@ -624,46 +685,72 @@ async function cmdHook(args) {
     }
   }
 
+  if (action === "check-push") {
+    // git gives one line per ref on stdin: <local ref> <local object> <remote ref> <remote object>.
+    // Exit 0 lets the push through, 1 refuses it, 2 means it could not be checked (the guard then lets it through).
+    try {
+      const lines = fs.readFileSync(0, "utf8").split("\n").map((l) => l.trim()).filter(Boolean);
+      const targets = lines.map((l) => l.split(/\s+/)[2] || "").filter((ref) => ref.startsWith("refs/heads/")).map((ref) => ref.slice("refs/heads/".length));
+      const guarded = await protectedBranches(dir);
+      const hit = [...new Set(targets.filter((branch) => guarded.list.includes(branch)))];
+      if (!hit.length) return 0;
+      console.error(`board guard: ${hit.join(", ")} ${hit.length > 1 ? "are integration branches" : "is an integration branch"} of this project and ${hit.length > 1 ? "are" : "is"} not pushed to directly.`);
+      console.error("  Push your work branch and open a pull request into it instead.");
+      console.error(`  Protected here: ${guarded.list.join(", ")}${guarded.own ? "" : " (the default list; change it with: board-tools project protect --branches ...)"}`);
+      return 1;
+    } catch (error) {
+      console.error(`board guard: ${error.message}`);
+      return 2;
+    }
+  }
+
   if (action === "install") {
     const existing = option(args, "--existing");
     if (existing !== undefined && !["chain", "replace", "skip"].includes(existing)) throw new UsageError("--existing must be chain, replace or skip");
     const where = hooksOf(dir);
-    const hook = path.join(where.hooks, "pre-commit");
     if (where.shared) {
       // Hooks kept in the working tree (core.hooksPath pointing inside it) are committed and reach the whole team.
       throw new Refused(`this repository keeps its hooks in ${where.hooks} (core.hooksPath = ${where.configured}), inside the working tree, where they are shared with everyone who clones it; the guard is not installed there. This project stays unguarded.`);
     }
-    const current = fs.existsSync(hook) ? fs.readFileSync(hook, "utf8") : null;
-    if (current !== null && !current.includes(GUARD_MARK)) {
-      if (existing === undefined) {
-        throw new Refused(`${hook} already holds another hook. Choose what happens to it:\n--existing chain    keep it; it runs first, then the guard\n--existing replace  the guard takes its place; the old hook is kept as a backup beside it\n--existing skip     leave this project unguarded`);
-      }
-      if (existing === "skip") { console.log(`left alone: ${hook} (this project is not guarded)`); return 0; }
-      if (existing === "chain") {
-        if (fs.existsSync(path.join(where.hooks, CHAINED))) throw new Refused(`${path.join(where.hooks, CHAINED)} already exists; remove the earlier guard first with "hook remove"`);
-        fs.renameSync(hook, path.join(where.hooks, CHAINED));
-      } else {
-        fs.renameSync(hook, path.join(where.hooks, `pre-commit.backup-${now().slice(0, 19).replace(/[-:T]/g, "")}`));
-      }
+    // Look at both hook files before touching either, so a refusal never leaves one guard installed and the other not.
+    const foreign = GUARDS.filter((g) => { const file = path.join(where.hooks, g.hook); return fs.existsSync(file) && !fs.readFileSync(file, "utf8").includes(g.mark); });
+    if (foreign.length && existing === undefined) {
+      throw new Refused(`${foreign.map((g) => path.join(where.hooks, g.hook)).join(" and ")} already hold${foreign.length > 1 ? "" : "s"} another hook. Choose what happens to ${foreign.length > 1 ? "them" : "it"}:\n--existing chain    keep it; it runs first, then the guard\n--existing replace  the guard takes its place; the old hook is kept as a backup beside it\n--existing skip     leave this project unguarded`);
+    }
+    if (foreign.length && existing === "skip") { console.log(`left alone: ${foreign.map((g) => g.hook).join(", ")} (this project is not guarded)`); return 0; }
+    if (existing === "chain") {
+      const taken = foreign.map((g) => path.join(where.hooks, chainedName(g.hook))).filter((file) => fs.existsSync(file));
+      if (taken.length) throw new Refused(`${taken.join(", ")} already exists; remove the earlier guard first with "hook remove"`);
     }
     fs.mkdirSync(where.hooks, { recursive: true });
-    fs.writeFileSync(hook, guardScript(), { mode: 0o755 });
-    console.log(`commit guard installed: ${hook}`);
+    for (const g of GUARDS) {
+      const file = path.join(where.hooks, g.hook);
+      if (foreign.includes(g)) {
+        fs.renameSync(file, path.join(where.hooks, existing === "chain" ? chainedName(g.hook) : `${g.hook}.backup-${now().slice(0, 19).replace(/[-:T]/g, "")}`));
+      }
+      fs.writeFileSync(file, guardScript(g.hook), { mode: 0o755 });
+      console.log(`${g.what} installed: ${file}`);
+    }
     return 0;
   }
 
   if (action === "remove") {
     const where = hooksOf(dir);
-    const hook = path.join(where.hooks, "pre-commit");
-    if (!fs.existsSync(hook) || !fs.readFileSync(hook, "utf8").includes(GUARD_MARK)) { console.log("no commit guard installed here"); return 0; }
-    fs.rmSync(hook);
-    const chained = path.join(where.hooks, CHAINED);
-    if (fs.existsSync(chained)) fs.renameSync(chained, hook);
-    console.log(`commit guard removed: ${hook}`);
+    let removed = 0;
+    for (const g of GUARDS) {
+      const file = path.join(where.hooks, g.hook);
+      if (!fs.existsSync(file) || !fs.readFileSync(file, "utf8").includes(g.mark)) continue;
+      fs.rmSync(file);
+      const chained = path.join(where.hooks, chainedName(g.hook));
+      if (fs.existsSync(chained)) fs.renameSync(chained, file);
+      console.log(`${g.what} removed: ${file}`);
+      removed++;
+    }
+    if (!removed) console.log("no guard installed here");
     return 0;
   }
 
-  throw new UsageError("usage: hook <install|check|remove> [--dir <path>] [--existing chain|replace|skip]");
+  throw new UsageError("usage: hook <install|check|check-push|remove> [--dir <path>] [--existing chain|replace|skip]");
 }
 
 async function cmdSet(args) {

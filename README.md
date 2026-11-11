@@ -187,7 +187,7 @@ Satu papan tiket untuk semua proyek, supaya pekerjaan yang disetujui dan keputus
 - **Tiket satu-satunya wadah:** ringkasan, keputusan (dengan kalimat user apa adanya dan tanda siapa yang memutuskan), kriteria selesai, yang sengaja tidak dikerjakan, dugaan yang belum dicek, sumber, tautan, dan riwayat.
 - **Data di luar semua repo** (`~/.aetheris/board/board.db`, SQLite bawaan Node); halaman papan dan halaman per tiket dibangun dari data itu dengan gaya `meta-prd`.
 - **`scripts/board-tools.mjs`** memaksa aturannya: tiket terikat ke branch-nya, mulai kerja ditolak di branch lain, `review` butuh commit yang benar-benar ada di branch itu, `done` butuh kalimat penerimaan user. Agen hanya membaca lewat `list`, `search`, dan `show`, jadi ongkos bacanya tidak naik dengan jumlah tiket.
-- **Penjaga commit (opsional per proyek):** hook lokal yang menolak commit di branch kerja tanpa tiket yang sedang dikerjakan.
+- **Dua penjaga (opsional per proyek, dipasang bersama):** hook lokal yang menolak commit di branch kerja tanpa tiket yang sedang dikerjakan, dan hook yang menolak push langsung ke branch integrasi (bawaan `main`, `master`, `develop`, `staging`; bisa diganti per proyek) supaya perubahan masuk lewat pull request.
 - **Uji:** `board-tools.test.mjs`, `board-tools.git.test.mjs`, dan `board-tools.browser-test.mjs` (butuh Edge atau Chrome).
 
 ---
