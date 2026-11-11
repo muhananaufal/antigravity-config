@@ -86,6 +86,16 @@ Contoh lengkap: `assets/ticket.example.json`. Salin bentuknya, ganti isinya.
 
 **Satu tiket = satu pekerjaan yang disetujui = satu branch.** Bukan satu sesi. Tiket yang keputusannya terus bertambah melewati belasan adalah tanda pekerjaannya terlalu besar: usulkan memecahnya dengan tiket lanjutan (`"follows": <id>`).
 
+**Daftar permintaan berisi banyak poin.** Tiket adalah satuan yang user periksa dan terima, jadi user yang menentukan besarnya:
+
+| User menyebut | Yang dibuat |
+| :--- | :--- |
+| "jadikan satu branch" / "satu saja" | Satu tiket. Tiap poin menjadi satu baris `done_when`, dikelompokkan per fitur; commit per kelompok; `note` per kelompok yang selesai. Kalimat user soal branch dicatat sebagai keputusannya. |
+| "pisah per domain" / "per fitur" | Satu tiket dan satu branch per kelompok. Pembagiannya (tiket mana memuat poin mana) ditampilkan di panel sebelum disetujui. |
+| Tidak menyebut apa-apa | Usulkan pembagiannya di panel dan tunggu. DILARANG memilih diam-diam. Patokan usulnya: poin yang bisa diterima atau dikembalikan sendiri-sendiri dipisah; poin yang baru berarti bila semuanya jadi digabung. |
+
+Satu tiket per poin hampir tidak pernah tepat: tiap tiket terbuka butuh branch sendiri. Poin yang sepele (ganti label, perbaiki typo) ikut ke tiket kelompoknya, bukan berdiri sendiri.
+
 ---
 
 ## §3. Perpindahan Status
