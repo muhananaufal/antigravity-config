@@ -323,6 +323,35 @@ Urutan langkah WAJIB sebelum menyentuh kode di repo yang sudah ada:
   $ git branch -d hotfix/<deskripsi>
 ```
 
+### Jalur Pull Request (proyek yang branch integrasinya tidak di-push langsung)
+
+Di proyek yang dipasangi penjaga push (`skills/meta-board/SKILL.md` bagian 4), atau yang user kerjakan lewat pull request, `git merge` lokal ke branch integrasi lalu push di Langkah 4 dan 5 **diganti** jalur ini. Branch integrasi bawaannya `main`, `master`, `develop`, `staging`; proyek dengan nama lain punya daftarnya sendiri (`board project protect`).
+
+| Langkah | Aturan |
+| :--- | :--- |
+| Push branch kerja | `git push origin <branch-kerja>`, setelah exit gate lulus dan user setuju (§10). |
+| Membuka pull request | **HANYA saat user memintanya.** Tujuannya mengikuti alur §1: `feature/*`, `fix/*`, `refactor/*` ke `develop`; `release/*` dan `hotfix/*` ke `main`. Judulnya Conventional Commits. |
+| Me-merge pull request | **HANYA saat user memintanya**, untuk pull request yang ia sebut. Diminta membuka BUKAN izin me-merge. |
+| Mencatat merge | Setelah pull request masuk: `git fetch`, lalu `board merged <id> --into <branch>`. |
+| Penjaga menolak sebuah push | Itu berarti tujuannya branch integrasi. Push branch kerjanya dan tunggu user meminta pull request. DILARANG `--no-verify`. |
+
+**Sesudah hotfix: menyinkronkan `main` ke `staging` (dan `develop`).** Hotfix masuk ke `main` lewat pull request, sehingga `main` memuat commit yang belum dikenal `staging`; tanpa sinkronisasi, rilis `staging` ke `main` berikutnya akan bentrok. Agen menyebutkan hal ini setelah hotfix masuk dan mengerjakannya **saat user meminta**:
+
+```
+$ git fetch origin
+$ git checkout -b chore/sync-main-into-staging-<nomor PR hotfix> origin/staging
+$ git merge origin/main -m "chore: sync main into staging after hotfix #<nomor>"
+$ git push origin chore/sync-main-into-staging-<nomor PR hotfix>
+→ pull request ke staging, judul: "chore: sync main into staging"
+```
+
+- **Pesan commit dan judul pull request berbahasa Inggris**, termasuk commit merge sinkronisasi ini. Isi pull request boleh mengikuti bahasa tim proyeknya.
+- **Bukan pull request langsung dari `main`.** Branch tersendiri memberi tempat menyelesaikan bentrok tanpa menyentuh `main` maupun `staging`.
+- **Merge biasa adalah bawaannya.** `-s ours` (mempertahankan isi `staging` seutuhnya) HANYA bila setiap commit hotfix itu port dari commit yang sudah ada di `staging`. Buktikan dulu: `git diff origin/staging HEAD` kosong setelah merge, dan sebut di isi pull request commit mana memetakan ke mana. Memakai `-s ours` tanpa bukti itu membuang perbaikan dari `main` tanpa bekas.
+- **Bentrok dilaporkan ke user**, tidak diselesaikan dengan menebak pihak mana yang benar.
+- **Isi pull request** menyebut: hotfix mana yang disinkronkan, strategi merge-nya, dan hasil simulasi rilis berikutnya (`git merge-tree` antara `staging` hasil sinkron dan `main`).
+- Branch sinkronisasi tidak butuh tiket papan sendiri: ia hanya berisi commit merge, yang diloloskan penjaga commit. Catat di tiket hotfix-nya dengan `board note` dan `board link` ke pull request-nya.
+
 ---
 
 ## §5. ATOMIC COMMIT — CARA MENGELOMPOKKAN PERUBAHAN
