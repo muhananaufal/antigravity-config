@@ -264,6 +264,8 @@ Urutan langkah yang WAJIB diikuti saat membuat proyek dari nol:
 
 Urutan langkah WAJIB sebelum menyentuh kode di repo yang sudah ada:
 
+**Repo tanpa remote** (`git remote -v` kosong): semua `git fetch` dan `git pull` di bawah dilewati, dan itu disebutkan ke user sekali, karena artinya repo tersebut belum punya salinan di luar mesin ini. Langkah lainnya tetap berlaku. Repo tanpa branch `develop` memakai branch integrasi yang ada.
+
 ```
 [Langkah 1: Sinkronisasi]
   $ git fetch origin                    # Ambil perubahan terbaru

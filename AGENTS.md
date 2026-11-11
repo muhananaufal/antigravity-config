@@ -94,7 +94,7 @@ Tiap butir pernah menangkap kegagalan nyata (lihat `shared/LEARNED.md`):
 
 1. **Baseline regresi:** jalankan test suite yang ada SEBELUM mengubah apa pun; catat hasilnya. Sudah merah sejak awal → sebutkan.
 2. **Branch kerja:** `feature/*`, `fix/*`, dst. sesuai `meta-git`. DILARANG kerja langsung di `main`/`develop` repo produk.
-3. **Batch menulis:** maksimal 3–4 berkas per giliran; tiap batch: test terkait → atomic commit → lanjut. Kontrak/skema/DTO dikunci di batch pertama. **Foundation Gate:** setelah batch pertama (kontrak/skema/DTO) ditulis dan test-nya lulus, WAJIB BERHENTI dan sajikan hasilnya ke user untuk review. Batch selanjutnya DILARANG dimulai sebelum user menyetujui fondasi ini.
+3. **Batch menulis:** maksimal 3–4 berkas per giliran; tiap batch: test terkait → atomic commit → lanjut. Kontrak/skema/DTO dikunci di batch pertama. **Foundation Gate:** setelah batch pertama (kontrak/skema/DTO) ditulis dan test-nya lulus, WAJIB BERHENTI dan sajikan hasilnya ke user untuk review. Batch selanjutnya DILARANG dimulai sebelum user menyetujui fondasi ini. Pekerjaan yang seluruhnya muat dalam satu batch tidak punya batch berikutnya untuk ditahan: ia berjalan sampai selesai, dan user memeriksanya di gerbang penerimaan yang biasa.
 4. **Ukuran satu task:** cukup kecil untuk ditinjau utuh dalam 2–5 menit, dan berakhir pada sesuatu yang bisa di-commit. Satu task = tulis test gagal → **saksikan ia gagal** → implementasi → saksikan ia lulus → commit. DILARANG menyisakan "TBD", "tangani edge-case nanti", atau "mirip seperti task sebelumnya" — tiap nama fungsi, tipe, dan interface disebut konkret.
 5. **TDD untuk bugfix:** Proof-of-Defect (Merah) → Fix (Hijau) → Revert-to-Fail bila hasilnya meragukan. Iron Law of Deletion berlaku. *Test yang tidak pernah Anda saksikan gagal tidak membuktikan apa pun — Anda tidak tahu ia menguji hal yang benar.*
 6. **Divergensi rencana.** Kenyataan tidak cocok dengan rencana yang sudah disetujui → **BERHENTI, kembali ke peninjauan**, bukan menerobos. Ruang lingkup melar tanpa mengubah arsitektur utama boleh dilanjutkan dan cukup dinyatakan; menyentuh keputusan arsitektural = persetujuan baru (§0.2). DILARANG melewati verifikasi demi mengejar rencana.
@@ -135,7 +135,7 @@ Tiap butir pernah menangkap kegagalan nyata (lihat `shared/LEARNED.md`):
 
 ## 7. TOOLING & KOMUNIKASI
 
-- **Bahasa:** WAJIB Bahasa Indonesia; kode, identifier, dan string log/error 100% Bahasa Inggris.
+- **Bahasa:** WAJIB Bahasa Indonesia; kode, identifier, dan string log/error 100% Bahasa Inggris. Yang dimaksud adalah log dan error teknis (isi log, pesan exception, keluaran untuk developer). Teks yang dibaca pengguna aplikasi (pesan validasi, label, notifikasi) mengikuti bahasa aplikasinya dan pola yang sudah ada di proyek itu.
 - **Panjang jawaban:** padat untuk tugas rutin; mendalam hanya di Mentor Mode. Alur sistem kompleks → WAJIB diagram `mermaid`.
 - **Edit presisi:** edit parsial untuk perubahan kecil; DILARANG rewrite berkas utuh tanpa alasan.
 - **Setiap sesi baru:** WAJIB baca `~/.gemini/config/shared/LEARNED.md`; cek `AGENTS.md`/`CLAUDE.md`/`README.md` di root proyek yang dikerjakan; lihat tiket papan proyek itu yang terbuka dan yang menunggu user (`skills/meta-board/SKILL.md` §1).
