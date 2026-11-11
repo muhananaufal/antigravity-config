@@ -333,6 +333,62 @@ let idIdea = null, idNext = null;
   }
 }
 
+// --- what was left out, what is still a guess, and where the related documents are ---------------
+{
+  const full = () => ({
+    ...ticket(),
+    title: "Ekspor rekap klaim per bulan",
+    decisions: [],
+    out_of_scope: ["Ekspor ke PDF tidak dikerjakan; keuangan hanya meminta Excel."],
+    unverified: [{ claim: "Pustaka Excel yang terpasang bisa menulis lebih dari 10.000 baris tanpa habis memori.", check: "Jalankan ekspor dengan data uji 20.000 baris dan lihat pemakaian memorinya." }],
+    links: [{ label: "PRD ekspor klaim", target: "docs/claims-export-prd.html" }],
+  });
+  for (const [name, mutate, pattern] of [
+    ["out_of_scope that is not a list of sentences", (t) => { t.out_of_scope = [""]; }, /out_of_scope/],
+    ["a guess without a way to check it", (t) => { delete t.unverified[0].check; }, /unverified\[0\]/],
+    ["a link without a target", (t) => { delete t.links[0].target; }, /links\[0\]/],
+  ]) {
+    const data = full();
+    mutate(data);
+    const r = tool(["add", "--file", file(data), "--dir", BLOG]);
+    expect(`add rejects: ${name}`, r.code === 1 && pattern.test(r.text), r.text);
+  }
+  const added = tool(["add", "--file", file(full()), "--dir", BLOG]);
+  const x = (/#(\d+)/.exec(added.text) || [])[1];
+  const shown = tool(["show", x]);
+  expect("show: out of scope, not yet verified and links are part of the ticket", added.code === 0 && /^Out of scope:\n- Ekspor ke PDF/m.test(shown.text) && /^Not yet verified:\nU1 \(open\): Pustaka Excel/m.test(shown.text) && /How to check: Jalankan ekspor/.test(shown.text) && /^Links:\nL1: PRD ekspor klaim \| docs\/claims-export-prd\.html/m.test(shown.text), shown.text);
+  expect("list: a ticket with an open guess says so", /1 unverified/.test(tool(["list", "--project", "blog-pribadi"]).text));
+
+  tool(["set", x, "--status", "doing"]);
+  const early = tool(["set", x, "--status", "review", "--evidence", "ekspor 500 baris berhasil"]);
+  expect("set review: refused while a guess is still unchecked", early.code === 1 && /U1/.test(early.text) && /verify/.test(early.text), early.text);
+  const empty = tool(["verify", x, "U1"]);
+  expect("verify: refused without saying what was found", empty.code === 1 && /--result/.test(empty.text), empty.text);
+  const checked = tool(["verify", x, "U1", "--result", "Ekspor 20.000 baris selesai dengan memori puncak 180 MB."], { now: "2026-11-17T10:00:00+07:00" });
+  const twice = tool(["verify", x, "U1", "--result", "sekali lagi"]);
+  expect("verify: records the result once", checked.code === 0 && twice.code === 1 && /already/.test(twice.text) && /U1 \(checked 2026-11-17\)[^\n]*\n[^]*memori puncak 180 MB/.test(tool(["show", x]).text), checked.text + twice.text);
+  const later = tool(["unverified", x, "--file", file({ claim: "Keuangan membuka berkasnya dengan Excel versi lama.", check: "Tanyakan versi Excel yang dipakai bagian keuangan." })]);
+  expect("unverified: a new guess can be added while the work is under way", later.code === 0 && /U2/.test(later.text), later.text);
+  tool(["verify", x, "U2", "--result", "Keuangan memakai Excel 2019."]);
+  const ready = tool(["set", x, "--status", "review", "--evidence", "ekspor 20.000 baris berhasil"]);
+  expect("set review: accepted once every guess has been checked", ready.code === 0, ready.text);
+  const link = tool(["link", x, "--label", "Laporan swipe ekspor", "--target", ".swipe/reports/2026-11-17-export.html"]);
+  const badLink = tool(["link", x, "--label", "Laporan"]);
+  expect("link: adds a related document, and needs both a label and a target", link.code === 0 && /L2/.test(link.text) && badLink.code !== 0, link.text + badLink.text);
+
+  const site2 = path.join(TMP, "site2");
+  tool(["report", "--out", site2]);
+  const page = fs.readFileSync(path.join(site2, `ticket-${x}.html`), "utf8");
+  const order = [...page.matchAll(/<section id="([a-z-]+)"/g)].map((m) => m[1]).join(",");
+  expect("report: the ticket page shows the three sections in a fixed order", order === "summary,decisions,done-when,out-of-scope,unverified,sources,links,history", order);
+  expect("report: a checked guess shows its result, and links are listed", /Checked/.test(page) && page.includes("memori puncak 180 MB") && page.includes("Laporan swipe ekspor") && page.includes(".swipe/reports/2026-11-17-export.html"));
+  const plain = fs.readFileSync(path.join(site2, `ticket-${id}.html`), "utf8");
+  expect("report: a ticket without them shows no empty sections", !/id="out-of-scope"|id="unverified"|id="links"/.test(plain));
+  const open = tool(["add", "--file", file({ ...full(), title: "Impor karyawan dari Excel" }), "--dir", BLOG]);
+  tool(["report", "--out", site2]);
+  expect("report: the board card marks a ticket with an open guess", open.code === 0 && /1 to verify/.test(fs.readFileSync(path.join(site2, "index.html"), "utf8")));
+}
+
 fs.rmSync(TMP, { recursive: true, force: true });
 console.log(failures ? `\n${failures} failure(s)` : "\nall checks passed");
 process.exit(failures ? 1 : 0);

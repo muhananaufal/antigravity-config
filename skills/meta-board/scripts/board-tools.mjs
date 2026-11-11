@@ -10,7 +10,12 @@
 //   node board-tools.mjs approve <id> --file <approval.json>  an idea becomes agreed work
 //   node board-tools.mjs decide <id> --file <decision.json> [--answers K<n>]
 //   node board-tools.mjs source <id> --file <source.json>
+//   node board-tools.mjs unverified <id> --file <guess.json>  a claim that is still a guess, with how to check it
+//   node board-tools.mjs verify <id> U<n> --result <text>   the guess was checked; what was found
+//   node board-tools.mjs link <id> --label <text> --target <path or URL>
 //   node board-tools.mjs review <id> K<n>                   the owner has seen a decision the agent made
+//   node board-tools.mjs note <id> --text <text>            where the work stands and what comes next
+//   node board-tools.mjs hook <install|check|remove> [--dir <path>] [--existing chain|replace|skip]
 //   node board-tools.mjs set <id> --status <status> [--evidence <text>] [--reason <text>] [--words <owner's sentence>]
 //   node board-tools.mjs list [--project p] [--group g] [--status s] [--waiting] [--limit n]
 //                             [--created-from d] [--created-to d] [--updated-from d] [--updated-to d]
@@ -210,6 +215,7 @@ function validateTicket(ticket, { repo = false } = {}) {
   if (ticket.decisions !== undefined && !Array.isArray(ticket.decisions)) problems.push('"decisions" must be a list');
   else (ticket.decisions || []).forEach((decision, index) => validateDecision(decision, `decisions[${index}]`, problems));
   if (ticket.follows !== undefined && !Number.isInteger(ticket.follows)) problems.push('"follows" must be the number of the ticket this one continues');
+  validateExtras(ticket, problems);
   // An idea is only a title and a summary. The rest is required once it becomes agreed work.
   if (ticket.status === "idea") {
     if (ticket.approved_by !== undefined) problems.push('an idea has no "approved_by" yet; use "approve" when the owner agrees to it');
@@ -232,14 +238,38 @@ function validateTicket(ticket, { repo = false } = {}) {
 function searchable(t) {
   return [t.summary, t.body, t.user_words, t.authority, t.evidence, ...(t.done_when || []),
     ...(t.decisions || []).flatMap((d) => [d.question, d.chosen, d.reason, d.user_words, d.authority, ...(d.rejected || []).flatMap((r) => [r.option, r.reason])]),
-    ...(t.sources || []).flatMap((s) => [s.claim, s.source])].filter(isText).join("\n");
+    ...(t.sources || []).flatMap((s) => [s.claim, s.source]), ...(t.out_of_scope || []),
+    ...(t.unverified || []).flatMap((u) => [u.claim, u.check, u.result]), ...(t.links || []).flatMap((l) => [l.label, l.target])].filter(isText).join("\n");
 }
 
 const counts = (t) => ({
   unanswered: (t.decisions || []).filter(isPending).length,
   unseen: (t.decisions || []).filter((d) => d.decided_by === "agent" && !d.reviewed).length,
   returned: (t.history || []).filter((h) => h.returned).length,
+  unverified: (t.unverified || []).filter((u) => !isText(u.result)).length,
 });
+
+/**
+ * Three optional parts of a ticket, each a plain list:
+ * out_of_scope - what was deliberately left out, so nobody later wonders why it is missing;
+ * unverified   - claims that were still guesses when the work was agreed, each with the way to check it;
+ * links        - the documents made for this work (PRD, handover, swipe report, pull request).
+ */
+function validateExtras(ticket, problems) {
+  if (ticket.out_of_scope !== undefined && (!Array.isArray(ticket.out_of_scope) || !ticket.out_of_scope.every(isText))) problems.push('"out_of_scope" must be a list of full sentences, each naming one thing that is deliberately not done');
+  if (ticket.unverified !== undefined && !Array.isArray(ticket.unverified)) problems.push('"unverified" must be a list');
+  else (ticket.unverified || []).forEach((item, index) => validateGuess(item, `unverified[${index}]`, problems));
+  if (ticket.links !== undefined && !Array.isArray(ticket.links)) problems.push('"links" must be a list');
+  else (ticket.links || []).forEach((item, index) => validateLink(item, `links[${index}]`, problems));
+}
+
+function validateGuess(item, trail, problems) {
+  if (!item || !isText(item.claim) || !isText(item.check)) problems.push(`${trail} needs "claim" (what is still a guess) and "check" (the cheapest way to find out)`);
+}
+
+function validateLink(item, trail, problems) {
+  if (!item || !isText(item.label) || !isText(item.target)) problems.push(`${trail} needs "label" (what the document is) and "target" (its path or URL)`);
+}
 
 /** The board column a ticket sits in. Anything that needs the owner wins over the plain status. */
 function columnOf(t) {
@@ -293,7 +323,7 @@ const short = (text, max) => (text.length > max ? `${text.slice(0, max - 1)}…`
 
 function line(t) {
   const c = counts(t);
-  const marks = [c.unanswered ? `${c.unanswered} unanswered` : "", c.unseen ? `${c.unseen} agent decision*` : "", c.returned ? `sent back ${c.returned}x` : ""].filter(Boolean).join(", ");
+  const marks = [c.unanswered ? `${c.unanswered} unanswered` : "", c.unseen ? `${c.unseen} agent decision*` : "", c.unverified ? `${c.unverified} unverified` : "", c.returned ? `sent back ${c.returned}x` : ""].filter(Boolean).join(", ");
   return `#${t.id}  ${t.group}/${t.project}  ${t.status}${marks ? `  [${marks}]` : ""}  ${short(t.title, 90)}`;
 }
 
@@ -409,6 +439,57 @@ async function cmdSource(args) {
   const index = ticket.sources.push(source);
   save(db, ticket);
   console.log(`#${ticket.id} E${index}: source added`);
+  return 0;
+}
+
+/** A claim found to be a guess while the work is under way. */
+async function cmdUnverified(args) {
+  const item = readJson(option(args, "--file"));
+  const db = await openDb();
+  const ticket = getTicket(db, args[0]);
+  const problems = [];
+  findCredentials(item, "", problems);
+  validateGuess(item, "the entry", problems);
+  if (problems.length) throw new Refused(problems.join("\n"));
+  ticket.unverified = ticket.unverified || [];
+  const index = ticket.unverified.push({ claim: item.claim, check: item.check });
+  save(db, ticket);
+  console.log(`#${ticket.id} U${index}: recorded as not yet verified`);
+  return 0;
+}
+
+/** The guess has been checked: what was found is written next to it. A result is recorded once, like a decision. */
+async function cmdVerify(args) {
+  const result = option(args, "--result");
+  const db = await openDb();
+  const ticket = getTicket(db, args[0]);
+  const match = /^U?(\d+)$/i.exec(args[1] || "");
+  const item = match ? ticket.unverified?.[Number(match[1]) - 1] : undefined;
+  if (!item) throw new UsageError(`ticket #${ticket.id} has no entry ${args[1] || "(none given)"} under "not yet verified"; it has ${ticket.unverified?.length || 0}`);
+  if (isText(item.result)) throw new Refused(`U${match[1]} on ticket #${ticket.id} was already checked on ${item.checked_at.slice(0, 10)}`);
+  if (words(result) < 3) throw new Refused("--result must say what was found when the claim was checked, in a full sentence");
+  const problems = [];
+  findCredentials({ result }, "", problems);
+  if (problems.length) throw new Refused(problems.join("\n"));
+  item.result = result.trim();
+  item.checked_at = now();
+  save(db, ticket);
+  console.log(`#${ticket.id} U${match[1]}: checked`);
+  return 0;
+}
+
+async function cmdLink(args) {
+  const item = { label: option(args, "--label"), target: option(args, "--target") };
+  const db = await openDb();
+  const ticket = getTicket(db, args[0]);
+  const problems = [];
+  findCredentials(item, "", problems);
+  validateLink(item, "the link", problems);
+  if (problems.length) throw new Refused(problems.join("\n"));
+  ticket.links = ticket.links || [];
+  const index = ticket.links.push({ label: item.label.trim(), target: item.target.trim() });
+  save(db, ticket);
+  console.log(`#${ticket.id} L${index}: link added`);
   return 0;
 }
 
@@ -586,6 +667,9 @@ async function cmdSet(args) {
   if (status === "review") {
     // The agent's side of "done": there is something to point at.
     if (!isText(evidence)) throw new Refused('status "review" needs --evidence: the command and result, or swipe report, that shows the work is done');
+    // Work cannot be handed over while it still rests on a guess.
+    const open = (ticket.unverified || []).map((u, index) => (isText(u.result) ? "" : `U${index + 1}`)).filter(Boolean);
+    if (open.length) throw new Refused(`${open.join(", ")} on ticket #${ticket.id} ${open.length > 1 ? "are" : "is"} not yet verified; check ${open.length > 1 ? "them" : "it"} and record what was found with "verify" before handing the work over`);
     if (ticket.branch) step.commit = checkedCommit(ticket, commitRef);
   } else if (status === "done") {
     // The owner's side of "done": the evidence exists and the owner accepted it.
@@ -664,6 +748,15 @@ async function cmdShow(args) {
     out.push(`  Chosen: ${d.chosen}`, `  Reason: ${d.reason}`, ...d.rejected.map((r) => `  Rejected: ${r.option}: ${r.reason}`));
     out.push(d.decided_by === "agent" ? `  Owner's sentence the agent relied on: "${d.authority}"` : `  Owner's words: "${d.user_words}"`);
   });
+  if (t.out_of_scope?.length) out.push("", "Out of scope:", ...t.out_of_scope.map((item) => `- ${item}`));
+  if (t.unverified?.length) {
+    out.push("", "Not yet verified:");
+    t.unverified.forEach((u, index) => {
+      out.push(`U${index + 1} (${isText(u.result) ? `checked ${u.checked_at.slice(0, 10)}` : "open"}): ${u.claim}`);
+      out.push(isText(u.result) ? `  Found: ${u.result}` : `  How to check: ${u.check}`);
+    });
+  }
+  if (t.links?.length) out.push("", "Links:", ...t.links.map((l, index) => `L${index + 1}: ${l.label} | ${l.target}`));
   out.push("", "Sources:", ...(t.sources?.length ? t.sources.map((s, index) => `E${index + 1}: ${s.claim} | ${s.source}${isText(s.status) ? ` | ${s.status}` : ""}`) : ["(none)"]));
   if (t.approved_by) out.push("", t.approved_by === "agent" ? `Opened by the agent, relying on: "${t.authority}"` : `Approved by the owner: "${t.user_words}"`);
   add("Evidence", t.evidence ? `${t.evidence} (${t.finished_at})` : "");
@@ -1043,6 +1136,7 @@ function boardCard(t) {
     columnOf(t) !== t.status ? `<span class="pill accent">${STATUS_LABEL[t.status]}</span>` : "",
     c.unanswered ? `<span class="pill warn">${c.unanswered} question${c.unanswered > 1 ? "s" : ""} for you</span>` : "",
     c.unseen ? `<span class="pill warn">${c.unseen} agent decision${c.unseen > 1 ? "s" : ""} to review</span>` : "",
+    c.unverified ? `<span class="pill warn">${c.unverified} to verify</span>` : "",
     c.returned ? `<span class="pill danger">Sent back ${c.returned}×</span>` : ""].filter(Boolean).join(" ");
   return `          <a class="card ticket" href="ticket-${t.id}.html" data-project="${esc(t.project)}" data-created="${day(t.created_at)}" data-updated="${day(t.updated_at)}" data-id="${t.id}" data-ct="${Date.parse(t.created_at)}" data-ut="${Date.parse(t.updated_at)}">
             <h4>#${t.id} · ${esc(t.title)}</h4>
@@ -1158,28 +1252,45 @@ function ticketSections(t, followers) {
       : `<blockquote><p>"${esc(t.user_words)}"</p><footer>Your approval.</footer></blockquote>`;
   const links = [t.follows ? `Follows <a href="ticket-${t.follows}.html">ticket #${t.follows}</a>.` : "",
     followers.length ? `Continued by ${followers.map((id) => `<a href="ticket-${id}.html">ticket #${id}</a>`).join(", ")}.` : ""].filter(Boolean).join(" ");
-  return [
-    section("summary", 0, "Summary", `${links ? `      <p>${links}</p>\n` : ""}      <p>${esc(t.summary)}</p>
-${isText(t.body) ? `      <p>${esc(t.body)}</p>\n` : ""}      ${approval}`),
-    section("decisions", 1, "Decisions", t.decisions?.length ? `      <div class="stack">
+  // A link to a web address is clickable; a path inside a project is shown as text, because the page cannot know where that project lives.
+  const linkTarget = (target) => (/^https?:\/\//i.test(target) ? `<a href="${esc(target)}">${esc(target)}</a>` : `<code>${esc(target)}</code>`);
+  // Sections that have nothing to show are left out, so the numbering is given once the list is known.
+  const parts = [
+    ["summary", "Summary", `${links ? `      <p>${links}</p>\n` : ""}      <p>${esc(t.summary)}</p>
+${isText(t.body) ? `      <p>${esc(t.body)}</p>\n` : ""}      ${approval}`],
+    ["decisions", "Decisions", t.decisions?.length ? `      <div class="stack">
 ${t.decisions.map(decisionCard).join("\n")}
-      </div>` : "      <p>No decisions recorded for this ticket yet.</p>"),
-    section("done-when", 2, "Done when", `${t.done_when?.length ? `      <ul>
+      </div>` : "      <p>No decisions recorded for this ticket yet.</p>"],
+    ["done-when", "Done when", `${t.done_when?.length ? `      <ul>
 ${t.done_when.map((item) => `        <li>${esc(item)}</li>`).join("\n")}
-      </ul>` : "      <p>Not set yet. The criteria are added when the idea is approved as work.</p>"}${isText(t.evidence) ? `\n      <div class="card"><h4>Evidence</h4><p>${esc(t.evidence)}</p><p class="lbl">${showDate(t.finished_at)}</p></div>` : ""}`),
-    section("sources", 3, "Sources", t.sources?.length ? `      <div class="table-scroll"><table>
+      </ul>` : "      <p>Not set yet. The criteria are added when the idea is approved as work.</p>"}${isText(t.evidence) ? `\n      <div class="card"><h4>Evidence</h4><p>${esc(t.evidence)}</p><p class="lbl">${showDate(t.finished_at)}</p></div>` : ""}`],
+    t.out_of_scope?.length ? ["out-of-scope", "Out of scope", `      <ul>
+${t.out_of_scope.map((item) => `        <li>${esc(item)}</li>`).join("\n")}
+      </ul>`] : null,
+    t.unverified?.length ? ["unverified", "Not yet verified", `      <div class="stack">
+${t.unverified.map((u, index) => `      <div class="card"><h4>U${index + 1} · ${esc(u.claim)}</h4>
+        ${isText(u.result)
+    ? `<p><span class="pill ok">Checked</span> <span class="lbl">${showDate(u.checked_at)}</span></p>\n        <p><b>Found.</b> ${esc(u.result)}</p>`
+    : `<p><span class="pill warn">Still a guess</span></p>\n        <p><b>How to check.</b> ${esc(u.check)}</p>`}
+      </div>`).join("\n")}
+      </div>`] : null,
+    ["sources", "Sources", t.sources?.length ? `      <div class="table-scroll"><table>
         <thead><tr><th>ID</th><th>Claim</th><th>Source</th><th>Status</th></tr></thead>
         <tbody>
 ${t.sources.map((s, index) => `          <tr><td class="id">E${index + 1}</td><td>${esc(s.claim)}</td><td>${esc(s.source)}</td><td>${esc(s.status || "")}</td></tr>`).join("\n")}
         </tbody>
-      </table></div>` : "      <p>No sources recorded yet.</p>"),
-    section("history", 4, "History", `      <div class="table-scroll"><table>
+      </table></div>` : "      <p>No sources recorded yet.</p>"],
+    t.links?.length ? ["links", "Links", `      <ul>
+${t.links.map((l) => `        <li><b>${esc(l.label)}:</b> ${linkTarget(l.target)}</li>`).join("\n")}
+      </ul>`] : null,
+    ["history", "History", `      <div class="table-scroll"><table>
         <thead><tr><th>Date</th><th>Change</th><th>Notes</th></tr></thead>
         <tbody>
 ${(t.history || []).map(historyRow).join("\n")}
         </tbody>
-      </table></div>`),
-  ].join("\n\n");
+      </table></div>`],
+  ];
+  return parts.filter(Boolean).map(([id, heading, body], index) => section(id, index, heading, body)).join("\n\n");
 }
 
 /** One edit to the document template. Each must match, so a template change fails loudly instead of leaking old text. */
@@ -1282,7 +1393,7 @@ async function cmdReport(args) {
   }
 }
 
-const COMMANDS = { project: cmdProject, add: cmdAdd, approve: cmdApprove, decide: cmdDecide, source: cmdSource, review: cmdReview, set: cmdSet, note: cmdNote, hook: cmdHook, list: cmdList, show: cmdShow, search: cmdSearch, export: cmdExport, report: cmdReport };
+const COMMANDS = { project: cmdProject, add: cmdAdd, approve: cmdApprove, decide: cmdDecide, source: cmdSource, unverified: cmdUnverified, verify: cmdVerify, link: cmdLink, review: cmdReview, set: cmdSet, note: cmdNote, hook: cmdHook, list: cmdList, show: cmdShow, search: cmdSearch, export: cmdExport, report: cmdReport };
 const [command, ...rest] = process.argv.slice(2);
 try {
   if (!COMMANDS[command]) throw new UsageError(`usage: board-tools.mjs <${Object.keys(COMMANDS).join("|")}> ...`);
