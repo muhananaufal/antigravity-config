@@ -1386,7 +1386,7 @@ async function cmdReport(args) {
     const waiting = tickets.filter((t) => ["waiting", "review"].includes(columnOf(t))).length;
     console.log(`board written: ${path.join(dir, "index.html")}`);
     console.log(`${pages.length - 1} ticket page(s) written, ${unchanged} unchanged`);
-    console.log(`${projects.length} project(s), ${tickets.length} ticket(s), ${waiting} waiting for the owner`);
+    console.log(`${projects.length} project(s), ${tickets.length} ticket(s), ${waiting} need the owner (a question to answer, an agent decision to see, or work to check)`);
     return 0;
   } finally {
     fs.rmSync(scratch, { recursive: true, force: true });

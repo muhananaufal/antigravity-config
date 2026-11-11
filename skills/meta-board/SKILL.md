@@ -22,7 +22,7 @@ Alat dipanggil dengan `node ~/.gemini/config/skills/meta-board/scripts/board-too
 ## §0. Hukum
 
 1. **Tiket satu-satunya wadah.** Keputusan, sumber, dan riwayat tinggal di dalam tiket. Tidak ada catatan keputusan di luar tiket.
-2. **Kalimat user disalin apa adanya** ke `user_words` atau `--words`, termasuk singkatan dan salah ketiknya. DILARANG merapikan, menerjemahkan, atau merangkumnya. Kalimat untuk hal lain BUKAN persetujuan tiket ini.
+2. **Kalimat user disalin apa adanya** ke `user_words` atau `--words`, termasuk singkatan dan salah ketiknya. DILARANG merapikan, menerjemahkan, atau merangkumnya. Bila satu pesan user memuat beberapa hal (persetujuan sekaligus jawaban), persetujuan tiket memakai pesan utuhnya dan tiap keputusan memakai **potongan utuh** yang menyangkut keputusan itu, tanpa mengubah satu huruf pun. Kalimat untuk hal lain BUKAN persetujuan tiket ini.
 3. **Agen DILARANG menandai `done`.** Agen berhenti di `review`. `done`, pengembalian, dan `cancelled` hanya dengan kalimat user tentang tiket itu.
 4. **Isi ditulis untuk dibaca manusia berbulan-bulan lagi:** kalimat lengkap dalam bahasa percakapan dengan user, tanpa singkatan internal, tanpa nama lensa atau istilah skill.
 5. **Papan DILARANG disunting di luar alat**, dan halaman HTML-nya DILARANG disunting tangan.
@@ -43,6 +43,7 @@ Alat dipanggil dengan `node ~/.gemini/config/skills/meta-board/scripts/board-too
 | Mulai mengerjakan | Pindah ke branch tiket, lalu `board set <id> --status doing` |
 | User menjawab butir "perlu keputusanmu" | `board decide <id> --file <berkas>`; bila menjawab pertanyaan yang sudah tercatat, tambah `--answers K<n>` |
 | Agen memutuskan sendiri karena user menyerahkan | `board decide` dengan `"decided_by": "agent"` dan `authority` berisi kalimat user yang menyerahkannya |
+| Agen harus memilih sesuatu yang TIDAK pernah diserahkan user (tidak ada di panel, tidak tercakup kalimat mana pun) | Pilih yang paling mudah dibalik dan catat tetap sebagai keputusan agen, dengan `authority` berisi kalimat terdekat **dan `reason` yang terang menyebut bahwa hal ini tidak ditanyakan ke user**. Sebut ke user saat melapor. Bila pilihannya sulit dibalik: jangan memilih; catat sebagai pertanyaan terbuka dan berhenti. |
 | Ada pertanyaan yang belum bisa dijawab user | `board decide` dengan `question` saja |
 | Ketahuan sebuah klaim ternyata dugaan | `board unverified <id> --file <berkas>` |
 | Dugaan sudah dicek | `board verify <id> U<n> --result "<apa yang ditemukan>"` |
@@ -55,7 +56,9 @@ Alat dipanggil dengan `node ~/.gemini/config/skills/meta-board/scripts/board-too
 
 **Yang TIDAK jadi tiket:** typo, perbaikan satu baris yang panelnya nihil, dan pertanyaan yang hanya dijawab tanpa mengubah apa pun. Bugfix menjadi tiket setelah akar masalahnya ketemu, bukan saat masih diselidiki.
 
-**Proyek tidak didaftarkan.** Ia muncul di papan saat tiket pertamanya dicatat, dinamai menurut folder `--dir`. Berikan root repo, bukan subfolder; kalau tidak, satu proyek terpecah jadi dua.
+**Proyek tidak didaftarkan.** Ia muncul di papan saat tiket pertamanya dicatat, dinamai menurut folder `--dir`. Berikan root repo, bukan subfolder; kalau tidak, satu proyek terpecah jadi dua. Alat menampilkannya sebagai `<folder induk>/<nama folder>` (mis. `devivace/altrms`), tetapi `--project` hanya memakai nama foldernya (`altrms`).
+
+**Berkas tiket sementara** (`--file`) ditulis ke folder sementara atau scratch, BUKAN ke dalam repo proyek; berkas itu tidak boleh ikut ter-commit.
 
 ---
 
