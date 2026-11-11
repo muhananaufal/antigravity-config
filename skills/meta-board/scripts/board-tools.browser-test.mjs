@@ -52,10 +52,12 @@ const site = path.join(TMP, "site");
 tool(["report", "--out", site], "2026-11-21T09:00:00+07:00");
 
 // A second board with one crowded column, for "show more".
-board = path.join(TMP, "crowded.db");
+// It lives in its own folder: the pages are kept beside the board file, and two boards must not share one "site".
+const CROWDED_DB = path.join(TMP, "crowded-board", "board.db");
+fs.mkdirSync(path.dirname(CROWDED_DB), { recursive: true });
+board = CROWDED_DB;
 for (let i = 1; i <= 23; i++) add("gamma", `Bulk ticket number ${String(i).padStart(2, "0")}`, `2026-10-${String(i).padStart(2, "0")}T09:00:00+07:00`);
-const crowded = path.join(TMP, "crowded");
-tool(["report", "--out", crowded], "2026-11-21T09:00:00+07:00");
+const crowded = path.join(TMP, "crowded-board", "site");
 board = DB;
 
 let failed = 0;
@@ -265,6 +267,51 @@ try {
   await click('[data-theme-set="light"]');
   report("the theme switch works from inside the header", (await browser.evaluate(`document.documentElement.getAttribute("data-theme")`)) === "light");
   await shot("ticket-1280");
+
+  // An open page follows the data by itself: no server, no manual reload.
+  // A flag set on the page disappears when the page reloads, which is how a reload is told apart from no reload.
+  const mark = () => browser.evaluate(`window.__stillTheSamePage = true`);
+  const samePage = () => browser.evaluate(`window.__stillTheSamePage === true`).catch(() => false);
+  const until = async (probe, seconds) => { for (let i = 0; i < seconds * 4; i++) { if (await probe().catch(() => false)) return true; await sleep(250); } return false; };
+  const column = (name) => browser.evaluate(`[...[...document.querySelectorAll("[data-column]")].find((c) => c.querySelector("h3").textContent.startsWith(${JSON.stringify(name)})).querySelectorAll("a.ticket")].map((a) => a.getAttribute("data-id")).sort().join(",")`);
+
+  await browser.colorScheme("light");
+  await browser.open(path.join(site, "index.html"));
+  await click('[data-board-filter="alpha"]');
+  await mark();
+  tool(["set", "1", "--status", "doing"], "2026-11-22T09:00:00+07:00");
+  const moved = await until(async () => !(await samePage()) && (await column("In progress")) === "1,2", 12);
+  report("an open board shows a change by itself within a few seconds", moved, `same page: ${await samePage()}, in progress: ${await column("In progress").catch(() => "?")}`);
+  report("the chosen project filter is still in place after it reloaded itself", (await visible()) === "#1,#2", await visible());
+
+  await click("[data-range-open]");
+  await mark();
+  tool(["note", "1", "--text", "A note written while the date dialog was open on the board."], "2026-11-22T10:00:00+07:00");
+  await sleep(7000);
+  report("it does not reload under an open dialog", (await samePage()) && (await browser.evaluate(`document.querySelector("dialog[data-range]").open`)));
+  await click("[data-range-cancel]");
+  report("it catches up once the dialog is closed", await until(async () => !(await samePage()), 12));
+  await click('[data-board-filter=""]');
+
+  await browser.open(path.join(site, "ticket-2.html"));
+  await mark();
+  tool(["note", "1", "--text", "A change to another ticket must not reload this page."], "2026-11-22T11:00:00+07:00");
+  await sleep(7000);
+  report("a ticket page ignores changes to other tickets", await samePage());
+  tool(["note", "2", "--text", "This note should appear on the open ticket page by itself."], "2026-11-22T12:00:00+07:00");
+  report("an open ticket page shows its own change by itself", await until(async () => (await browser.evaluate(`document.body.textContent.includes("should appear on the open ticket page by itself")`)), 12));
+
+  // A long board keeps its place when it reloads itself.
+  board = CROWDED_DB;
+  await browser.open(path.join(crowded, "index.html"));
+  await browser.evaluate(`document.querySelector(".board").scrollTop = 320`);
+  await mark();
+  tool(["note", "5", "--text", "A change on the crowded board, to see the scroll position survive."], "2026-11-22T13:00:00+07:00");
+  const reloaded = await until(async () => !(await samePage()), 12);
+  await sleep(300);
+  const top = await browser.evaluate(`document.querySelector(".board").scrollTop`);
+  report("after reloading itself the board is scrolled where it was", reloaded && Math.abs(top - 320) <= 4, `reloaded: ${reloaded}, scrollTop: ${top}`);
+  board = DB;
 
   report("no script errors on any page", browser.pageErrors.length === 0, browser.pageErrors.slice(0, 3));
 } finally {

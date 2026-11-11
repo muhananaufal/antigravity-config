@@ -24,7 +24,7 @@
 //   node board-tools.mjs show <id>                          the full text of one ticket
 //   node board-tools.mjs search <words> [--project p]       ticket numbers and titles only
 //   node board-tools.mjs export [--project p]               JSON
-//   node board-tools.mjs report --out <dir> [--all]         index.html (the board) and one page per ticket; only changed tickets are rewritten
+//   node board-tools.mjs report [--out <dir>] [--all]       rebuild the pages by hand; every write command already does it
 //
 // The board lives at ~/.aetheris/board/board.db; AETHERIS_BOARD overrides the path.
 // Reading is deliberately narrow: `list` and `search` print one short line per ticket, and only `show`
@@ -42,6 +42,10 @@ import { fileURLToPath } from "node:url";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const DOC_TOOLS = path.join(HERE, "..", "..", "meta-prd", "scripts", "doc-tools.mjs");
 const DB_PATH = process.env.AETHERIS_BOARD || path.join(os.homedir(), ".aetheris", "board", "board.db");
+// The pages are kept in a "site" folder beside the board file. A test board therefore writes its pages
+// beside itself and never into the owner's real ones.
+const SITE_DIR = path.join(path.dirname(DB_PATH), "site");
+const WATCH_INTERVAL_MS = 3000;
 
 // idea: recorded, not approved yet. review: the agent is done and attached evidence, the owner has not accepted it.
 const STATUSES = ["idea", "ready", "doing", "review", "done", "cancelled"];
@@ -1416,7 +1420,44 @@ function swap(html, pattern, replacement) {
   return next;
 }
 
-function makePage(template, { tab, title, eyebrow, meta, appbar, sections, stamp = "" }) {
+// An open page notices that it is out of date and reloads itself. There is no server: every few seconds the page
+// loads the small stamp file beside it and compares the stamp for this page with the one it was built with.
+// It waits while a dialog or dropdown is open or a field has the focus, and it keeps the scroll position.
+const WATCH_SCRIPT = `<script id="watch-script">
+(function () {
+  var mine = document.querySelector('meta[name="board-stamp"]');
+  var which = document.querySelector('meta[name="board-page"]');
+  if (!mine || !which) return;
+  var page = which.getAttribute("content");
+  var built = mine.getAttribute("content");
+  var KEY = "board-scroll:" + page;
+  var board = document.querySelector(".board");
+  try {
+    var kept = JSON.parse(sessionStorage.getItem(KEY) || "null");
+    if (kept) {
+      sessionStorage.removeItem(KEY);
+      window.scrollTo(0, kept.y);
+      if (board) { board.scrollTop = kept.top; board.scrollLeft = kept.left; }
+    }
+  } catch (e) { /* the page still reloads without a remembered position */ }
+  window.__boardStamp = function (stamps) {
+    var latest = page === "board" ? stamps.board : (stamps.tickets || {})[page];
+    if (!latest || latest === built) return;
+    var busy = document.querySelector("dialog[open]") || document.querySelector("[data-picker-panel]:not([hidden])") || (document.activeElement && /^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName));
+    if (busy) return;
+    try { sessionStorage.setItem(KEY, JSON.stringify({ y: window.scrollY, top: board ? board.scrollTop : 0, left: board ? board.scrollLeft : 0 })); } catch (e) { /* see above */ }
+    location.reload();
+  };
+  setInterval(function () {
+    var probe = document.createElement("script");
+    probe.src = "stamp.js?" + Date.now();
+    probe.onload = probe.onerror = function () { probe.remove(); };
+    document.head.appendChild(probe);
+  }, ${WATCH_INTERVAL_MS});
+})();
+</script>`;
+
+function makePage(template, { tab, title, eyebrow, meta, appbar, sections, stamp = "", page = "", watch = "" }) {
   const start = template.indexOf('<section id="ringkasan">');
   const end = template.indexOf('<footer class="doc">');
   if (start === -1 || end === -1) throw new UsageError("the doc-tools template changed shape: cannot find the first section or the footer");
@@ -1437,18 +1478,18 @@ function makePage(template, { tab, title, eyebrow, meta, appbar, sections, stamp
   for (const [key, value] of Object.entries({ JUDUL_TAB: tab, JUDUL: title })) html = swap(html, `{{${key}}}`, value);
   // No footer line: on the board nothing sits below the columns, and a ticket ends with its history.
   html = swap(html, /\s*<footer class="doc">[^]*?<\/footer>/, "");
-  html = swap(html, "</head>", `${PAGE_STYLE}\n</head>`);
+  html = swap(html, "</head>", `<meta name="board-page" content="${esc(page)}">\n<meta name="board-stamp" content="${esc(watch)}">\n${PAGE_STYLE}\n</head>`);
   if (appbar) html = swap(html, "<main>", `<main>\n    <p class="appbar">${appbar}</p>`);
-  return swap(html, "</body>", `${PAGE_SCRIPT}\n<!-- ${REPORT_MARK}${stamp ? ` ${stamp}` : ""} -->\n</body>`);
+  return swap(html, "</body>", `${PAGE_SCRIPT}\n${WATCH_SCRIPT}\n<!-- ${REPORT_MARK}${stamp ? ` ${stamp}` : ""} -->\n</body>`);
 }
 
-async function cmdReport(args) {
-  const out = option(args, "--out");
-  const everything = flag(args, "--all");
-  if (!out) throw new UsageError("usage: report --out <dir> [--all]");
-  const dir = path.resolve(out);
-  if (fs.existsSync(dir) && !fs.statSync(dir).isDirectory()) throw new UsageError(`--out must be a folder: ${dir}`);
-  const db = await openDb();
+/**
+ * Builds the board page and the ticket pages that changed into a folder, plus the stamp file open pages watch.
+ * Returns what it did; throws without writing anything if a page is not ours to replace or fails the checker.
+ */
+function buildSite(db, dir, everything) {
+  if (fs.existsSync(dir) && !fs.statSync(dir).isDirectory()) throw new UsageError(`the pages go into a folder, and this is a file: ${dir}`);
+
   const tickets = db.prepare(`${SELECT} ORDER BY t.id DESC`).all().map(rowToTicket);
   const projects = db.prepare("SELECT key, grp FROM projects ORDER BY grp, key").all();
 
@@ -1463,19 +1504,25 @@ async function cmdReport(args) {
     // The board page is rebuilt every time. A ticket page is rebuilt only when what it shows has changed:
     // the ticket itself, the tickets that continue it, or the look of the pages. Each page carries a stamp of
     // those three, so thousands of unchanged tickets cost one file read each instead of a rebuild.
-    const build = createHash("sha1").update(template).update(PAGE_STYLE).update(PAGE_SCRIPT).digest("hex").slice(0, 12);
-    const pages = [["index.html", makePage(template, { tab: "Board", title: "Board", sections: boardSections(tickets, projects) })]];
+    const build = createHash("sha1").update(template).update(PAGE_STYLE).update(PAGE_SCRIPT).update(WATCH_SCRIPT).digest("hex").slice(0, 12);
+    const followersOf = (t) => tickets.filter((other) => other.follows === t.id).map((other) => other.id).sort((a, b) => a - b);
+    const stampOf = (t) => `build=${build} updated=${t.updated_at} followers=${followersOf(t).join(",")}`;
+    // The board's own stamp moves whenever any ticket or the list of projects does.
+    const boardStamp = createHash("sha1").update(build).update(tickets.map((t) => `${t.id}:${stampOf(t)}`).join("|")).update(projects.map((p) => `${p.grp}/${p.key}`).join("|")).digest("hex").slice(0, 16);
+    const pages = [["index.html", makePage(template, { tab: "Board", title: "Board", sections: boardSections(tickets, projects), page: "board", watch: boardStamp })]];
     let unchanged = 0;
     for (const t of tickets) {
       const name = `ticket-${t.id}.html`;
       const target = path.join(dir, name);
-      const followers = tickets.filter((other) => other.follows === t.id).map((other) => other.id).sort((a, b) => a - b);
-      const stamp = `build=${build} updated=${t.updated_at} followers=${followers.join(",")}`;
+      const followers = followersOf(t);
+      const stamp = stampOf(t);
       const current = fs.existsSync(target) ? fs.readFileSync(target, "utf8") : null;
       if (current !== null && !current.includes(REPORT_MARK)) throw new UsageError(`refusing to overwrite a file this tool did not write: ${target}`);
       if (!everything && current !== null && current.includes(`<!-- ${REPORT_MARK} ${stamp} -->`)) { unchanged++; continue; }
       pages.push([name, makePage(template, {
         stamp,
+        page: String(t.id),
+        watch: stamp,
         tab: `#${t.id} ${esc(t.title)}`,
         title: esc(t.title),
         eyebrow: `Ticket #${t.id} · ${esc(t.group)} / ${esc(t.project)} · ${STATUS_LABEL[t.status]}`,
@@ -1500,13 +1547,35 @@ async function cmdReport(args) {
     }
     fs.mkdirSync(dir, { recursive: true });
     for (const [name] of pages) fs.copyFileSync(path.join(scratch, name), path.join(dir, name));
-    const waiting = tickets.filter((t) => ["waiting", "review"].includes(columnOf(t))).length;
-    console.log(`board written: ${path.join(dir, "index.html")}`);
-    console.log(`${pages.length - 1} ticket page(s) written, ${unchanged} unchanged`);
-    console.log(`${projects.length} project(s), ${tickets.length} ticket(s), ${waiting} need the owner (a question to answer, an agent decision to see, or work to check)`);
-    return 0;
+    // Written last, so a page that sees the new stamp always finds its new version already in place.
+    const stamps = { board: boardStamp, tickets: Object.fromEntries(tickets.map((t) => [String(t.id), stampOf(t)])) };
+    fs.writeFileSync(path.join(dir, "stamp.js"), `window.__boardStamp && window.__boardStamp(${JSON.stringify(stamps)});\n`);
+    return { dir, written: pages.length - 1, unchanged, projects: projects.length, tickets: tickets.length, waiting: tickets.filter((t) => ["waiting", "review"].includes(columnOf(t))).length };
   } finally {
     fs.rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
+async function cmdReport(args) {
+  const out = option(args, "--out");
+  const everything = flag(args, "--all");
+  const done = buildSite(await openDb(), out ? path.resolve(out) : SITE_DIR, everything);
+  console.log(`board written: ${path.join(done.dir, "index.html")}`);
+  console.log(`${done.written} ticket page(s) written, ${done.unchanged} unchanged`);
+  console.log(`${done.projects} project(s), ${done.tickets} ticket(s), ${done.waiting} need the owner (a question to answer, an agent decision to see, or work to check)`);
+  return 0;
+}
+
+// Commands that change what the pages show. After each of them the pages beside the board file are brought
+// up to date, so nobody has to remember to run "report".
+const WRITES = ["project", "add", "approve", "decide", "source", "unverified", "verify", "link", "review", "set", "note", "merged"];
+
+async function refreshPages() {
+  try {
+    buildSite(await openDb(), SITE_DIR, false);
+  } catch (error) {
+    // The data is already saved. A page that could not be written must not make the command look failed.
+    console.error(`warning: the change is saved, but the pages were not updated (${error.message.split("\n")[0]}); run "report" to see why`);
   }
 }
 
@@ -1514,7 +1583,9 @@ const COMMANDS = { project: cmdProject, add: cmdAdd, approve: cmdApprove, decide
 const [command, ...rest] = process.argv.slice(2);
 try {
   if (!COMMANDS[command]) throw new UsageError(`usage: board-tools.mjs <${Object.keys(COMMANDS).join("|")}> ...`);
+  const action = rest[0];
   process.exitCode = await COMMANDS[command](rest);
+  if (process.exitCode === 0 && WRITES.includes(command) && !(command === "project" && action === "list")) await refreshPages();
 } catch (error) {
   if (error instanceof Refused) { console.error(`refused:\n${error.message.split("\n").map((l) => `  - ${l}`).join("\n")}`); process.exitCode = 1; }
   else if (error instanceof UsageError) { console.error(`error: ${error.message}`); process.exitCode = 2; }
