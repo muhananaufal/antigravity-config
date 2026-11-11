@@ -25,8 +25,9 @@ if (!findBrowser()) {
 
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "board-browser-test-"));
 const DB = path.join(TMP, "board.db");
+let board = DB;
 function tool(args, at) {
-  const out = spawnSync(process.execPath, ["--no-warnings", TOOL, ...args], { encoding: "utf8", env: { ...process.env, AETHERIS_BOARD: DB, BOARD_NOW: at } });
+  const out = spawnSync(process.execPath, ["--no-warnings", TOOL, ...args], { encoding: "utf8", env: { ...process.env, AETHERIS_BOARD: board, BOARD_NOW: at } });
   if (out.status !== 0) throw new Error(`board-tools ${args.join(" ")} failed:\n${out.stdout}${out.stderr}`);
 }
 let counter = 0;
@@ -49,6 +50,13 @@ add("beta", "Excel import for employees", "2026-11-09T09:00:00+07:00");
 tool(["set", "2", "--status", "doing"], "2026-11-20T09:00:00+07:00");
 const site = path.join(TMP, "site");
 tool(["report", "--out", site], "2026-11-21T09:00:00+07:00");
+
+// A second board with one crowded column, for "show more".
+board = path.join(TMP, "crowded.db");
+for (let i = 1; i <= 23; i++) add("gamma", `Bulk ticket number ${String(i).padStart(2, "0")}`, `2026-10-${String(i).padStart(2, "0")}T09:00:00+07:00`);
+const crowded = path.join(TMP, "crowded");
+tool(["report", "--out", crowded], "2026-11-21T09:00:00+07:00");
+board = DB;
 
 let failed = 0;
 function report(name, ok, detail) {
@@ -74,11 +82,31 @@ try {
   report("all three tickets show at first", (await visible()) === "#1,#2,#3", await visible());
   await shot("board-1280");
 
+  // Sorting: the Ready column holds #1 (2 Nov, "Export claims to Excel") and #3 (9 Nov, "Excel import for employees").
+  const ready = () => browser.evaluate(`[...[...document.querySelectorAll("[data-column]")].find((c) => c.querySelector("h3").textContent.startsWith("Ready")).querySelectorAll("a.ticket")].filter((a) => !a.hidden).map((a) => a.getAttribute("data-id")).join(",")`);
+  const sortBy = (field) => browser.evaluate(`(() => { const s = document.querySelector("[data-sort]"); s.value = ${JSON.stringify(field)}; s.dispatchEvent(new Event("change", { bubbles: true })); })()`);
+  report("cards start sorted by last update, newest first", (await ready()) === "3,1" && (await browser.evaluate(`document.querySelector("[data-sort]").value`)) === "updated", await ready());
+  await click("[data-sort-dir]");
+  report("the direction button flips the order", (await ready()) === "1,3" && /ascending/i.test(await browser.evaluate(`document.querySelector("[data-sort-dir]").getAttribute("aria-label")`)), await ready());
+  await sortBy("title");
+  report("sorting by title, ascending", (await ready()) === "3,1", await ready());
+  await click("[data-sort-dir]");
+  report("sorting by title, descending", (await ready()) === "1,3", await ready());
+  await sortBy("number");
+  report("sorting by ticket number, descending", (await ready()) === "3,1", await ready());
+  await sortBy("created");
+  await click("[data-sort-dir]");
+  report("sorting by created date, ascending", (await ready()) === "1,3", await ready());
+  await browser.open(path.join(site, "index.html"));
+  report("the chosen sort survives a reload", (await ready()) === "1,3" && (await browser.evaluate(`document.querySelector("[data-sort]").value`)) === "created", await ready());
+  await sortBy("updated");
+  await click("[data-sort-dir]");
+
   // The filters sit in one row on a wide screen.
-  const row = await browser.evaluate(`(() => { const tops = ["[data-project-open]", "[data-title-search]", "[data-date-field]", "[data-range-open]"].map((s) => { const r = document.querySelector(s).getBoundingClientRect(); return Math.round(r.top + r.height / 2); }); return Math.max(...tops) - Math.min(...tops); })()`);
-  report("project picker, title search, date field and range share one row", row <= 4, row);
-  const gaps = await browser.evaluate(`(() => { const boxes = ["[data-project-open]", "[data-title-search]", '[data-date-field="created"]', '[data-date-field="updated"]', "[data-range-open]"].map((s) => document.querySelector(s).getBoundingClientRect()); return boxes.slice(1).map((b, i) => Math.round(b.left - boxes[i].right)); })()`);
-  report("the five filter controls are evenly spaced", gaps.every((gap) => gap === gaps[0]) && gaps[0] >= 10, gaps);
+  const row = await browser.evaluate(`(() => { const tops = ["[data-project-open]", "[data-title-search]", "[data-date-field]", "[data-range-open]", "[data-sort]", "[data-sort-dir]"].map((s) => { const r = document.querySelector(s).getBoundingClientRect(); return Math.round(r.top + r.height / 2); }); return Math.max(...tops) - Math.min(...tops); })()`);
+  report("project picker, title search, date field, range and sort share one row", row <= 4, row);
+  const gaps = await browser.evaluate(`(() => { const boxes = ["[data-project-open]", "[data-title-search]", '[data-date-field="created"]', '[data-date-field="updated"]', "[data-range-open]", "[data-sort]", "[data-sort-dir]"].map((s) => document.querySelector(s).getBoundingClientRect()); return boxes.slice(1).map((b, i) => Math.round(b.left - boxes[i].right)); })()`);
+  report("the filter controls are evenly spaced", gaps.every((gap) => gap === gaps[0]) && gaps[0] >= 10, gaps);
   report("the Filters and Board headings take no room", await browser.evaluate(`[...document.querySelectorAll("section.bare > h2")].every((h) => h.getBoundingClientRect().width <= 1)`));
 
   // The project picker: opens, narrows as you type, picks with the keyboard, closes with Escape.
@@ -134,7 +162,7 @@ try {
   report("nothing is filtered before Apply", (await visible()) === "#1,#2,#3", await visible());
   await click("[data-range-apply]");
   report("created range keeps the ticket created inside it", (await visible()) === "#2", await visible());
-  report("the button shows the chosen range", (await browser.evaluate(`document.querySelector("[data-range-open] .range-long").textContent`)) === "4 Nov 2026 – 6 Nov 2026" && (await browser.evaluate(`getComputedStyle(document.querySelector("[data-range-open] .range-short")).display`)) === "none");
+  report("the button shows the chosen range", (await browser.evaluate(`document.querySelector("[data-range-open]").textContent`)) === "4 Nov 2026 – 6 Nov 2026");
 
   await click('[data-date-field="updated"]');
   report("the same range on the updated date hides a ticket updated later", (await visible()) === "", await visible());
@@ -170,18 +198,36 @@ try {
   await browser.viewport(390, 800);
   await browser.open(path.join(site, "index.html"));
   await sleep(150);
-  report("on a phone the range label drops the year", (await browser.evaluate(`getComputedStyle(document.querySelector("[data-range-open] .range-long")).display`)) === "none" && (await browser.evaluate(`document.querySelector("[data-range-open] .range-short").textContent`)) === "1 Nov – 30 Nov");
   const layout = await browser.evaluate(`(() => { const board = document.querySelector(".board"); const cols = [...board.children].map((c) => c.getBoundingClientRect()); return { sameRow: cols.every((c) => Math.abs(c.top - cols[0].top) < 2), scrolls: board.scrollWidth > board.clientWidth + 50, pageWide: document.documentElement.scrollWidth <= innerWidth + 1, width: Math.round(cols[0].width) }; })()`);
   report("on a phone the columns sit side by side and the board scrolls sideways, the page does not", layout.sameRow && layout.scrolls && layout.pageWide, layout);
-  const phone = await browser.evaluate(`(() => { const box = (s) => document.querySelector(s).getBoundingClientRect(); const search = box("[data-title-search]"); const rest = ["[data-project-open]", "[data-date-field]", "[data-range-open]"].map(box); return { searchFirst: rest.every((r) => r.top > search.bottom - 1), restOneRow: Math.max(...rest.map((r) => r.top)) - Math.min(...rest.map((r) => r.top)) <= 4, fits: rest.every((r) => r.right <= innerWidth) && search.right <= innerWidth, searchWide: search.width > innerWidth * 0.8 }; })()`);
-  report("on a phone the title search takes the first row and the other three share the second", phone.searchFirst && phone.restOneRow && phone.fits && phone.searchWide, phone);
+  const phone = await browser.evaluate(`(() => { const bar = document.querySelector(".filters"); const tops = [...bar.children].map((c) => { const r = c.getBoundingClientRect(); return Math.round(r.top + r.height / 2); }); return { oneRow: Math.max(...tops) - Math.min(...tops) <= 4, scrolls: bar.scrollWidth > bar.clientWidth + 50, pageStill: document.documentElement.scrollWidth <= innerWidth + 1 }; })()`);
+  report("on a phone the filters stay in one row that scrolls sideways, the page does not", phone.oneRow && phone.scrolls && phone.pageStill, phone);
   await click("[data-project-open]");
-  const panel = await browser.evaluate(`(() => { const r = document.querySelector("[data-project-panel]").getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth; })()`);
-  report("on a phone the project list stays inside the screen", panel);
+  const panel = await browser.evaluate(`(() => { const el = document.querySelector("[data-project-panel]"); const r = el.getBoundingClientRect(); const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); return { inside: r.left >= 0 && r.right <= innerWidth, uncovered: Boolean(top) && el.contains(top), tall: r.height > 100 }; })()`);
+  report("on a phone the project list opens inside the screen and is not clipped by the scrolling row", panel.inside && panel.uncovered && panel.tall, panel);
   await shot("board-390");
   await key("Escape");
 
+  // A crowded column shows ten cards and offers the rest in steps.
   await browser.viewport(1280, 900);
+  await browser.evaluate(`localStorage.removeItem("board-filters")`);
+  await browser.open(path.join(crowded, "index.html"));
+  const shownCards = () => browser.evaluate(`[...document.querySelectorAll("a.ticket")].filter((a) => !a.hidden).length`);
+  const text = (selector) => browser.evaluate(`(() => { const el = [...document.querySelectorAll(${JSON.stringify(selector)})].find((b) => !b.hidden); return el ? el.textContent : ""; })()`);
+  report("a column of 23 shows 10 and counts all 23", (await shownCards()) === 10 && (await browser.evaluate(`[...document.querySelectorAll("[data-count]")].map((b) => b.textContent).join(",")`)).includes("23"), await shownCards());
+  report("the button says how many more and how many are left", (await text("[data-more]")) === "Show 10 more (13 left)" && (await text("[data-less]")) === "", await text("[data-more]"));
+  await click("[data-more]:not([hidden])");
+  report("Show more adds ten", (await shownCards()) === 20 && (await text("[data-more]")) === "Show 3 more (3 left)" && (await text("[data-less]")) === "Show less", `${await shownCards()} ${await text("[data-more]")}`);
+  await click("[data-more]:not([hidden])");
+  report("the last step shows the rest and drops the button", (await shownCards()) === 23 && (await text("[data-more]")) === "");
+  await typeInto("[data-title-search]", "number 2");
+  // "2" is in 02, 12 and 20 to 23; with the newest first, 02 and 12 sit beyond the first ten.
+  report("a search reaches cards beyond the first ten", (await shownCards()) === 6 && (await text("[data-more]")) === "", await shownCards());
+  await typeInto("[data-title-search]", "");
+  await click("[data-less]:not([hidden])");
+  report("Show less returns to ten", (await shownCards()) === 10 && (await text("[data-less]")) === "");
+  await shot("crowded-1280");
+
   await browser.colorScheme("dark");
   await browser.open(path.join(site, "ticket-2.html"));
   report("ticket page shows created and updated dates", /Created\s*5 Nov 2026/.test(await browser.evaluate(`document.querySelector("header.doc").textContent`)) && /Updated\s*20 Nov 2026/.test(await browser.evaluate(`document.querySelector("header.doc").textContent`)));

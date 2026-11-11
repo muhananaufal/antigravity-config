@@ -289,6 +289,9 @@ let idIdea = null, idNext = null;
     expect("report: project picker, title search, date field and range sit in one filter row",
       /data-project-picker/.test(filterRow) && /data-project-search/.test(filterRow) && /data-title-search/.test(filterRow) && /data-date-field="created"/.test(filterRow) && /data-range-open/.test(filterRow)
       && filterRow.indexOf("data-project-picker") < filterRow.indexOf("data-title-search") && (board.match(/class="filters"/g) || []).length === 1, filterRow.slice(0, 400));
+    expect("report: the filter row offers a sort field and a direction", /<select[^>]*data-sort/.test(filterRow) && ["updated", "created", "title", "number"].every((v) => filterRow.includes(`<option value="${v}">`)) && /data-sort-dir/.test(filterRow));
+    expect("report: every column can show more and less, and cards carry what sorting needs", (board.match(/data-more hidden/g) || []).length === 7 && (board.match(/data-less hidden/g) || []).length === 7
+      && new RegExp(`data-id="${id}" data-ct="\\d+" data-ut="\\d+"`).test(board) && !/Showing the/.test(board));
     expect("report: the project picker lists every project as an option", /role="option"[^>]*data-board-filter="hris-demo"/.test(board) && /role="option"[^>]*data-board-filter="blog-pribadi"/.test(board));
     expect("report: the Filters and Board headings are kept for screen readers only", (board.match(/<section id="[a-z]+" class="bare">/g) || []).length === 2 && /section\.bare > h2\s*{[^}]*clip-path/.test(board));
     expect("report: cards show the ticket type", /<span class="pill solid">feature<\/span>/.test(board));

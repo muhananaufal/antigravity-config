@@ -40,7 +40,8 @@ const STATUSES = ["idea", "ready", "doing", "review", "done", "cancelled"];
 const STATUS_LABEL = { idea: "Idea", ready: "Ready", doing: "In progress", review: "Needs your check", done: "Done", cancelled: "Cancelled" };
 // Board columns in order. "waiting" is not a status: it holds open tickets with a question for the owner.
 const COLUMNS = [["idea", "Idea"], ["waiting", "Waiting for you"], ["ready", "Ready"], ["doing", "In progress"], ["review", "Needs your check"], ["done", "Done"], ["cancelled", "Cancelled"]];
-const CLOSED_LIMIT = 30;
+// Cards a column shows before "Show more". Every ticket is still written to the page, so search and the date range reach all of them.
+const PAGE_SIZE = 10;
 // Work branches follow meta-git: the prefix is the ticket's type. A folder without git has no branch,
 // so its tickets state the type, and may also be docs or chore.
 const BRANCH_TYPES = ["feature", "fix", "refactor", "hotfix", "release"];
@@ -734,26 +735,22 @@ const PAGE_STYLE = `<style id="page-style">
   .filters input[type="search"] { font: 500 15px var(--body); color: var(--ink); background: var(--surface); border: 1px solid var(--line-strong); border-radius: 999px; padding: 9px 16px; min-height: 40px; }
   .filters input[type="search"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .title-search { flex: 1 1 220px; max-width: 360px; min-width: 0; }
-  .picker { position: relative; }
+  .filters select.chip { font: 600 14px var(--body); border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); padding: 8px 14px; border-radius: 999px; min-height: 40px; cursor: pointer; }
   .picker > button::after { content: "\\25BE"; margin-left: 8px; }
-  .picker-panel { position: absolute; z-index: 5; top: calc(100% + 6px); left: 0; width: min(320px, 86vw); background: var(--surface); border: 1px solid var(--line-strong); border-radius: 16px; padding: 10px; box-shadow: 0 12px 32px rgb(0 0 0 / .18); }
+  .more { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 0; }
+  .more .chip { font-size: 13px; }
+  .picker-panel { position: fixed; z-index: 5; width: min(320px, 86vw); background: var(--surface); border: 1px solid var(--line-strong); border-radius: 16px; padding: 10px; box-shadow: 0 12px 32px rgb(0 0 0 / .18); }
   .picker-panel input[type="search"] { width: 100%; }
   .picker-panel ul { list-style: none; margin: 8px 0 0; padding: 0; max-height: 280px; overflow-y: auto; }
   .picker-panel [role="option"] { display: block; width: 100%; text-align: left; border: 0; background: none; color: inherit; font: 500 15px var(--body); padding: 9px 12px; border-radius: 10px; cursor: pointer; }
   .picker-panel [role="option"]:hover, .picker-panel [role="option"]:focus-visible { background: var(--accent-soft); outline: none; }
   .picker-panel [role="option"][aria-selected="true"] { font-weight: 700; color: var(--accent); }
-  /* On a phone the four controls do not fit one row: the title search takes the first row, the rest share the second. */
-  .range-short { display: none; }
-  @media (max-width: 720px) {
-    .title-search { order: -1; flex-basis: 100%; max-width: none; }
-    .filters { gap: 10px 8px; }
-    .filters .chip { padding: 8px 11px; font-size: 13px; }
-    .filters .chips { gap: 8px; flex: none; }
-    .filters [data-range-open] { flex: none; }
-    .picker { flex: 1 1 0; min-width: 0; }
-    .picker > button { width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .range-long { display: none; }
-    .range-short { display: inline; }
+  /* When the controls do not fit, the row stays one row and scrolls sideways, like the board under it. */
+  @media (max-width: 1000px) {
+    .filters { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 8px; }
+    .filters > * { flex: none; }
+    .filters .chip { white-space: nowrap; }
+    .title-search { width: 220px; max-width: none; }
   }
   .board { display: flex; gap: 16px; align-items: flex-start; overflow-x: auto; padding-bottom: 12px; scroll-snap-type: x proximity; }
   .board > div { flex: 0 0 min(300px, 82vw); scroll-snap-align: start; }
@@ -819,8 +816,19 @@ const PAGE_SCRIPT = `<script id="page-script">
   function firstOf(date) { return date.slice(0, 7) + "-01"; }
   function show(date) { var p = date.split("-").map(Number); return p[2] + " " + SHORT[p[1] - 1] + " " + p[0]; }
 
-  var state = { project: "", field: "created", from: "", to: "", title: "" };
+  var state = { project: "", field: "created", from: "", to: "", title: "", sort: "updated", dir: "desc" };
   var searchBox = bar.querySelector("[data-title-search]");
+  var sortSelect = bar.querySelector("[data-sort]");
+  var sortDir = bar.querySelector("[data-sort-dir]");
+  var PAGE = ${PAGE_SIZE};
+  var columns = all("[data-column]");
+  var limits = [];
+  var SORTS = {
+    updated: function (card) { return Number(card.getAttribute("data-ut")); },
+    created: function (card) { return Number(card.getAttribute("data-ct")); },
+    number: function (card) { return Number(card.getAttribute("data-id")); },
+    title: function (card) { var text = card.querySelector("h4").textContent; return text.slice(text.indexOf("\\u00b7") + 1).trim().toLowerCase(); }
+  };
   try { var saved = JSON.parse(localStorage.getItem(KEY) || "{}"); for (var k in state) if (typeof saved[k] === "string") state[k] = saved[k]; } catch (e) { /* filters still work without storage */ }
   var projectButtons = all("[data-board-filter]", bar);
   var picker = bar.querySelector("[data-project-picker]");
@@ -834,11 +842,19 @@ const PAGE_SCRIPT = `<script id="page-script">
     projectButtons.forEach(function (b) { b.parentNode.hidden = wanted !== "" && b.textContent.toLowerCase().indexOf(wanted) === -1; });
     projectNone.hidden = shownOptions().length > 0;
   }
+  // The list is placed against the screen, not inside the filter row: on a phone that row scrolls sideways and would clip it.
+  function placePicker() {
+    var button = projectOpen.getBoundingClientRect();
+    projectPanel.style.top = Math.round(button.bottom + 6) + "px";
+    projectPanel.style.left = Math.round(Math.max(8, Math.min(button.left, window.innerWidth - projectPanel.offsetWidth - 8))) + "px";
+  }
   function togglePicker(open) {
     projectPanel.hidden = !open;
     projectOpen.setAttribute("aria-expanded", String(open));
-    if (open) { projectSearch.value = ""; narrowProjects(); projectSearch.focus(); }
+    if (open) { projectSearch.value = ""; narrowProjects(); placePicker(); projectSearch.focus(); }
   }
+  window.addEventListener("resize", function () { if (!projectPanel.hidden) togglePicker(false); });
+  window.addEventListener("scroll", function (event) { if (!projectPanel.hidden && !projectPanel.contains(event.target)) togglePicker(false); }, true);
   var fieldButtons = all("[data-date-field]", bar);
   var openButton = bar.querySelector("[data-range-open]");
   var dialog = document.querySelector("dialog[data-range]");
@@ -858,10 +874,12 @@ const PAGE_SCRIPT = `<script id="page-script">
     });
     projectOpen.setAttribute("aria-pressed", String(state.project !== ""));
     fieldButtons.forEach(function (b) { b.setAttribute("aria-pressed", String(b.getAttribute("data-date-field") === state.field)); });
-    // Two lengths of the same label: with the year on a wide screen, without it on a phone, where the row is tight.
-    var brief = function (date) { return show(date).slice(0, -5); };
-    if (!state.from) openButton.textContent = "Any date";
-    else openButton.innerHTML = '<span class="range-long">' + (to === state.from ? show(state.from) : show(state.from) + " – " + show(to)) + '</span><span class="range-short">' + (to === state.from ? brief(state.from) : brief(state.from) + " – " + brief(to)) + "</span>";
+    openButton.textContent = state.from ? (to === state.from ? show(state.from) : show(state.from) + " – " + show(to)) : "Any date";
+    if (!SORTS[state.sort]) state.sort = "updated";
+    if (state.dir !== "asc") state.dir = "desc";
+    sortSelect.value = state.sort;
+    sortDir.textContent = state.dir === "asc" ? "\\u2191" : "\\u2193";
+    sortDir.setAttribute("aria-label", state.dir === "asc" ? "Ascending; switch to descending" : "Descending; switch to ascending");
     openButton.setAttribute("aria-pressed", String(Boolean(state.from)));
     var wanted = state.title.trim().toLowerCase().split(/\\s+/).filter(Boolean);
     if (searchBox.value !== state.title) searchBox.value = state.title;
@@ -873,14 +891,27 @@ const PAGE_SCRIPT = `<script id="page-script">
       var inRange = !state.from || (date >= state.from && date <= to);
       // Every word typed must appear in the title, in any order.
       var inTitle = wanted.every(function (word) { return title.indexOf(word) !== -1; });
-      el.hidden = !(inProject && inRange && inTitle);
+      el.boardMatch = inProject && inRange && inTitle;
     });
-    all("[data-column]").forEach(function (col) {
-      var shown = all("[data-project]", col).filter(function (el) { return !el.hidden; }).length;
-      var badge = col.querySelector("[data-count]");
-      if (badge) badge.textContent = String(shown);
-      var empty = col.querySelector(".column-empty");
-      if (empty) empty.hidden = shown > 0;
+    var sign = state.dir === "asc" ? 1 : -1;
+    var key = SORTS[state.sort];
+    columns.forEach(function (col, index) {
+      var stack = col.querySelector(".stack");
+      var cards = all("[data-project]", stack);
+      // Ties fall back to the ticket number, so the order never depends on where a card happened to be.
+      cards.sort(function (a, b) { var x = key(a), y = key(b); return (x < y ? -1 : x > y ? 1 : Number(a.getAttribute("data-id")) - Number(b.getAttribute("data-id"))) * sign; });
+      cards.forEach(function (card) { stack.appendChild(card); });
+      var matching = cards.filter(function (card) { return card.boardMatch; });
+      var limit = Math.max(PAGE, limits[index] || PAGE);
+      cards.forEach(function (card) { card.hidden = true; });
+      matching.slice(0, limit).forEach(function (card) { card.hidden = false; });
+      col.querySelector("[data-count]").textContent = String(matching.length);
+      col.querySelector(".column-empty").hidden = matching.length > 0;
+      var left = matching.length - limit;
+      var more = col.querySelector("[data-more]");
+      more.hidden = left <= 0;
+      more.textContent = "Show " + Math.min(PAGE, left) + " more (" + left + " left)";
+      col.querySelector("[data-less]").hidden = limit <= PAGE || matching.length <= PAGE;
     });
     try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) { /* see above */ }
   }
@@ -940,6 +971,12 @@ const PAGE_SCRIPT = `<script id="page-script">
   document.addEventListener("click", function (event) { if (!projectPanel.hidden && !picker.contains(event.target)) togglePicker(false); });
   fieldButtons.forEach(function (b) { b.addEventListener("click", function () { state.field = b.getAttribute("data-date-field"); apply(); }); });
   searchBox.addEventListener("input", function () { state.title = searchBox.value; apply(); });
+  sortSelect.addEventListener("change", function () { state.sort = sortSelect.value; apply(); });
+  sortDir.addEventListener("click", function () { state.dir = state.dir === "asc" ? "desc" : "asc"; apply(); });
+  columns.forEach(function (col, index) {
+    col.querySelector("[data-more]").addEventListener("click", function () { limits[index] = (limits[index] || PAGE) + PAGE; apply(); });
+    col.querySelector("[data-less]").addEventListener("click", function () { limits[index] = PAGE; apply(); });
+  });
   openButton.addEventListener("click", function () {
     draft = { from: state.from, to: state.to };
     focusDay = state.from || today;
@@ -979,19 +1016,20 @@ function boardCard(t) {
     c.unanswered ? `<span class="pill warn">${c.unanswered} question${c.unanswered > 1 ? "s" : ""} for you</span>` : "",
     c.unseen ? `<span class="pill warn">${c.unseen} agent decision${c.unseen > 1 ? "s" : ""} to review</span>` : "",
     c.returned ? `<span class="pill danger">Sent back ${c.returned}×</span>` : ""].filter(Boolean).join(" ");
-  return `          <a class="card ticket" href="ticket-${t.id}.html" data-project="${esc(t.project)}" data-created="${day(t.created_at)}" data-updated="${day(t.updated_at)}">
+  return `          <a class="card ticket" href="ticket-${t.id}.html" data-project="${esc(t.project)}" data-created="${day(t.created_at)}" data-updated="${day(t.updated_at)}" data-id="${t.id}" data-ct="${Date.parse(t.created_at)}" data-ut="${Date.parse(t.updated_at)}">
             <h4>#${t.id} · ${esc(t.title)}</h4>
             <p class="pills">${pills}</p>
             <p class="dates">Created ${showDate(t.created_at)} · Updated ${showDate(t.updated_at)}</p>
           </a>`;
 }
 
-const boardColumn = (title, tickets, note) => `        <div data-column>
+const boardColumn = (title, tickets) => `        <div data-column>
           <h3>${title} <span class="pill muted" data-count>${tickets.length}</span></h3>
           <div class="stack">
 ${tickets.map(boardCard).join("\n")}
           </div>
-          <p class="column-empty"${tickets.length ? " hidden" : ""}>Nothing here.</p>${note ? `\n          <p class="note">${note}</p>` : ""}
+          <p class="column-empty"${tickets.length ? " hidden" : ""}>Nothing here.</p>
+          <p class="more"><button class="chip" type="button" data-more hidden>Show more</button> <button class="chip" type="button" data-less hidden>Show less</button></p>
         </div>`;
 
 const RANGE_DIALOG = `      <dialog class="range" data-range aria-labelledby="range-title">
@@ -1021,12 +1059,9 @@ const RANGE_DIALOG = `      <dialog class="range" data-range aria-labelledby="ra
 function boardSections(tickets, projects) {
   const options = ['<li><button type="button" role="option" data-board-filter="" aria-selected="true">All projects</button></li>',
     ...projects.map((p) => `<li><button type="button" role="option" data-board-filter="${esc(p.key)}" aria-selected="false">${esc(p.grp)} / ${esc(p.key)}</button></li>`)].join("\n              ");
-  const columns = COLUMNS.map(([key, title]) => {
-    const inColumn = tickets.filter((t) => columnOf(t) === key);
-    const closed = key === "done" || key === "cancelled";
-    const shown = closed ? inColumn.slice(0, CLOSED_LIMIT) : inColumn;
-    return boardColumn(title, shown, shown.length < inColumn.length ? `Showing the ${shown.length} most recent of ${inColumn.length}.` : "");
-  }).join("\n");
+  // Written newest update first, which is also the order the page starts in.
+  const recent = [...tickets].sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at) || b.id - a.id);
+  const columns = COLUMNS.map(([key, title]) => boardColumn(title, recent.filter((t) => columnOf(t) === key))).join("\n");
   return [section("filters", 0, "Filters", `      <div class="filters" data-board-filters>
         <div class="picker" data-project-picker>
           <button class="chip" type="button" data-project-open aria-haspopup="listbox" aria-expanded="false">All projects</button>
@@ -1044,6 +1079,13 @@ function boardSections(tickets, projects) {
           <button class="chip" type="button" data-date-field="updated" aria-pressed="false">Updated</button>
         </div>
         <button class="chip" type="button" data-range-open aria-haspopup="dialog" aria-pressed="false">Any date</button>
+        <select class="chip" data-sort aria-label="Sort by">
+          <option value="updated">Sort: updated</option>
+          <option value="created">Sort: created</option>
+          <option value="title">Sort: title</option>
+          <option value="number">Sort: ticket number</option>
+        </select>
+        <button class="chip" type="button" data-sort-dir aria-label="Descending; switch to ascending">&darr;</button>
       </div>
 ${RANGE_DIALOG}`, true),
   section("board", 1, "Board", `      <div class="board">
