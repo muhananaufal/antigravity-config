@@ -265,7 +265,7 @@ let idIdea = null, idNext = null;
   try { parsed = JSON.parse(exported.text); } catch { /* reported below */ }
   expect("export: valid JSON for one project, decisions nested in the ticket", parsed !== null && parsed.tickets.length === 3 && parsed.tickets[0].decisions.length === 3, exported.text.slice(0, 300));
 
-  const site = path.join(TMP, "site");
+  const site = path.join(TMP, "manual-site"); // not the folder the tool keeps up to date by itself
   const r = tool(["report", "--out", site]);
   const index = path.join(site, "index.html");
   const page = path.join(site, `ticket-${id}.html`);
@@ -387,6 +387,40 @@ let idIdea = null, idNext = null;
   const open = tool(["add", "--file", file({ ...full(), title: "Impor karyawan dari Excel" }), "--dir", BLOG]);
   tool(["report", "--out", site2]);
   expect("report: the board card marks a ticket with an open guess", open.code === 0 && /1 to verify/.test(fs.readFileSync(path.join(site2, "index.html"), "utf8")));
+}
+
+// --- the pages follow the data by themselves ------------------------------------------------------
+{
+  // The pages live in a "site" folder beside the board file, so a throwaway board never touches the real one.
+  const auto = path.join(TMP, "site");
+  const read = (name) => fs.readFileSync(path.join(auto, name), "utf8");
+  expect("auto: every write so far kept the pages beside the board file up to date", fs.existsSync(path.join(auto, "index.html")) && fs.existsSync(path.join(auto, `ticket-${id}.html`)) && fs.existsSync(path.join(auto, "stamp.js")));
+  expect("auto: the write commands stay quiet about it", !/board written|ticket page\(s\)/.test(tool(["note", idNext, "--text", "Catatan untuk memeriksa bahwa halaman ikut berubah sendiri."]).text));
+  expect("auto: a change shows on the ticket page without running report", read(`ticket-${idNext}.html`).includes("halaman ikut berubah sendiri"));
+
+  const stampOf = () => read("stamp.js");
+  const boardStamp = (text) => (/"board":"([^"]+)"/.exec(text) || [])[1];
+  const pageStamp = (html) => (/<meta name="board-stamp" content="([^"]+)">/.exec(html) || [])[1];
+  const before = stampOf();
+  expect("auto: each page carries the stamp the stamp file holds for it", boardStamp(before) && pageStamp(read("index.html")) === boardStamp(before) && before.includes(JSON.stringify(pageStamp(read(`ticket-${id}.html`)))) && /<meta name="board-page" content="board">/.test(read("index.html")) && new RegExp(`<meta name="board-page" content="${id}">`).test(read(`ticket-${id}.html`)));
+  const untouched = pageStamp(read(`ticket-${id}.html`));
+  tool(["note", idNext, "--text", "Catatan kedua supaya penanda papan berubah lagi."], { now: "2026-11-20T09:00:00+07:00" });
+  expect("auto: a change moves the board's stamp and that ticket's, and leaves other tickets' alone", boardStamp(stampOf()) !== boardStamp(before) && pageStamp(read(`ticket-${id}.html`)) === untouched);
+  expect("auto: reading commands do not rebuild anything", (() => { const mark = fs.statSync(path.join(auto, "index.html")).mtimeMs; tool(["list"]); tool(["show", id]); tool(["search", "klaim"]); return fs.statSync(path.join(auto, "index.html")).mtimeMs === mark; })());
+  for (const page of ["index.html", `ticket-${id}.html`]) {
+    const check = spawnSync(process.execPath, [DOC_TOOLS, "check", path.join(auto, page)], { encoding: "utf8" });
+    expect(`auto: ${page} still passes doc-tools check with the watcher in it`, check.status === 0, (check.stdout || "") + (check.stderr || ""));
+  }
+  const plain = tool(["report"]);
+  expect("report: without --out it rebuilds the folder beside the board file", plain.code === 0 && plain.text.includes(auto), plain.text);
+
+  // A board whose pages cannot be written still records the ticket.
+  const brokenDir = path.join(TMP, "broken");
+  fs.mkdirSync(brokenDir);
+  fs.writeFileSync(path.join(brokenDir, "site"), "a file where the folder should be");
+  const out = spawnSync(process.execPath, ["--no-warnings", TOOL, "add", "--file", file(ticket()), "--dir", HRIS], { encoding: "utf8", env: { ...process.env, AETHERIS_BOARD: path.join(brokenDir, "board.db") } });
+  const listed = spawnSync(process.execPath, ["--no-warnings", TOOL, "list"], { encoding: "utf8", env: { ...process.env, AETHERIS_BOARD: path.join(brokenDir, "board.db") } });
+  expect("auto: when the pages cannot be written the ticket is still saved, with a warning", out.status === 0 && /added #1/.test(out.stdout) && /pages were not updated/.test(out.stderr) && /^#1\b/m.test(listed.stdout), out.stdout + out.stderr);
 }
 
 fs.rmSync(TMP, { recursive: true, force: true });

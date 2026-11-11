@@ -15,7 +15,7 @@ Satu papan untuk semua proyek. Gunanya satu: keputusan yang sudah diambil dan pe
 | `assets/ticket.example.json` | Tiket lengkap: keputusan user, keputusan agen, pertanyaan terbuka, semua bagian opsional | Menulis tiket pertama di sebuah sesi |
 | `assets/idea.example.json`, `approval.example.json`, `decision.example.json` | Ide, persetujuan ide, jawaban atas pertanyaan terbuka | Kejadian itu muncul |
 
-Alat dipanggil dengan `node ~/.gemini/config/skills/meta-board/scripts/board-tools.mjs <perintah>`, disingkat `board` di bawah. Data ada di `~/.aetheris/board/board.db`; halaman untuk dibaca user ada di `~/.aetheris/board/site/`.
+Alat dipanggil dengan `node ~/.gemini/config/skills/meta-board/scripts/board-tools.mjs <perintah>`, disingkat `board` di bawah. Data ada di `~/.aetheris/board/board.db`; halaman untuk dibaca user ada di `~/.aetheris/board/site/`. Halaman itu diperbarui alat sendiri sesudah tiap perintah yang mengubah data, dan tab yang sedang terbuka memuat ulang dirinya; agen TIDAK perlu menjalankan `report`.
 
 ---
 
@@ -55,7 +55,7 @@ Alat dipanggil dengan `node ~/.gemini/config/skills/meta-board/scripts/board-too
 | Pekerjaan sudah di-merge ke branch integrasi (`meta-git` §6), termasuk lewat pull request yang sudah masuk (`git fetch` dulu) | `board merged <id> --into <branch>`. Diterima belum tentu sudah di-merge; keduanya dicatat terpisah. Boleh lebih dari sekali (ke `develop`, lalu ke `main`). |
 | Penyelidikan bug menemukan akar masalahnya (`meta-debug`) | Perbaikannya lewat panel ringkas, lalu jadi tiket dengan branch `fix/...`; akar masalah dan buktinya masuk `summary` dan `sources` |
 | Sesi brainstorm menghasilkan ide yang belum mau dikerjakan | Tawarkan sekali; bila user mau, `board add` dengan `"status": "idea"` |
-| Setiap kali ada yang berubah | `board report --out ~/.aetheris/board/site` (hanya halaman yang berubah yang ditulis ulang) |
+| Perintah mencetak peringatan "the pages were not updated" | Datanya sudah tersimpan; yang gagal hanya halamannya. Jalankan `board report` untuk melihat sebabnya dan sampaikan ke user. Jangan mengulang perintah tulisnya: itu akan mencatat dua kali. |
 
 **Yang TIDAK jadi tiket:** typo, perbaikan satu baris yang panelnya nihil, dan pertanyaan yang hanya dijawab tanpa mengubah apa pun. Bugfix menjadi tiket setelah akar masalahnya ketemu, bukan saat masih diselidiki.
 
@@ -162,6 +162,6 @@ Aturannya:
 [ ] Dugaan ada di unverified, bukan di sources
 [ ] Status tiket sesuai keadaan sebenarnya; saya tidak menandai done
 [ ] Sesi berakhir di tengah pekerjaan → ada note
-[ ] Halaman dibuat ulang (report)
+[ ] Tidak ada peringatan "the pages were not updated" yang terlewat
 [ ] Nomor tiket disebut ke user
 ```
