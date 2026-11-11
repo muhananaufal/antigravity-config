@@ -114,3 +114,4 @@ Tambahkan ke `AGENTS.md` / `CLAUDE.md` proyek supaya agent berikutnya ikut menja
 - [ ] Bagian collection selain `response`/`description` tidak berubah (bandingkan JSON sebelum-sesudah).
 - [ ] Test suite + linter proyek dijalankan dan dilaporkan apa adanya (`AGENTS.md` §5.7).
 - [ ] Temuan perilaku janggal dilaporkan ke user sebagai daftar terpisah, tidak diperbaiki diam-diam.
+- [ ] Bila pembaruan ini bagian dari pekerjaan yang punya tiket papan: dokumentasinya ikut di branch tiket itu dan ditautkan ke tiketnya (`board link`, `skills/meta-board/SKILL.md` §1). Dokumentasi API yang berdiri sendiri (tidak mengubah perilaku endpoint) tidak butuh tiket.

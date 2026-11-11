@@ -26,7 +26,8 @@ Skill ini adalah **tahap 5** — dan ia berada **SETELAH** gerbang persetujuan, 
 
 **Pengecualian Rute Eksekusi:** perbaikan trivial yang panelnya nihil temuan (`meta-panel` bagian 0.4) boleh langsung dikerjakan tanpa melewati tahap 3–4 — branch tetap dibuat sesuai §1 di bawah.
 
-**Dua sambungan yang WAJIB dijaga konsisten:**
+**Tiga sambungan yang WAJIB dijaga konsisten:**
+- **Branch dan tiket papan adalah satu pasangan** (`skills/meta-board/SKILL.md`). Tiket dicatat lebih dulu dan menyebut nama branch-nya; branch dibuat dengan nama persis itu; commit pertama terjadi setelah tiketnya berstatus `doing`. Satu branch membawa satu tiket terbuka.
 - Satu unit logis pekerjaan memetakan ke satu commit atomik (§5 di bawah); commit hanya setelah exit gate `AGENTS.md` §5.7 lulus.
 - Batch menulis maksimal 3–4 berkas per giliran (`AGENTS.md` §5.3); tiap batch: test terkait → atomic commit → lanjut.
 
@@ -436,7 +437,7 @@ git commit -m "feat(scope): deskripsi unit logis 2"
 3. **Kenali lingkungannya:** repo biasa, worktree, atau detached HEAD. Ketiganya butuh penanganan berbeda.
 4. **Pastikan base branch-nya** — dari mana pekerjaan ini bercabang.
 5. **Sajikan opsi, JANGAN pilih sendiri:** merge lokal · push untuk PR · biarkan apa adanya. Keputusan integrasi milik user; menebaknya adalah tindakan tak-terbalik yang diambil tanpa izin.
-6. **Eksekusi pilihannya.**
+6. **Eksekusi pilihannya.** Bila hasilnya merge ke branch integrasi, catat di tiketnya: `board merged <id> --into <branch>` (`skills/meta-board/SKILL.md` bagian 1). Alat memeriksa ke git bahwa commit tiket itu memang sudah ada di branch tujuan. Push untuk PR belum merge; dicatat nanti setelah PR-nya masuk.
 7. **Bersihkan — dengan pagar:**
    - Hapus branch/worktree **hanya** setelah pekerjaannya benar-benar terintegrasi.
    - **Membuang pekerjaan butuh kata persis `discard` dari user.** "ya", "oke", "hapus saja" TIDAK cukup. Penghapusan yang tidak bisa dibatalkan menuntut kata yang tidak bisa disalahartikan.

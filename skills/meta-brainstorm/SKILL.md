@@ -258,6 +258,7 @@ Bukan di balasan pertama. Saat user tampak selesai, atau setelah beberapa gilira
 - **Yang sudah mengerucut:** keputusan atau arah yang terbentuk, dengan kata-kata user sendiri bila bisa.
 - **Yang masih terbuka:** pertanyaan yang belum terjawab dan siapa yang bisa menjawabnya.
 - **Langkah berikutnya yang masuk akal:** peran lain yang layak diajak bicara, dokumen lewat `meta-prd` bila keputusannya perlu diingat, atau panel bila sudah siap dikerjakan.
+- **Ide yang belum mau dikerjakan:** tawarkan sekali untuk mencatatnya di papan sebagai tiket berstatus Idea (`skills/meta-board/SKILL.md` §1), supaya tidak hilang bersama obrolannya. Dicatat hanya bila user mau. Ini berlaku juga untuk Mode 1 dan Mode 2.
 
 Untuk proyek baru, urutan peran yang sebaiknya diajak bicara ada di `skills/meta-panel/references/proyek-baru.md`.
 

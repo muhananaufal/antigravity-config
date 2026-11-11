@@ -112,3 +112,5 @@ Sebelum menyatakan selesai, laporkan lima hal ini — tanpa satu pun boleh koson
 ```
 
 Akar masalah yang tidak bisa Anda tulis dalam satu kalimat mekanis berarti belum ditemukan — yang Anda punya baru korelasi.
+
+**Ke mana sesudah akarnya ketemu.** Penyelidikan sendiri tidak butuh tiket. Begitu akar masalah ditemukan dan perbaikannya bukan sepele, perbaikan itu lewat panel ringkas (`AGENTS.md` §2), dan setelah disetujui menjadi tiket papan dengan branch `fix/...` (`skills/meta-board/SKILL.md`). Akar masalah dan buktinya masuk ke ringkasan dan sumber tiket itu; dugaan yang sempat gugur selama penyelidikan tidak perlu dicatat.
