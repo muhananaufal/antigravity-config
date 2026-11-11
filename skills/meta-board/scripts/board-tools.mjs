@@ -735,7 +735,8 @@ const PAGE_STYLE = `<style id="page-style">
   .filters input[type="search"] { font: 500 15px var(--body); color: var(--ink); background: var(--surface); border: 1px solid var(--line-strong); border-radius: 999px; padding: 9px 16px; min-height: 40px; }
   .filters input[type="search"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .title-search { flex: 1 1 220px; max-width: 360px; min-width: 0; }
-  .filters select.chip { font: 600 14px var(--body); border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); padding: 8px 14px; border-radius: 999px; min-height: 40px; cursor: pointer; }
+  .picker-panel.narrow { width: min(220px, 86vw); }
+  .picker-panel.narrow ul { margin: 0; }
   .picker > button::after { content: "\\25BE"; margin-left: 8px; }
   .more { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 0; }
   .more .chip { font-size: 13px; }
@@ -818,7 +819,6 @@ const PAGE_SCRIPT = `<script id="page-script">
 
   var state = { project: "", field: "created", from: "", to: "", title: "", sort: "updated", dir: "desc" };
   var searchBox = bar.querySelector("[data-title-search]");
-  var sortSelect = bar.querySelector("[data-sort]");
   var sortDir = bar.querySelector("[data-sort-dir]");
   var PAGE = ${PAGE_SIZE};
   var columns = all("[data-column]");
@@ -830,54 +830,86 @@ const PAGE_SCRIPT = `<script id="page-script">
     title: function (card) { var text = card.querySelector("h4").textContent; return text.slice(text.indexOf("\\u00b7") + 1).trim().toLowerCase(); }
   };
   try { var saved = JSON.parse(localStorage.getItem(KEY) || "{}"); for (var k in state) if (typeof saved[k] === "string") state[k] = saved[k]; } catch (e) { /* filters still work without storage */ }
-  var projectButtons = all("[data-board-filter]", bar);
-  var picker = bar.querySelector("[data-project-picker]");
-  var projectOpen = picker.querySelector("[data-project-open]");
-  var projectPanel = picker.querySelector("[data-project-panel]");
-  var projectSearch = picker.querySelector("[data-project-search]");
-  var projectNone = picker.querySelector("[data-project-none]");
-  var shownOptions = function () { return projectButtons.filter(function (b) { return !b.parentNode.hidden; }); };
-  function narrowProjects() {
-    var wanted = projectSearch.value.trim().toLowerCase();
-    projectButtons.forEach(function (b) { b.parentNode.hidden = wanted !== "" && b.textContent.toLowerCase().indexOf(wanted) === -1; });
-    projectNone.hidden = shownOptions().length > 0;
+  // One dropdown for every choice in the filter row: a chip that opens a list, with a search box when the list can be long.
+  function makePicker(root, onPick) {
+    var open = root.querySelector("[data-picker-open]");
+    var panel = root.querySelector("[data-picker-panel]");
+    var search = root.querySelector("[data-picker-search]");
+    var none = root.querySelector("[data-picker-none]");
+    var options = all('[role="option"]', root);
+    var listed = function () { return options.filter(function (b) { return !b.parentNode.hidden; }); };
+    function narrow() {
+      var wanted = search ? search.value.trim().toLowerCase() : "";
+      options.forEach(function (b) { b.parentNode.hidden = wanted !== "" && b.textContent.toLowerCase().indexOf(wanted) === -1; });
+      if (none) none.hidden = listed().length > 0;
+    }
+    // The list is placed against the screen, not inside the filter row: on a phone that row scrolls sideways and would clip it.
+    function place() {
+      var button = open.getBoundingClientRect();
+      panel.style.top = Math.round(button.bottom + 6) + "px";
+      panel.style.left = Math.round(Math.max(8, Math.min(button.left, window.innerWidth - panel.offsetWidth - 8))) + "px";
+    }
+    function toggle(show) {
+      panel.hidden = !show;
+      open.setAttribute("aria-expanded", String(show));
+      if (!show) return;
+      if (search) search.value = "";
+      narrow();
+      place();
+      (search || options.filter(function (b) { return b.getAttribute("aria-selected") === "true"; })[0] || options[0]).focus();
+    }
+    open.addEventListener("click", function () { toggle(panel.hidden); });
+    if (search) search.addEventListener("input", narrow);
+    options.forEach(function (b) { b.addEventListener("click", function () { toggle(false); onPick(b.getAttribute("data-value")); open.focus(); }); });
+    // Arrow keys walk the options still listed, Enter in the search box takes the first one, Escape closes.
+    root.addEventListener("keydown", function (event) {
+      if (panel.hidden) return;
+      var shown = listed();
+      var at = shown.indexOf(document.activeElement);
+      if (event.key === "Escape") { event.preventDefault(); toggle(false); open.focus(); }
+      else if (event.key === "ArrowDown") { event.preventDefault(); if (shown.length) shown[Math.min(at + 1, shown.length - 1)].focus(); }
+      else if (event.key === "ArrowUp") { event.preventDefault(); if (at <= 0) { if (search) search.focus(); } else shown[at - 1].focus(); }
+      else if (event.key === "Enter" && search && document.activeElement === search) { event.preventDefault(); if (shown.length) shown[0].click(); }
+    });
+    document.addEventListener("click", function (event) { if (!panel.hidden && !root.contains(event.target)) toggle(false); });
+    window.addEventListener("resize", function () { if (!panel.hidden) toggle(false); });
+    window.addEventListener("scroll", function (event) { if (!panel.hidden && !panel.contains(event.target)) toggle(false); }, true);
+    return {
+      has: function (value) { return options.some(function (b) { return b.getAttribute("data-value") === value; }); },
+      // Marks the chosen option and writes it on the chip.
+      choose: function (value, label) {
+        options.forEach(function (b) {
+          var chosen = b.getAttribute("data-value") === value;
+          b.setAttribute("aria-selected", String(chosen));
+          if (chosen) open.textContent = label ? label(b.textContent) : b.textContent;
+        });
+      },
+      open: open
+    };
   }
-  // The list is placed against the screen, not inside the filter row: on a phone that row scrolls sideways and would clip it.
-  function placePicker() {
-    var button = projectOpen.getBoundingClientRect();
-    projectPanel.style.top = Math.round(button.bottom + 6) + "px";
-    projectPanel.style.left = Math.round(Math.max(8, Math.min(button.left, window.innerWidth - projectPanel.offsetWidth - 8))) + "px";
-  }
-  function togglePicker(open) {
-    projectPanel.hidden = !open;
-    projectOpen.setAttribute("aria-expanded", String(open));
-    if (open) { projectSearch.value = ""; narrowProjects(); placePicker(); projectSearch.focus(); }
-  }
-  window.addEventListener("resize", function () { if (!projectPanel.hidden) togglePicker(false); });
-  window.addEventListener("scroll", function (event) { if (!projectPanel.hidden && !projectPanel.contains(event.target)) togglePicker(false); }, true);
-  var fieldButtons = all("[data-date-field]", bar);
+  var projectPicker = makePicker(bar.querySelector("[data-project-picker]"), function (value) { state.project = value; apply(); });
+  var sortPicker = makePicker(bar.querySelector("[data-sort-picker]"), function (value) { state.sort = value; apply(); });
   var openButton = bar.querySelector("[data-range-open]");
   var dialog = document.querySelector("dialog[data-range]");
+  // Which date the range filters on is chosen inside the dialog, next to the range itself, and applied with it.
+  var fieldButtons = all("[data-date-field]", dialog);
+  var draftField = "created";
+  function showField() { fieldButtons.forEach(function (b) { b.setAttribute("aria-pressed", String(b.getAttribute("data-date-field") === draftField)); }); }
   var grid = dialog.querySelector("[data-range-grid]");
   var draft = { from: "", to: "" };
   var focusDay = today;
   var shownMonth = firstOf(today);
 
   function apply() {
-    if (!projectButtons.some(function (b) { return b.getAttribute("data-board-filter") === state.project; })) state.project = "";
+    if (!projectPicker.has(state.project)) state.project = "";
     if (state.field !== "updated") state.field = "created";
     var to = state.to || state.from;
-    projectButtons.forEach(function (b) {
-      var chosen = b.getAttribute("data-board-filter") === state.project;
-      b.setAttribute("aria-selected", String(chosen));
-      if (chosen) projectOpen.textContent = b.textContent;
-    });
-    projectOpen.setAttribute("aria-pressed", String(state.project !== ""));
-    fieldButtons.forEach(function (b) { b.setAttribute("aria-pressed", String(b.getAttribute("data-date-field") === state.field)); });
-    openButton.textContent = state.from ? (to === state.from ? show(state.from) : show(state.from) + " – " + show(to)) : "Any date";
+    projectPicker.choose(state.project);
+    projectPicker.open.setAttribute("aria-pressed", String(state.project !== ""));
+    openButton.textContent = state.from ? (state.field === "updated" ? "Updated: " : "Created: ") + (to === state.from ? show(state.from) : show(state.from) + " – " + show(to)) : "Any date";
     if (!SORTS[state.sort]) state.sort = "updated";
     if (state.dir !== "asc") state.dir = "desc";
-    sortSelect.value = state.sort;
+    sortPicker.choose(state.sort, function (text) { return "Sort: " + text.toLowerCase(); });
     sortDir.textContent = state.dir === "asc" ? "\\u2191" : "\\u2193";
     sortDir.setAttribute("aria-label", state.dir === "asc" ? "Ascending; switch to descending" : "Descending; switch to ascending");
     openButton.setAttribute("aria-pressed", String(Boolean(state.from)));
@@ -956,22 +988,8 @@ const PAGE_SCRIPT = `<script id="page-script">
   var MOVES = { ArrowLeft: function (d) { return addDays(d, -1); }, ArrowRight: function (d) { return addDays(d, 1); }, ArrowUp: function (d) { return addDays(d, -7); }, ArrowDown: function (d) { return addDays(d, 7); },
     PageUp: function (d) { return addMonths(d, -1); }, PageDown: function (d) { return addMonths(d, 1); }, Home: function (d) { return addDays(d, -weekday(d)); }, End: function (d) { return addDays(d, 6 - weekday(d)); } };
 
-  projectButtons.forEach(function (b) { b.addEventListener("click", function () { state.project = b.getAttribute("data-board-filter"); togglePicker(false); apply(); projectOpen.focus(); }); });
-  projectOpen.addEventListener("click", function () { togglePicker(projectPanel.hidden); });
-  projectSearch.addEventListener("input", narrowProjects);
-  // Arrow keys walk the options that are still listed, Enter in the search box takes the first one, Escape closes.
-  picker.addEventListener("keydown", function (event) {
-    var options = shownOptions();
-    var at = options.indexOf(document.activeElement);
-    if (event.key === "Escape") { if (!projectPanel.hidden) { event.preventDefault(); togglePicker(false); projectOpen.focus(); } }
-    else if (event.key === "ArrowDown" && !projectPanel.hidden) { event.preventDefault(); if (options.length) options[Math.min(at + 1, options.length - 1)].focus(); }
-    else if (event.key === "ArrowUp" && !projectPanel.hidden) { event.preventDefault(); if (at <= 0) projectSearch.focus(); else options[at - 1].focus(); }
-    else if (event.key === "Enter" && document.activeElement === projectSearch) { event.preventDefault(); if (options.length) options[0].click(); }
-  });
-  document.addEventListener("click", function (event) { if (!projectPanel.hidden && !picker.contains(event.target)) togglePicker(false); });
-  fieldButtons.forEach(function (b) { b.addEventListener("click", function () { state.field = b.getAttribute("data-date-field"); apply(); }); });
+  fieldButtons.forEach(function (b) { b.addEventListener("click", function () { draftField = b.getAttribute("data-date-field"); showField(); }); });
   searchBox.addEventListener("input", function () { state.title = searchBox.value; apply(); });
-  sortSelect.addEventListener("change", function () { state.sort = sortSelect.value; apply(); });
   sortDir.addEventListener("click", function () { state.dir = state.dir === "asc" ? "desc" : "asc"; apply(); });
   columns.forEach(function (col, index) {
     col.querySelector("[data-more]").addEventListener("click", function () { limits[index] = (limits[index] || PAGE) + PAGE; apply(); });
@@ -979,6 +997,8 @@ const PAGE_SCRIPT = `<script id="page-script">
   });
   openButton.addEventListener("click", function () {
     draft = { from: state.from, to: state.to };
+    draftField = state.field;
+    showField();
     focusDay = state.from || today;
     shownMonth = firstOf(addMonths(focusDay, focusDay.slice(0, 7) === today.slice(0, 7) ? -1 : 0));
     dialog.showModal();
@@ -998,7 +1018,7 @@ const PAGE_SCRIPT = `<script id="page-script">
   all("[data-range-preset]", dialog).forEach(function (b) { b.addEventListener("click", function () { draft = PRESETS[b.getAttribute("data-range-preset")](); focusDay = draft.from; shownMonth = firstOf(draft.from); draw(false); }); });
   dialog.querySelector("[data-range-clear]").addEventListener("click", function () { draft = { from: "", to: "" }; draw(false); });
   dialog.querySelector("[data-range-cancel]").addEventListener("click", function () { dialog.close(); });
-  dialog.querySelector("[data-range-apply]").addEventListener("click", function () { state.from = draft.from; state.to = draft.to; dialog.close(); apply(); });
+  dialog.querySelector("[data-range-apply]").addEventListener("click", function () { state.from = draft.from; state.to = draft.to; state.field = draftField; dialog.close(); apply(); });
   apply();
 })();
 </script>`;
@@ -1040,6 +1060,10 @@ const RANGE_DIALOG = `      <dialog class="range" data-range aria-labelledby="ra
             <button class="chip" type="button" data-range-shift="1" aria-label="Next month">&rsaquo;</button>
           </span>
         </div>
+        <div class="chips" role="group" aria-label="Which date the range applies to">
+          <button class="chip" type="button" data-date-field="created" aria-pressed="true">Date created</button>
+          <button class="chip" type="button" data-date-field="updated" aria-pressed="false">Date updated</button>
+        </div>
         <div class="chips" role="group" aria-label="Quick ranges">
           <button class="chip" type="button" data-range-preset="today">Today</button>
           <button class="chip" type="button" data-range-preset="last7">Last 7 days</button>
@@ -1057,34 +1081,34 @@ const RANGE_DIALOG = `      <dialog class="range" data-range aria-labelledby="ra
       </dialog>`;
 
 function boardSections(tickets, projects) {
-  const options = ['<li><button type="button" role="option" data-board-filter="" aria-selected="true">All projects</button></li>',
-    ...projects.map((p) => `<li><button type="button" role="option" data-board-filter="${esc(p.key)}" aria-selected="false">${esc(p.grp)} / ${esc(p.key)}</button></li>`)].join("\n              ");
+  const options = ['<li><button type="button" role="option" data-board-filter="" data-value="" aria-selected="true">All projects</button></li>',
+    ...projects.map((p) => `<li><button type="button" role="option" data-board-filter="${esc(p.key)}" data-value="${esc(p.key)}" aria-selected="false">${esc(p.grp)} / ${esc(p.key)}</button></li>`)].join("\n              ");
+  const sorts = [["updated", "Updated"], ["created", "Created"], ["title", "Title"], ["number", "Ticket number"]]
+    .map(([value, label], index) => `<li><button type="button" role="option" data-sort-option="${value}" data-value="${value}" aria-selected="${index === 0}">${label}</button></li>`).join("\n              ");
   // Written newest update first, which is also the order the page starts in.
   const recent = [...tickets].sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at) || b.id - a.id);
   const columns = COLUMNS.map(([key, title]) => boardColumn(title, recent.filter((t) => columnOf(t) === key))).join("\n");
   return [section("filters", 0, "Filters", `      <div class="filters" data-board-filters>
         <div class="picker" data-project-picker>
-          <button class="chip" type="button" data-project-open aria-haspopup="listbox" aria-expanded="false">All projects</button>
-          <div class="picker-panel" data-project-panel hidden>
-            <input type="search" data-project-search placeholder="Find a project" aria-label="Find a project" autocomplete="off">
+          <button class="chip" type="button" data-picker-open data-project-open aria-haspopup="listbox" aria-expanded="false">All projects</button>
+          <div class="picker-panel" data-picker-panel data-project-panel hidden>
+            <input type="search" data-picker-search data-project-search placeholder="Find a project" aria-label="Find a project" autocomplete="off">
             <ul role="listbox" aria-label="Project">
               ${options}
             </ul>
-            <p class="column-empty" data-project-none hidden>No project matches.</p>
+            <p class="column-empty" data-picker-none data-project-none hidden>No project matches.</p>
           </div>
         </div>
         <input class="title-search" type="search" data-title-search placeholder="Search by title" aria-label="Search by title" autocomplete="off">
-        <div class="chips" role="group" aria-label="Date to filter on">
-          <button class="chip" type="button" data-date-field="created" aria-pressed="true">Created</button>
-          <button class="chip" type="button" data-date-field="updated" aria-pressed="false">Updated</button>
-        </div>
         <button class="chip" type="button" data-range-open aria-haspopup="dialog" aria-pressed="false">Any date</button>
-        <select class="chip" data-sort aria-label="Sort by">
-          <option value="updated">Sort: updated</option>
-          <option value="created">Sort: created</option>
-          <option value="title">Sort: title</option>
-          <option value="number">Sort: ticket number</option>
-        </select>
+        <div class="picker" data-sort-picker>
+          <button class="chip" type="button" data-picker-open data-sort-open aria-haspopup="listbox" aria-expanded="false">Sort: updated</button>
+          <div class="picker-panel narrow" data-picker-panel data-sort-panel hidden>
+            <ul role="listbox" aria-label="Sort by">
+              ${sorts}
+            </ul>
+          </div>
+        </div>
         <button class="chip" type="button" data-sort-dir aria-label="Descending; switch to ascending">&darr;</button>
       </div>
 ${RANGE_DIALOG}`, true),

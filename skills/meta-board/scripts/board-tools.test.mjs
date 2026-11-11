@@ -286,10 +286,10 @@ let idIdea = null, idNext = null;
       new RegExp(`href="ticket-${id}\\.html"[^>]*data-created="2026-11-10"[^>]*data-updated="2026-11-14"`).test(board) && /Created 10 Nov 2026/.test(board) && /Updated 14 Nov 2026/.test(board), board.slice(board.indexOf("class=\"board\""), board.indexOf("class=\"board\"") + 900));
     expect("report: the board has a date range picker for created or updated", /data-date-field="created"/.test(board) && /data-date-field="updated"/.test(board) && /<dialog[^>]*data-range/.test(board) && /data-range-preset="last7"/.test(board));
     const filterRow = (/<div class="filters"[^]*?<dialog/.exec(board) || [""])[0];
-    expect("report: project picker, title search, date field and range sit in one filter row",
-      /data-project-picker/.test(filterRow) && /data-project-search/.test(filterRow) && /data-title-search/.test(filterRow) && /data-date-field="created"/.test(filterRow) && /data-range-open/.test(filterRow)
+    expect("report: project picker, title search and date range sit in one filter row; the date field lives in the dialog",
+      /data-project-picker/.test(filterRow) && /data-project-search/.test(filterRow) && /data-title-search/.test(filterRow) && !/data-date-field/.test(filterRow) && /data-range-open/.test(filterRow)
       && filterRow.indexOf("data-project-picker") < filterRow.indexOf("data-title-search") && (board.match(/class="filters"/g) || []).length === 1, filterRow.slice(0, 400));
-    expect("report: the filter row offers a sort field and a direction", /<select[^>]*data-sort/.test(filterRow) && ["updated", "created", "title", "number"].every((v) => filterRow.includes(`<option value="${v}">`)) && /data-sort-dir/.test(filterRow));
+    expect("report: the filter row offers a sort field and a direction", !/<select/.test(filterRow) && /data-sort-picker/.test(filterRow) && ["updated", "created", "title", "number"].every((v) => filterRow.includes(`role="option" data-sort-option="${v}"`)) && /data-sort-dir/.test(filterRow));
     expect("report: every column can show more and less, and cards carry what sorting needs", (board.match(/data-more hidden/g) || []).length === 7 && (board.match(/data-less hidden/g) || []).length === 7
       && new RegExp(`data-id="${id}" data-ct="\\d+" data-ut="\\d+"`).test(board) && !/Showing the/.test(board));
     expect("report: the project picker lists every project as an option", /role="option"[^>]*data-board-filter="hris-demo"/.test(board) && /role="option"[^>]*data-board-filter="blog-pribadi"/.test(board));

@@ -84,8 +84,9 @@ try {
 
   // Sorting: the Ready column holds #1 (2 Nov, "Export claims to Excel") and #3 (9 Nov, "Excel import for employees").
   const ready = () => browser.evaluate(`[...[...document.querySelectorAll("[data-column]")].find((c) => c.querySelector("h3").textContent.startsWith("Ready")).querySelectorAll("a.ticket")].filter((a) => !a.hidden).map((a) => a.getAttribute("data-id")).join(",")`);
-  const sortBy = (field) => browser.evaluate(`(() => { const s = document.querySelector("[data-sort]"); s.value = ${JSON.stringify(field)}; s.dispatchEvent(new Event("change", { bubbles: true })); })()`);
-  report("cards start sorted by last update, newest first", (await ready()) === "3,1" && (await browser.evaluate(`document.querySelector("[data-sort]").value`)) === "updated", await ready());
+  const sortBy = (field) => browser.evaluate(`document.querySelector(${JSON.stringify(`[data-sort-option="${field}"]`)}).click()`);
+  const sortNow = () => browser.evaluate(`document.querySelector("[data-sort-option][aria-selected=true]").getAttribute("data-value") + "|" + document.querySelector("[data-sort-open]").textContent`);
+  report("cards start sorted by last update, newest first", (await ready()) === "3,1" && (await sortNow()) === "updated|Sort: updated", await ready());
   await click("[data-sort-dir]");
   report("the direction button flips the order", (await ready()) === "1,3" && /ascending/i.test(await browser.evaluate(`document.querySelector("[data-sort-dir]").getAttribute("aria-label")`)), await ready());
   await sortBy("title");
@@ -98,14 +99,14 @@ try {
   await click("[data-sort-dir]");
   report("sorting by created date, ascending", (await ready()) === "1,3", await ready());
   await browser.open(path.join(site, "index.html"));
-  report("the chosen sort survives a reload", (await ready()) === "1,3" && (await browser.evaluate(`document.querySelector("[data-sort]").value`)) === "created", await ready());
+  report("the chosen sort survives a reload", (await ready()) === "1,3" && (await sortNow()) === "created|Sort: created", await ready());
   await sortBy("updated");
   await click("[data-sort-dir]");
 
   // The filters sit in one row on a wide screen.
-  const row = await browser.evaluate(`(() => { const tops = ["[data-project-open]", "[data-title-search]", "[data-date-field]", "[data-range-open]", "[data-sort]", "[data-sort-dir]"].map((s) => { const r = document.querySelector(s).getBoundingClientRect(); return Math.round(r.top + r.height / 2); }); return Math.max(...tops) - Math.min(...tops); })()`);
-  report("project picker, title search, date field, range and sort share one row", row <= 4, row);
-  const gaps = await browser.evaluate(`(() => { const boxes = ["[data-project-open]", "[data-title-search]", '[data-date-field="created"]', '[data-date-field="updated"]', "[data-range-open]", "[data-sort]", "[data-sort-dir]"].map((s) => document.querySelector(s).getBoundingClientRect()); return boxes.slice(1).map((b, i) => Math.round(b.left - boxes[i].right)); })()`);
+  const row = await browser.evaluate(`(() => { const tops = ["[data-project-open]", "[data-title-search]", "[data-range-open]", "[data-sort-open]", "[data-sort-dir]"].map((s) => { const r = document.querySelector(s).getBoundingClientRect(); return Math.round(r.top + r.height / 2); }); return Math.max(...tops) - Math.min(...tops); })()`);
+  report("project picker, title search, date range and sort share one row", row <= 4, row);
+  const gaps = await browser.evaluate(`(() => { const boxes = ["[data-project-open]", "[data-title-search]", "[data-range-open]", "[data-sort-open]", "[data-sort-dir]"].map((s) => document.querySelector(s).getBoundingClientRect()); return boxes.slice(1).map((b, i) => Math.round(b.left - boxes[i].right)); })()`);
   report("the filter controls are evenly spaced", gaps.every((gap) => gap === gaps[0]) && gaps[0] >= 10, gaps);
   report("the Filters and Board headings take no room", await browser.evaluate(`[...document.querySelectorAll("section.bare > h2")].every((h) => h.getBoundingClientRect().width <= 1)`));
 
@@ -131,6 +132,14 @@ try {
   await click("[data-project-open]");
   await browser.evaluate(`document.querySelector("h1").click()`);
   report("a click outside closes the list", await browser.evaluate(`document.querySelector("[data-project-panel]").hidden`));
+  // The sort choice is the same kind of dropdown as the project one, not the browser's own select.
+  report("there is no native select on the page", (await browser.evaluate(`document.querySelectorAll("select").length`)) === 0);
+  await click("[data-sort-open]");
+  const sortPanel = await browser.evaluate(`(() => { const p = document.querySelector("[data-sort-panel]"); const a = getComputedStyle(document.querySelector("[data-sort-open]"), "::after").content; const b = getComputedStyle(document.querySelector("[data-project-open]"), "::after").content; return { open: !p.hidden, options: [...p.querySelectorAll("[role=option]")].map((o) => o.textContent).join("|"), sameArrow: a === b && a !== "none", focused: document.activeElement.getAttribute("data-sort-option") }; })()`);
+  report("the sort dropdown opens on the current choice, with the same arrow as the project dropdown", sortPanel.open && sortPanel.options === "Updated|Created|Title|Ticket number" && sortPanel.sameArrow && sortPanel.focused === "updated", sortPanel);
+  await shot("sort-open-1280");
+  await key("Escape");
+  report("Escape closes the sort dropdown", await browser.evaluate(`document.querySelector("[data-sort-panel]").hidden`));
   await shot("picker-closed-1280");
 
   await click('[data-board-filter="alpha"]');
@@ -162,11 +171,18 @@ try {
   report("nothing is filtered before Apply", (await visible()) === "#1,#2,#3", await visible());
   await click("[data-range-apply]");
   report("created range keeps the ticket created inside it", (await visible()) === "#2", await visible());
-  report("the button shows the chosen range", (await browser.evaluate(`document.querySelector("[data-range-open]").textContent`)) === "4 Nov 2026 – 6 Nov 2026");
+  report("the button shows the chosen range", (await browser.evaluate(`document.querySelector("[data-range-open]").textContent`)) === "Created: 4 Nov 2026 – 6 Nov 2026");
 
+  // The date the range applies to is chosen in the dialog and takes effect with Apply.
+  await click("[data-range-open]");
   await click('[data-date-field="updated"]');
+  report("choosing the updated date changes nothing before Apply", (await visible()) === "#2", await visible());
+  await click("[data-range-apply]");
   report("the same range on the updated date hides a ticket updated later", (await visible()) === "", await visible());
+  report("the button names the date it filters on", /^Updated: 4 Nov 2026/.test(await browser.evaluate(`document.querySelector("[data-range-open]").textContent`)));
+  await click("[data-range-open]");
   await click('[data-date-field="created"]');
+  await click("[data-range-apply]");
 
   // Keyboard: from the focused end day, ArrowRight then Enter starts a new range one day later.
   await click("[data-range-open]");
