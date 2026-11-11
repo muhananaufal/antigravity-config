@@ -214,13 +214,16 @@ try {
   await browser.viewport(390, 800);
   await browser.open(path.join(site, "index.html"));
   await sleep(150);
-  const layout = await browser.evaluate(`(() => { const board = document.querySelector(".board"); const cols = [...board.children].map((c) => c.getBoundingClientRect()); return { sameRow: cols.every((c) => Math.abs(c.top - cols[0].top) < 2), scrolls: board.scrollWidth > board.clientWidth + 50, pageWide: document.documentElement.scrollWidth <= innerWidth + 1, width: Math.round(cols[0].width) }; })()`);
+  const layout = await browser.evaluate(`(() => { const board = document.querySelector(".board"); const cols = [...board.querySelectorAll("[data-column]")].map((c) => c.getBoundingClientRect()); return { sameRow: cols.length === 7 && cols.every((c) => Math.abs(c.top - cols[0].top) < 2), scrolls: board.scrollWidth > board.clientWidth + 50, pageWide: document.documentElement.scrollWidth <= innerWidth + 1, width: Math.round(cols[0].width) }; })()`);
   report("on a phone the columns sit side by side and the board scrolls sideways, the page does not", layout.sameRow && layout.scrolls && layout.pageWide, layout);
   const phone = await browser.evaluate(`(() => { const bar = document.querySelector(".filters"); const tops = [...bar.children].map((c) => { const r = c.getBoundingClientRect(); return Math.round(r.top + r.height / 2); }); return { oneRow: Math.max(...tops) - Math.min(...tops) <= 4, scrolls: bar.scrollWidth > bar.clientWidth + 50, pageStill: document.documentElement.scrollWidth <= innerWidth + 1 }; })()`);
   report("on a phone the filters stay in one row that scrolls sideways, the page does not", phone.oneRow && phone.scrolls && phone.pageStill, phone);
   await click("[data-project-open]");
   const panel = await browser.evaluate(`(() => { const el = document.querySelector("[data-project-panel]"); const r = el.getBoundingClientRect(); const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); return { inside: r.left >= 0 && r.right <= innerWidth, uncovered: Boolean(top) && el.contains(top), tall: r.height > 100 }; })()`);
   report("on a phone the project list opens inside the screen and is not clipped by the scrolling row", panel.inside && panel.uncovered && panel.tall, panel);
+  await key("Escape");
+  const phoneFill = await browser.evaluate(`(() => { const board = document.querySelector(".board").getBoundingClientRect(); return { pageFits: document.documentElement.scrollHeight <= innerHeight + 1, gapBelow: Math.round(innerHeight - board.bottom) }; })()`);
+  report("on a phone the page does not scroll either, and the board reaches the bottom", phoneFill.pageFits && phoneFill.gapBelow >= 0 && phoneFill.gapBelow <= 24, phoneFill);
   await shot("board-390");
   await key("Escape");
 
@@ -243,6 +246,10 @@ try {
   await click("[data-less]:not([hidden])");
   report("Show less returns to ten", (await shownCards()) === 10 && (await text("[data-less]")) === "");
   await shot("crowded-1280");
+
+  // The board page itself never scrolls: the board fills what is left of the screen and only its cards move.
+  const fill = await browser.evaluate(`(() => { const board = document.querySelector(".board").getBoundingClientRect(); return { pageFits: document.documentElement.scrollHeight <= innerHeight + 1, gapBelow: Math.round(innerHeight - board.bottom), boardScrolls: document.querySelector(".board").scrollHeight > document.querySelector(".board").clientHeight + 100, footer: document.querySelectorAll("footer.doc").length }; })()`);
+  report("the page does not scroll; the board reaches the bottom of the screen and scrolls inside", fill.pageFits && fill.gapBelow >= 0 && fill.gapBelow <= 24 && fill.boardScrolls && fill.footer === 0, fill);
 
   // Scrolling down a long column keeps every column heading, with its counter, in view.
   await click("[data-more]:not([hidden])");

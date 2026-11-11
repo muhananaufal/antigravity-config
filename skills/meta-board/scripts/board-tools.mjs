@@ -716,8 +716,10 @@ const showDate = (iso) => { const [y, m, d] = day(iso).split("-").map(Number); r
 const PAGE_STYLE = `<style id="page-style">
   .wrap { grid-template-columns: minmax(0, 1fr); }
   /* The board wants the width of the screen; a ticket reads best at the width of its text. */
-  .wrap:has(.board) { max-width: 1840px; }
-  .wrap:not(:has(.board)) { max-width: 940px; }
+  .wrap:has(.board) { max-width: 1840px; height: 100vh; height: 100dvh; padding-bottom: 16px; grid-template-rows: minmax(0, 1fr); }
+  .wrap:has(.board) > main { display: flex; flex-direction: column; min-height: 0; }
+  #board { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+  .wrap:not(:has(.board)) { max-width: 940px; padding-bottom: 48px; }
   nav.toc, .toc-mobile { display: none; }
   header.doc h1 { margin-bottom: 0; }
   header.doc .meta { margin: 12px 0 0; }
@@ -749,15 +751,18 @@ const PAGE_STYLE = `<style id="page-style">
   .picker-panel [role="option"][aria-selected="true"] { font-weight: 700; color: var(--accent); }
   /* When the controls do not fit, the row stays one row and scrolls sideways, like the board under it. */
   @media (max-width: 1000px) {
-    .filters { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 8px; }
+    /* The padding leaves room for a focus ring, which a scrolling row would otherwise cut off at its edges. */
+    .filters { flex-wrap: nowrap; overflow-x: auto; padding: 4px 4px 8px; margin: -4px -4px 0; }
     .filters > * { flex: none; }
     .filters .chip { white-space: nowrap; }
     .title-search { width: 220px; max-width: none; }
   }
-  /* The board scrolls in both directions inside its own box, never taller than the screen, so the column
-     headings can stay pinned to its top while the cards move under them. */
-  .board { display: flex; gap: 16px; align-items: stretch; overflow: auto; max-height: calc(100vh - 24px); padding-bottom: 12px; scroll-snap-type: x proximity; }
-  .board > div { flex: 0 0 min(300px, 82vw); scroll-snap-align: start; }
+  /* The board page itself does not scroll: the board takes what is left of the screen and scrolls in both
+     directions inside its own box, with the column headings pinned to its top while the cards move under them. */
+  .board { overflow: auto; flex: 1 1 auto; min-height: 0; scroll-snap-type: x proximity; }
+  /* The lanes are as tall as the longest column, so a short column's heading stays pinned as long as a long one's. */
+  .lanes { display: flex; gap: 16px; align-items: stretch; width: max-content; min-height: 100%; padding-bottom: 12px; }
+  .lanes > div { flex: 0 0 min(300px, 82vw); scroll-snap-align: start; }
   .board h3 { position: sticky; top: 0; z-index: 2; background: var(--canvas); margin: 0; padding: 4px 0 14px; display: flex; align-items: center; gap: 8px; }
   .board .stack { margin: 0; }
   a.ticket { display: block; color: inherit; text-decoration: none; padding: 18px; }
@@ -1115,9 +1120,9 @@ function boardSections(tickets, projects) {
         <button class="chip" type="button" data-sort-dir aria-label="Descending; switch to ascending">&darr;</button>
       </div>
 ${RANGE_DIALOG}`, true),
-  section("board", 1, "Board", `      <div class="board">
+  section("board", 1, "Board", `      <div class="board"><div class="lanes">
 ${columns}
-      </div>`, true)].join("\n\n");
+      </div></div>`, true)].join("\n\n");
 }
 
 function decisionCard(d, index) {
@@ -1184,7 +1189,7 @@ function swap(html, pattern, replacement) {
   return next;
 }
 
-function makePage(template, { tab, title, eyebrow, meta, appbar, sections, foot, stamp = "" }) {
+function makePage(template, { tab, title, eyebrow, meta, appbar, sections, stamp = "" }) {
   const start = template.indexOf('<section id="ringkasan">');
   const end = template.indexOf('<footer class="doc">');
   if (start === -1 || end === -1) throw new UsageError("the doc-tools template changed shape: cannot find the first section or the footer");
@@ -1202,7 +1207,9 @@ function makePage(template, { tab, title, eyebrow, meta, appbar, sections, foot,
   html = swap(html, /<html lang="[a-z-]+"/, '<html lang="en"');
   for (const [from, to] of [['aria-label="Daftar isi"', 'aria-label="Contents"'], ["<p>Isi</p>", "<p>Contents</p>"], ["<summary>Daftar isi</summary>", "<summary>Contents</summary>"],
     ['aria-label="Tema halaman"', 'aria-label="Page theme"'], [">Terang<", ">Light<"], [">Gelap<", ">Dark<"], [">Sistem<", ">System<"]]) html = swap(html, from, to);
-  for (const [key, value] of Object.entries({ JUDUL_TAB: tab, JUDUL: title, KAKI: foot })) html = swap(html, `{{${key}}}`, value);
+  for (const [key, value] of Object.entries({ JUDUL_TAB: tab, JUDUL: title })) html = swap(html, `{{${key}}}`, value);
+  // No footer line: on the board nothing sits below the columns, and a ticket ends with its history.
+  html = swap(html, /\s*<footer class="doc">[^]*?<\/footer>/, "");
   html = swap(html, "</head>", `${PAGE_STYLE}\n</head>`);
   if (appbar) html = swap(html, "<main>", `<main>\n    <p class="appbar">${appbar}</p>`);
   return swap(html, "</body>", `${PAGE_SCRIPT}\n<!-- ${REPORT_MARK}${stamp ? ` ${stamp}` : ""} -->\n</body>`);
@@ -1217,7 +1224,6 @@ async function cmdReport(args) {
   const db = await openDb();
   const tickets = db.prepare(`${SELECT} ORDER BY t.id DESC`).all().map(rowToTicket);
   const projects = db.prepare("SELECT key, grp FROM projects ORDER BY grp, key").all();
-  const foot = `Generated ${showDate(now())} from the board database.`;
 
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "board-report-"));
   try {
@@ -1231,7 +1237,7 @@ async function cmdReport(args) {
     // the ticket itself, the tickets that continue it, or the look of the pages. Each page carries a stamp of
     // those three, so thousands of unchanged tickets cost one file read each instead of a rebuild.
     const build = createHash("sha1").update(template).update(PAGE_STYLE).update(PAGE_SCRIPT).digest("hex").slice(0, 12);
-    const pages = [["index.html", makePage(template, { tab: "Board", title: "Board", sections: boardSections(tickets, projects), foot })]];
+    const pages = [["index.html", makePage(template, { tab: "Board", title: "Board", sections: boardSections(tickets, projects) })]];
     let unchanged = 0;
     for (const t of tickets) {
       const name = `ticket-${t.id}.html`;
@@ -1250,7 +1256,6 @@ async function cmdReport(args) {
           `<li><b>Created</b> ${showDate(t.created_at)}</li>`, `<li><b>Updated</b> ${showDate(t.updated_at)}</li>`].filter(Boolean).join("\n          "),
         appbar: '<a href="index.html">&larr; Back to the board</a>',
         sections: ticketSections(t, followers),
-        foot,
       })]);
     }
 

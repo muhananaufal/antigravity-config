@@ -295,10 +295,11 @@ let idIdea = null, idNext = null;
     expect("report: the project picker lists every project as an option", /role="option"[^>]*data-board-filter="hris-demo"/.test(board) && /role="option"[^>]*data-board-filter="blog-pribadi"/.test(board));
     expect("report: the Filters and Board headings are kept for screen readers only", (board.match(/<section id="[a-z]+" class="bare">/g) || []).length === 2 && /section\.bare > h2\s*{[^}]*clip-path/.test(board));
     expect("report: cards show the ticket type", /<span class="pill solid">feature<\/span>/.test(board));
-    expect("report: the board scrolls inside its own box instead of stacking, with pinned column headings", /\.board\s*{[^}]*overflow:\s*auto[^}]*max-height/.test(board) && /\.board h3\s*{[^}]*position:\s*sticky/.test(board) && !/class="grid-3"/.test(bodyOf(board)));
+    expect("report: the board scrolls inside its own box instead of stacking, with pinned column headings", /\.board\s*{[^}]*overflow:\s*auto[^}]*min-height:\s*0/.test(board) && /\.board h3\s*{[^}]*position:\s*sticky/.test(board) && !/class="grid-3"/.test(bodyOf(board)));
     expect("report: board card marks a ticket that was sent back", /Sent back 1×/.test(board));
     expect("report: ticket page has summary, decisions, sources and history", /id="summary"/.test(detail) && /id="decisions"/.test(detail) && /id="sources"/.test(detail) && /id="history"/.test(detail)
       && detail.includes("sengaja panjang dan lengkap") && detail.includes("ReimburseService.php:14") && /Sent back to In progress/.test(detail));
+    expect("report: neither page has a footer line", [board, detail].every((html) => !/<footer class="doc"/.test(html) && !/Generated \d/.test(bodyOf(html))));
     expect("report: ticket header shows the type", /<b>Type<\/b> feature/.test(detail));
     const follow = fs.readFileSync(path.join(site, `ticket-${idNext}.html`), "utf8");
     expect("report: a progress note appears in the ticket history", /Progress note/.test(follow) && /Migrasi kolom batas sudah ditulis/.test(follow));
