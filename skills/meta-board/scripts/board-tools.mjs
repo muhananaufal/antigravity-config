@@ -15,6 +15,7 @@
 //   node board-tools.mjs link <id> --label <text> --target <path or URL>
 //   node board-tools.mjs review <id> K<n>                   the owner has seen a decision the agent made
 //   node board-tools.mjs note <id> --text <text>            where the work stands and what comes next
+//   node board-tools.mjs merged <id> --into <branch>        the work is on that branch; checked against git
 //   node board-tools.mjs hook <install|check|remove> [--dir <path>] [--existing chain|replace|skip]
 //   node board-tools.mjs set <id> --status <status> [--evidence <text>] [--reason <text>] [--words <owner's sentence>]
 //   node board-tools.mjs list [--project p] [--group g] [--status s] [--waiting] [--limit n]
@@ -523,6 +524,28 @@ function checkedCommit(ticket, ref) {
   return hash;
 }
 
+/**
+ * Accepted is not the same as merged. Once the work is on an integration branch that fact is recorded in the
+ * ticket's history, after asking the repository: the branch exists and holds the commit the ticket was handed over with.
+ * It is not a status, so a ticket can be merged into develop and later into main.
+ */
+async function cmdMerged(args) {
+  const into = option(args, "--into");
+  if (!args[0] || !isText(into)) throw new UsageError("usage: merged <id> --into <branch>");
+  const db = await openDb();
+  const ticket = getTicket(db, args[0]);
+  if (!ticket.branch) throw new Refused(`#${ticket.id} has no branch (its project folder is not a git repository), so there is no merge to record`);
+  if (!["review", "done"].includes(ticket.status)) throw new Refused(`#${ticket.id} is "${ticket.status}"; a merge is recorded for work that is in review or done`);
+  if (!isText(ticket.commit)) throw new Refused(`#${ticket.id} carries no commit; it reaches review with --commit first`);
+  if (mergedInto(ticket).includes(into)) throw new Refused(`#${ticket.id} is already recorded as merged into ${into}`);
+  if (!git(ticket.dir, ["rev-parse", "--verify", "--quiet", `${into}^{commit}`]).ok) throw new Refused(`there is no branch ${into} in ${ticket.dir}`);
+  if (!git(ticket.dir, ["merge-base", "--is-ancestor", ticket.commit, into]).ok) throw new Refused(`commit ${ticket.commit.slice(0, 10)} of ticket #${ticket.id} is not on ${into}; merge it first`);
+  ticket.history = [...(ticket.history || []), { at: now(), merged: into, commit: ticket.commit }];
+  save(db, ticket);
+  console.log(`#${ticket.id}: merged into ${into}`);
+  return 0;
+}
+
 /** A progress note: where the work stands and what comes next. It moves nothing; it is for the next session. */
 async function cmdNote(args) {
   const text = option(args, "--text");
@@ -721,7 +744,10 @@ async function cmdList(args) {
   return 0;
 }
 
+const mergedInto = (t) => (t.history || []).filter((h) => h.merged).map((h) => h.merged);
+
 const historyText = (h) => (h.note ? `${h.at.slice(0, 10)}: note: ${h.note}`
+  : h.merged ? `${h.at.slice(0, 10)}: merged into ${h.merged}; commit: ${h.commit}`
   : [`${h.at.slice(0, 10)}: ${h.from ? `${h.from} to ${h.to}` : `recorded as ${h.to}`}${h.returned ? " (sent back)" : ""}`,
     h.reason ? `reason: ${h.reason}` : "", h.evidence ? `evidence: ${h.evidence}` : "", h.commit ? `commit: ${h.commit}` : "", h.words ? `owner's words: "${h.words}"` : ""].filter(Boolean).join("; "));
 
@@ -735,6 +761,7 @@ async function cmdShow(args) {
   const followers = db.prepare("SELECT id FROM tickets WHERE follows = ? ORDER BY id").all(t.id).map((row) => `#${row.id}`);
   if (t.type) out.push(`Type: ${t.type}`);
   if (t.branch) out.push(`Branch: ${t.branch}`);
+  if (mergedInto(t).length) out.push(`Merged into: ${mergedInto(t).join(", ")}`);
   if (t.follows) out.push(`Follows: #${t.follows}`);
   if (followers.length) out.push(`Continued by: ${followers.join(", ")}`);
   add("Summary", t.summary);
@@ -1137,7 +1164,8 @@ function boardCard(t) {
     c.unanswered ? `<span class="pill warn">${c.unanswered} question${c.unanswered > 1 ? "s" : ""} for you</span>` : "",
     c.unseen ? `<span class="pill warn">${c.unseen} agent decision${c.unseen > 1 ? "s" : ""} to review</span>` : "",
     c.unverified ? `<span class="pill warn">${c.unverified} to verify</span>` : "",
-    c.returned ? `<span class="pill danger">Sent back ${c.returned}×</span>` : ""].filter(Boolean).join(" ");
+    c.returned ? `<span class="pill danger">Sent back ${c.returned}×</span>` : "",
+    ...mergedInto(t).map((branch) => `<span class="pill ok">Merged into ${esc(branch)}</span>`)].filter(Boolean).join(" ");
   return `          <a class="card ticket" href="ticket-${t.id}.html" data-project="${esc(t.project)}" data-created="${day(t.created_at)}" data-updated="${day(t.updated_at)}" data-id="${t.id}" data-ct="${Date.parse(t.created_at)}" data-ut="${Date.parse(t.updated_at)}">
             <h4>#${t.id} · ${esc(t.title)}</h4>
             <p class="pills">${pills}</p>
@@ -1240,6 +1268,7 @@ function decisionCard(d, index) {
 
 function historyRow(h) {
   if (h.note) return `          <tr><td class="nowrap">${showDate(h.at)}</td><td>Progress note</td><td>${esc(h.note)}</td></tr>`;
+  if (h.merged) return `          <tr><td class="nowrap">${showDate(h.at)}</td><td><span class="pill ok">Merged into ${esc(h.merged)}</span></td><td><b>Commit.</b> <code>${esc(h.commit.slice(0, 10))}</code></td></tr>`;
   const what = h.returned ? `Sent back to ${STATUS_LABEL[h.to]}` : h.from ? `${STATUS_LABEL[h.from]} to ${STATUS_LABEL[h.to]}` : `Recorded as ${STATUS_LABEL[h.to]}`;
   const notes = [h.reason ? `<b>Reason.</b> ${esc(h.reason)}` : "", h.evidence ? `<b>Evidence.</b> ${esc(h.evidence)}` : "", h.commit ? `<b>Commit.</b> <code>${esc(h.commit.slice(0, 10))}</code>` : "", h.words ? `<b>Your words.</b> "${esc(h.words)}"` : ""].filter(Boolean).join("<br>");
   return `          <tr><td class="nowrap">${showDate(h.at)}</td><td>${h.returned ? `<span class="pill danger">${what}</span>` : what}</td><td>${notes}</td></tr>`;
@@ -1364,6 +1393,7 @@ async function cmdReport(args) {
         title: esc(t.title),
         eyebrow: `Ticket #${t.id} · ${esc(t.group)} / ${esc(t.project)} · ${STATUS_LABEL[t.status]}`,
         meta: [t.type ? `<li><b>Type</b> ${esc(t.type)}</li>` : "", t.branch ? `<li><b>Branch</b> <code>${esc(t.branch)}</code></li>` : "",
+          ...mergedInto(t).map((branch) => `<li><b>Merged into</b> <code>${esc(branch)}</code></li>`),
           `<li><b>Created</b> ${showDate(t.created_at)}</li>`, `<li><b>Updated</b> ${showDate(t.updated_at)}</li>`].filter(Boolean).join("\n          "),
         appbar: '<a href="index.html">&larr; Back to the board</a>',
         sections: ticketSections(t, followers),
@@ -1393,7 +1423,7 @@ async function cmdReport(args) {
   }
 }
 
-const COMMANDS = { project: cmdProject, add: cmdAdd, approve: cmdApprove, decide: cmdDecide, source: cmdSource, unverified: cmdUnverified, verify: cmdVerify, link: cmdLink, review: cmdReview, set: cmdSet, note: cmdNote, hook: cmdHook, list: cmdList, show: cmdShow, search: cmdSearch, export: cmdExport, report: cmdReport };
+const COMMANDS = { project: cmdProject, add: cmdAdd, approve: cmdApprove, decide: cmdDecide, source: cmdSource, unverified: cmdUnverified, verify: cmdVerify, link: cmdLink, review: cmdReview, set: cmdSet, note: cmdNote, merged: cmdMerged, hook: cmdHook, list: cmdList, show: cmdShow, search: cmdSearch, export: cmdExport, report: cmdReport };
 const [command, ...rest] = process.argv.slice(2);
 try {
   if (!COMMANDS[command]) throw new UsageError(`usage: board-tools.mjs <${Object.keys(COMMANDS).join("|")}> ...`);

@@ -166,6 +166,33 @@ const hookFile = path.join(SHOP, ".git", "hooks", "pre-commit");
   expect("add: a branch is free again once its ticket is closed", reuse.code === 0, reuse.text);
 }
 
+// --- accepted is not the same as merged: the merge is recorded once git shows it ------------------
+{
+  const early = tool(["merged", id, "--into", "main"]);
+  expect("merged: refused while the ticket's commit is not on the target branch", early.code === 1 && /not on main/.test(early.text), early.text);
+  const ghost = tool(["merged", id, "--into", "release/9.9.9"]);
+  expect("merged: refused for a branch that does not exist", ghost.code === 1 && /no branch/.test(ghost.text), ghost.text);
+  git(SHOP, ["reset", "-q", "--hard"]);
+  git(SHOP, ["checkout", "-q", "main"]);
+  const merge = git(SHOP, ["merge", "-q", "--no-edit", "feature/claim-limit"]);
+  const done = tool(["merged", id, "--into", "main"], { now: "2026-11-18T09:00:00+07:00" });
+  const shown = tool(["show", id]);
+  expect("merged: recorded in the history once git has the commit on that branch", merge.code === 0 && done.code === 0 && /2026-11-18: merged into main/.test(shown.text) && /^Merged into: main$/m.test(shown.text), merge.text + done.text + shown.text);
+  const again = tool(["merged", id, "--into", "main"]);
+  expect("merged: the same branch is recorded once", again.code === 1 && /already/.test(again.text), again.text);
+  const open = tool(["list", "--status", "ready", "--project", "shop"]);
+  const openId = (/^#(\d+)/m.exec(open.text) || [])[1];
+  const tooSoon = tool(["merged", openId, "--into", "main"]);
+  expect("merged: only work that was handed over can be recorded as merged", tooSoon.code === 1 && /review or done/.test(tooSoon.text), tooSoon.text);
+
+  const site = path.join(TMP, "site-merged");
+  tool(["report", "--out", site]);
+  const page = fs.readFileSync(path.join(site, `ticket-${id}.html`), "utf8");
+  const board = fs.readFileSync(path.join(site, "index.html"), "utf8");
+  expect("merged: the ticket page and the board card both say where the work was merged", /<b>Merged into<\/b> <code>main<\/code>/.test(page) && /Merged into main/.test(page) && /Merged into main<\/span>/.test(board));
+  git(SHOP, ["checkout", "-q", "feature/claim-limit"]);
+}
+
 // --- hooks that are already there ----------------------------------------------------------------
 {
   const dir = makeRepo("legacy");
